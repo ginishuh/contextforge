@@ -2,10 +2,39 @@
   "name": "contextforge",
   "version": "0.0.0",
   "description": "Self-hosted memory and distillation runtime for coding agents.",
-  "private": true,
   "type": "module",
+  "bin": {
+    "contextforge": "src/cli.js"
+  },
+  "files": [
+    "src",
+    "examples",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "agents",
+    "memory",
+    "distillation",
+    "sqlite",
+    "cli"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ginishuh/contextforge.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ginishuh/contextforge/issues"
+  },
+  "homepage": "https://github.com/ginishuh/contextforge#readme",
   "scripts": {
     "test": "node --test"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "better-sqlite3": "^12.9.0"
+  }
 }

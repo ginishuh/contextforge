@@ -1,7 +1,7 @@
 # AGENTS.md - ContextForge
 
-ContextForge is a standalone public project. Treat it as separate from the
-OpenClaw workspace.
+ContextForge is a standalone public project. Treat it as separate from any
+private reference implementation.
 
 ## Mission
 
@@ -18,14 +18,14 @@ The core idea is not another flat memory file. ContextForge should provide:
 
 ## Source Boundary
 
-The working OpenClaw agent-memory system is the original reference
-implementation, but do not mutate it while working in this repo.
+Private agent-memory systems may be useful reference material, but do not
+mutate them while working in this repo.
 
-- Do not edit `/home/ubuntu/.openclaw/workspace` unless the user explicitly asks.
-- Do not copy private OpenClaw/persona/user data into this repo.
+- Do not edit external/private workspaces unless the user explicitly asks.
+- Do not copy private persona, user, customer, or runtime data into this repo.
 - When borrowing code, extract generic engine logic only.
-- Remove OpenClaw-specific paths, agent names, hooks, secrets, and assumptions.
-- Keep this repo usable without OpenClaw installed.
+- Remove private paths, agent names, hooks, secrets, and assumptions.
+- Keep this repo usable without any private runtime installed.
 
 ## Product Principles
 
