@@ -1,0 +1,11 @@
+{
+  "name": "contextforge",
+  "version": "0.0.0",
+  "description": "Self-hosted memory and distillation runtime for coding agents.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  },
+  "license": "MIT"
+}

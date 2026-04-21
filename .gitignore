@@ -1,0 +1,20 @@
+node_modules/
+dist/
+coverage/
+
+# Runtime state
+.contextforge/
+.agent-memory/
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
