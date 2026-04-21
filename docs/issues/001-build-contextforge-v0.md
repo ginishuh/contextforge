@@ -5,14 +5,14 @@
 Build the first useful local version of ContextForge: a standalone, self-hosted
 memory and distillation runtime for coding agents.
 
-This work should happen inside `/home/ubuntu/contextforge`. Do not modify the
-OpenClaw workspace unless the user explicitly asks.
+This work should happen inside this repository. Do not modify external reference
+implementations while working here.
 
 ## Background
 
-ContextForge is being extracted from a working OpenClaw agent-memory system, but
-it must become a clean public project. The goal is not to copy OpenClaw as-is.
-The goal is to extract the generic product:
+ContextForge is inspired by a working private agent-memory system, but it must
+become a clean public project. The goal is not to copy a private implementation
+as-is. The goal is to extract the generic product:
 
 - canonical durable memory
 - scoped retrieval
@@ -21,14 +21,9 @@ The goal is to extract the generic product:
 - pluggable distillation providers
 - future adapters for Codex, Claude Code, and MCP
 
-The original OpenClaw implementation can be inspected as a reference at:
-
-```text
-/home/ubuntu/.openclaw/workspace/scripts/agent-memory
-/home/ubuntu/.openclaw/workspace/plugins/agent-memory-runtime
-```
-
-Reference only. Do not mutate those paths.
+Any private reference implementation is reference only. Do not mutate it from
+this repository, and do not copy private data, paths, names, hooks, secrets, or
+deployment assumptions.
 
 ## Product Direction
 
@@ -52,7 +47,7 @@ Important principles:
 
 - Do not build a UI.
 - Do not build multi-tenant SaaS.
-- Do not require OpenClaw.
+- Do not require any private runtime or workspace.
 - Do not require a remote VPS.
 - Do not implement every provider.
 - Do not commit real user memory, raw logs, SQLite DB files, or secrets.
@@ -247,38 +242,32 @@ The next Codex session should finish this issue when all are true:
 - A checkpoint can be produced through a mock or real distill provider.
 - Runtime DB files are ignored by git.
 - README documents the v0 workflow.
-- No OpenClaw private data or paths are required at runtime.
+- No private data, private names, or machine-specific paths are required at
+  runtime.
 
 ## Suggested First Commands
 
-From the new repo:
+From the repo:
 
 ```bash
-cd /home/ubuntu/contextforge
 sed -n '1,240p' AGENTS.md
 sed -n '1,240p' README.md
 sed -n '1,260p' docs/issues/001-build-contextforge-v0.md
 git status --short --branch
 ```
 
-Then inspect the original implementation only as reference:
-
-```bash
-sed -n '1,220p' /home/ubuntu/.openclaw/workspace/scripts/agent-memory/README.md
-find /home/ubuntu/.openclaw/workspace/scripts/agent-memory -maxdepth 2 -type f | sort | sed -n '1,160p'
-```
-
-Do not edit the OpenClaw paths.
+Private reference implementations may be inspected only outside the public repo
+and only as reference material. Do not edit them from this worktree.
 
 ## Implementation Notes
 
 Prefer incremental extraction over bulk copying. The v0 repo should feel clean to
-outside users who have never seen OpenClaw.
+outside users who have never seen the private reference implementation.
 
 If copying code from the original implementation:
 
-- remove hardcoded OpenClaw paths
-- remove agent-specific defaults such as `main`, `engineer`, `shira`
+- remove hardcoded private paths
+- remove agent-specific or user-specific defaults
 - remove private namespace assumptions
 - replace private examples with synthetic examples
 - keep only generic storage, retrieval, and distillation logic

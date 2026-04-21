@@ -4,7 +4,6 @@ coverage/
 
 # Runtime state
 .contextforge/
-.agent-memory/
 data/
 *.db
 *.db-shm
