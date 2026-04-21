@@ -83,7 +83,7 @@ Support three storage modes.
 
 ### 1. Local mode
 
-Default mode for most users.
+Default zero-friction install mode for most users.
 
 - SQLite on the local machine
 - no server required
@@ -100,12 +100,15 @@ Repo-bound storage in a gitignored directory.
 
 ### 3. Remote/VPS mode
 
-Canonical memory server for multi-machine and multi-agent users.
+First-class canonical memory server for multi-machine and multi-agent users.
 
 - best for users who work from several machines
 - a VPS can become the source of truth
 - local clients should act as retrieval/write clients
 - useful for sharing memory between Codex, Claude Code, Cursor, and custom agents
+
+Remote mode is not a distant enterprise add-on. It is an early product path for
+users whose canonical work already lives on a VPS or server.
 
 Do not use git as the live storage backend for SQLite or raw events. Git can hold
 source, docs, migrations, example exports, and reviewed snapshots only.
@@ -376,7 +379,30 @@ Goals:
 - handle provider failure safely
 - add retry/error states where needed
 
-### Milestone 2: first real distill provider
+### Milestone 2: remote/VPS mode
+
+Tracking issue: #8.
+
+Goals:
+
+- server-backed canonical memory
+- client auth
+- multi-machine sync
+- local fallback behavior
+- clear shared/repo/local write policy
+
+### Milestone 3: shared + repo retrieval
+
+Tracking issue: #7.
+
+Goals:
+
+- allow querying `repo` and `shared` together
+- keep `local` opt-in
+- provide result source metadata
+- add ranking that favors exact repo memory but includes useful shared rules
+
+### Milestone 4: first real distill provider
 
 Recommended first provider:
 
@@ -395,16 +421,7 @@ After that:
 - Claude Code exec provider
 - local model provider
 
-### Milestone 3: shared + repo retrieval
-
-Goals:
-
-- allow querying `repo` and `shared` together
-- keep `local` opt-in
-- provide result source metadata
-- add ranking that favors exact repo memory but includes useful shared rules
-
-### Milestone 4: MCP server
+### Milestone 5: MCP server
 
 Goals:
 
@@ -412,16 +429,6 @@ Goals:
 - keep tool schemas small
 - include examples for agent integration
 - document context budget guidance
-
-### Milestone 5: remote/VPS mode
-
-Goals:
-
-- server-backed canonical memory
-- client auth
-- multi-machine sync
-- local fallback behavior
-- clear shared/repo/local write policy
 
 ### Milestone 6: promotion workflow
 
@@ -465,6 +472,8 @@ Keep vector search as a retrieval surface, not the canonical source of truth.
   `owner/repo`, absolute path hash, or explicit user config?
 - Should `codex_exec` be the first real provider, or should direct API come first
   because it is easier to test in CI?
+- In remote mode, should distillation providers run client-side, server-side, or
+  both depending on provider type?
 - How should provider prompts be versioned?
 - Should checkpoint memory candidates require explicit human approval or allow a
   configurable auto-promote policy?

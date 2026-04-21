@@ -31,6 +31,11 @@ Do not replace built-in memory. Add a scoped, searchable project memory sidecar.
 
 ContextForge supports three storage modes.
 
+ContextForge starts local for zero-friction setup, but remote mode is a
+first-class canonical deployment model. Local mode is the easiest entry point
+and a useful fallback/cache shape; remote mode is the power-user path for
+multi-machine and multi-agent workflows.
+
 ### Local
 
 Default mode for most users.
@@ -50,13 +55,15 @@ Repo-bound storage in a gitignored directory.
 
 ### Remote
 
-Server-backed canonical memory for multi-machine and multi-agent users.
+First-class server-backed canonical memory for multi-machine and multi-agent
+users.
 
 - best for users who work from several machines
 - a VPS can become the source of truth
 - local clients act as retrieval/write clients
 - useful for sharing memory between Codex, Claude Code, Cursor, and custom
   agents
+- should be considered an early product path, not a distant enterprise add-on
 
 Do not use git as the live storage backend for SQLite or raw runtime data. Git
 can hold source, docs, migrations, example exports, and reviewed snapshots.
@@ -180,7 +187,7 @@ bootstrap context, then using `search` and `getMemory` for detail.
 
 ## Adapter Strategy
 
-Build adapters after the local core is stable.
+Build adapters after the core storage and provider boundaries are stable.
 
 Likely adapter layers:
 

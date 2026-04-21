@@ -29,7 +29,34 @@ Goals:
 - handle provider failure safely
 - add retry/error states where needed
 
-## Milestone 2: First Real Distill Provider
+## Milestone 2: Remote Mode
+
+Tracking issue: #8.
+
+Remote mode is an early first-class path for users whose canonical work already
+lives on a VPS or server. Local mode remains the zero-friction install and a
+useful fallback/cache shape.
+
+Goals:
+
+- server-backed canonical memory
+- client auth
+- multi-machine sync
+- local fallback behavior
+- clear shared/repo/local write policy
+
+## Milestone 3: Shared + Repo Retrieval
+
+Tracking issue: #7.
+
+Goals:
+
+- allow querying `repo` and `shared` together
+- keep `local` opt-in
+- provide result source metadata
+- favor exact repo memory while including useful shared rules
+
+## Milestone 4: First Real Distill Provider
 
 Tracking issue: #6.
 
@@ -48,18 +75,7 @@ Follow-on providers:
 - Claude Code exec provider
 - local model provider
 
-## Milestone 3: Shared + Repo Retrieval
-
-Tracking issue: #7.
-
-Goals:
-
-- allow querying `repo` and `shared` together
-- keep `local` opt-in
-- provide result source metadata
-- favor exact repo memory while including useful shared rules
-
-## Milestone 4: MCP Server
+## Milestone 5: MCP Server
 
 Tracking issue: #4.
 
@@ -79,18 +95,6 @@ Initial tool surface:
 - `append_raw`
 - `distill_checkpoint`
 - `promote_memory`
-
-## Milestone 5: Remote Mode
-
-Tracking issue: #8.
-
-Goals:
-
-- server-backed canonical memory
-- client auth
-- multi-machine sync
-- local fallback behavior
-- clear shared/repo/local write policy
 
 ## Milestone 6: Promotion Workflow
 
@@ -123,6 +127,8 @@ Keep vector search as a retrieval surface, not the canonical source of truth.
   `owner/repo`, absolute path hash, or explicit user config?
 - Should `codex_exec` be the first real provider, or should direct API come first
   because it is easier to test in CI?
+- In remote mode, should distillation providers run client-side, server-side, or
+  both depending on provider type?
 - How should provider prompts be versioned?
 - Should checkpoint memory candidates require explicit human approval or allow a
   configurable auto-promote policy?
@@ -134,10 +140,10 @@ Keep vector search as a retrieval surface, not the canonical source of truth.
 Each milestone after v0 has a focused tracking issue:
 
 - #5: provider abstraction hardening
-- #6: `codex_exec` distillation provider
-- #7: shared plus repo scoped retrieval
-- #4: MCP server surface
 - #8: remote storage mode
+- #7: shared plus repo scoped retrieval
+- #6: `codex_exec` distillation provider
+- #4: MCP server surface
 - #10: explicit memory promotion workflow
 - #9: retrieval quality improvements
 

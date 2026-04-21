@@ -22,7 +22,12 @@ LLM-backed distillation.
 
 - `local`: default single-machine SQLite storage.
 - `project-local`: repo-bound storage in a gitignored directory.
-- `remote`: VPS or server-backed canonical memory for multiple machines.
+- `remote`: first-class VPS or server-backed canonical memory for multiple
+  machines.
+
+ContextForge starts local for zero-friction setup, but remote mode is a
+first-class canonical deployment model for users who work from multiple machines
+or want several agents to share the same source of truth.
 
 See [docs/architecture.md](docs/architecture.md) for the full product model and
 [docs/roadmap.md](docs/roadmap.md) for the implementation roadmap.
