@@ -130,6 +130,15 @@ node src/cli.js distillCheckpoint \
   --sessionId demo-session
 ```
 
+Inspect distillation run metadata:
+
+```bash
+node src/cli.js listDistillRuns \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --sessionId demo-session
+```
+
 CLI output is JSON so adapters and scripts can consume it directly.
 
 ## Public Repo Hygiene

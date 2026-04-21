@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { loadConfig } from './config/index.js';
 import { createDistillProvider } from './distill/index.js';
+import { validateDistillOutput } from './distill/validate.js';
 import { searchMemories } from './retrieval/search.js';
 import { normalizeScopeOptions } from './scopes/index.js';
 import { ContextForgeStore } from './storage/sqlite.js';
@@ -28,6 +29,7 @@ function withStore(config, fn) {
 
 export function createContextForge(options = {}) {
   const config = loadConfig(options);
+  const distillProviders = options.distillProviders || {};
 
   return {
     config,
@@ -104,33 +106,76 @@ export function createContextForge(options = {}) {
     async distillCheckpoint(options) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.sessionId, 'sessionId');
-      const provider = createDistillProvider(options.provider || config.distillProvider);
+      const provider = createDistillProvider(options.provider || config.distillProvider, distillProviders);
 
       return withStore(config, async (store) => {
         const rawEvents = store.listRawEvents({ ...scope, sessionId: options.sessionId });
         const previousCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId });
         const conversationId =
           options.conversationId || rawEvents.find((event) => event.conversationId)?.conversationId || null;
-
-        const output = await provider.distill({
-          session: {
-            ...scope,
-            sessionId: options.sessionId,
-            conversationId,
-          },
-          rawEvents,
-          previousCheckpoint,
-          requestedOutputSchema: {
-            summaryShort: 'string',
-            summaryText: 'string',
-            decisions: 'string[]',
-            todos: 'string[]',
-            openQuestions: 'string[]',
-            memoryCandidates: 'object[]',
+        const requestedOutputSchema = {
+          summaryShort: 'string',
+          summaryText: 'string',
+          decisions: 'string[]',
+          todos: 'string[]',
+          openQuestions: 'string[]',
+          memoryCandidates: 'object[]',
+          sourceEventCount: 'number',
+          provider: 'string',
+          metadata: 'object',
+        };
+        const distillRun = store.startDistillRun({
+          ...scope,
+          sessionId: options.sessionId,
+          conversationId,
+          provider: provider.name,
+          sourceEventCount: rawEvents.length,
+          inputMetadata: {
+            rawEventIds: rawEvents.map((event) => event.id),
+            previousCheckpointId: previousCheckpoint?.id || null,
+            requestedOutputSchema,
           },
         });
 
-        return store.insertCheckpoint({
+        let rawOutput;
+        try {
+          rawOutput = await provider.distill({
+            session: {
+              ...scope,
+              sessionId: options.sessionId,
+              conversationId,
+            },
+            rawEvents,
+            previousCheckpoint,
+            requestedOutputSchema,
+          });
+        } catch (error) {
+          store.failDistillRun({
+            id: distillRun.id,
+            error,
+            outputMetadata: {
+              providerFailed: true,
+            },
+          });
+          throw error;
+        }
+
+        let output;
+        try {
+          output = validateDistillOutput(rawOutput);
+        } catch (error) {
+          store.failDistillRun({
+            id: distillRun.id,
+            error,
+            outputMetadata: {
+              validationFailed: true,
+              receivedType: Array.isArray(rawOutput) ? 'array' : typeof rawOutput,
+            },
+          });
+          throw error;
+        }
+
+        const checkpoint = store.insertCheckpoint({
           ...scope,
           sessionId: options.sessionId,
           conversationId,
@@ -141,8 +186,36 @@ export function createContextForge(options = {}) {
           openQuestions: output.openQuestions,
           sourceEventCount: output.sourceEventCount ?? rawEvents.length,
           provider: output.provider || provider.name,
+          distillRunId: distillRun.id,
+          metadata: {
+            providerMetadata: output.metadata,
+            memoryCandidates: output.memoryCandidates,
+          },
         });
+
+        store.completeDistillRun({
+          id: distillRun.id,
+          outputMetadata: {
+            checkpointId: checkpoint.id,
+            provider: checkpoint.provider,
+            memoryCandidateCount: output.memoryCandidates.length,
+            providerMetadata: output.metadata,
+          },
+        });
+
+        return checkpoint;
       });
+    },
+
+    listDistillRuns(options) {
+      const scope = normalizeScopeOptions(options, config);
+      requireOption(options.sessionId, 'sessionId');
+      return withStore(config, (store) =>
+        store.listDistillRuns({
+          ...scope,
+          sessionId: options.sessionId,
+        }),
+      );
     },
   };
 }

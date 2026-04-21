@@ -3,7 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 function nowIso() {
   return new Date().toISOString();
@@ -70,7 +70,29 @@ function hydrateCheckpoint(row) {
     openQuestions: parseJson(row.open_questions_json, []),
     sourceEventCount: row.source_event_count,
     provider: row.provider,
+    distillRunId: row.distill_run_id,
+    metadata: parseJson(row.metadata_json, {}),
     createdAt: row.created_at,
+  };
+}
+
+function hydrateDistillRun(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    scopeType: row.scope_type,
+    scopeKey: row.scope_key,
+    sessionId: row.session_id,
+    conversationId: row.conversation_id,
+    provider: row.provider,
+    status: row.status,
+    sourceEventCount: row.source_event_count,
+    inputMetadata: parseJson(row.input_metadata_json, {}),
+    outputMetadata: parseJson(row.output_metadata_json, {}),
+    errorMessage: row.error_message,
+    errorStack: row.error_stack,
+    createdAt: row.created_at,
+    completedAt: row.completed_at,
   };
 }
 
@@ -86,6 +108,13 @@ export class ContextForgeStore {
 
   close() {
     this.db.close();
+  }
+
+  ensureColumn(table, column, definition) {
+    const columns = this.db.prepare(`PRAGMA table_info(${table})`).all();
+    if (!columns.some((item) => item.name === column)) {
+      this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
   }
 
   migrate() {
@@ -134,7 +163,26 @@ export class ContextForgeStore {
         open_questions_json TEXT NOT NULL DEFAULT '[]',
         source_event_count INTEGER NOT NULL DEFAULT 0,
         provider TEXT NOT NULL,
+        distill_run_id TEXT,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
         created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS distill_runs (
+        id TEXT PRIMARY KEY,
+        scope_type TEXT NOT NULL CHECK (scope_type IN ('shared', 'repo', 'local')),
+        scope_key TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        conversation_id TEXT,
+        provider TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('started', 'succeeded', 'failed')),
+        source_event_count INTEGER NOT NULL DEFAULT 0,
+        input_metadata_json TEXT NOT NULL DEFAULT '{}',
+        output_metadata_json TEXT NOT NULL DEFAULT '{}',
+        error_message TEXT,
+        error_stack TEXT,
+        created_at TEXT NOT NULL,
+        completed_at TEXT
       );
 
       CREATE TABLE IF NOT EXISTS memory_events (
@@ -152,7 +200,12 @@ export class ContextForgeStore {
         ON raw_events(scope_type, scope_key, session_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_checkpoints_session
         ON checkpoints(scope_type, scope_key, session_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_distill_runs_session
+        ON distill_runs(scope_type, scope_key, session_id, created_at);
     `);
+
+    this.ensureColumn('checkpoints', 'distill_run_id', 'TEXT');
+    this.ensureColumn('checkpoints', 'metadata_json', "TEXT NOT NULL DEFAULT '{}'");
 
     this.db
       .prepare(`
@@ -175,6 +228,7 @@ export class ContextForgeStore {
         memories: count('memories'),
         rawEvents: count('raw_events'),
         checkpoints: count('checkpoints'),
+        distillRuns: count('distill_runs'),
         memoryEvents: count('memory_events'),
       },
     };
@@ -316,15 +370,18 @@ export class ContextForgeStore {
     openQuestions = [],
     sourceEventCount = 0,
     provider,
+    distillRunId = null,
+    metadata = {},
   }) {
     const row = this.db
       .prepare(`
         INSERT INTO checkpoints (
           id, scope_type, scope_key, session_id, conversation_id,
           summary_short, summary_text, decisions_json, todos_json,
-          open_questions_json, source_event_count, provider, created_at
+          open_questions_json, source_event_count, provider, distill_run_id,
+          metadata_json, created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         RETURNING *
       `)
       .get(
@@ -340,8 +397,89 @@ export class ContextForgeStore {
         json(openQuestions, []),
         Number(sourceEventCount),
         provider,
+        distillRunId,
+        json(metadata, {}),
         nowIso(),
       );
     return hydrateCheckpoint(row);
+  }
+
+  startDistillRun({
+    scopeType,
+    scopeKey,
+    sessionId,
+    conversationId = null,
+    provider,
+    sourceEventCount = 0,
+    inputMetadata = {},
+  }) {
+    const row = this.db
+      .prepare(`
+        INSERT INTO distill_runs (
+          id, scope_type, scope_key, session_id, conversation_id, provider,
+          status, source_event_count, input_metadata_json, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, 'started', ?, ?, ?)
+        RETURNING *
+      `)
+      .get(
+        randomUUID(),
+        scopeType,
+        scopeKey,
+        sessionId,
+        conversationId,
+        provider,
+        Number(sourceEventCount),
+        json(inputMetadata, {}),
+        nowIso(),
+      );
+    return hydrateDistillRun(row);
+  }
+
+  completeDistillRun({ id, outputMetadata = {} }) {
+    const row = this.db
+      .prepare(`
+        UPDATE distill_runs
+        SET status = 'succeeded',
+            output_metadata_json = ?,
+            completed_at = ?
+        WHERE id = ?
+        RETURNING *
+      `)
+      .get(json(outputMetadata, {}), nowIso(), id);
+    return hydrateDistillRun(row);
+  }
+
+  failDistillRun({ id, error, outputMetadata = {} }) {
+    const row = this.db
+      .prepare(`
+        UPDATE distill_runs
+        SET status = 'failed',
+            output_metadata_json = ?,
+            error_message = ?,
+            error_stack = ?,
+            completed_at = ?
+        WHERE id = ?
+        RETURNING *
+      `)
+      .get(
+        json(outputMetadata, {}),
+        error?.message || String(error),
+        error?.stack || null,
+        nowIso(),
+        id,
+      );
+    return hydrateDistillRun(row);
+  }
+
+  listDistillRuns({ scopeType, scopeKey, sessionId }) {
+    return this.db
+      .prepare(`
+        SELECT * FROM distill_runs
+        WHERE scope_type = ? AND scope_key = ? AND session_id = ?
+        ORDER BY created_at ASC, id ASC
+      `)
+      .all(scopeType, scopeKey, sessionId)
+      .map(hydrateDistillRun);
   }
 }

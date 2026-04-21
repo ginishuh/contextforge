@@ -1,6 +1,13 @@
 import { distillWithMockProvider } from './providers/mock.js';
 
-export function createDistillProvider(name) {
+export function createDistillProvider(name, overrides = {}) {
+  if (overrides[name]) {
+    return {
+      name,
+      distill: overrides[name],
+    };
+  }
+
   if (name === 'mock') {
     return {
       name,
