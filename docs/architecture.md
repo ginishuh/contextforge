@@ -1,16 +1,209 @@
-# Architecture
+# ContextForge Architecture
 
-ContextForge separates memory into three concerns:
+ContextForge is a self-hosted memory and distillation runtime for coding agents.
+It turns raw agent interaction history into scoped, searchable, durable context.
 
-- durable memory: facts, rules, decisions, and preferences that should persist
-- checkpoints: LLM-distilled recent working context
-- raw evidence: append-only source material used for audit and distillation
+It is not a note-taking app, a SaaS memory product, or a vector database wrapper.
+It is a sidecar runtime that complements existing agent memory with canonical
+project/repo memory, evidence retention, and LLM-backed distillation.
 
-Scopes are intentionally explicit:
+## Relationship to Agent Memory
+
+Coding agents such as Codex, Claude Code, Cursor, and other MCP-compatible tools
+may already have built-in memory or session persistence. ContextForge should not
+fight those systems.
+
+The intended relationship is:
+
+- built-in agent memory remains useful for local behavior and broad user
+  preferences
+- ContextForge owns canonical `repo` and `shared` memory
+- ContextForge is queried on demand instead of being dumped into every prompt
+- ContextForge does not require disabling a coding agent's own memory
+
+The safe rule is:
+
+```text
+Do not replace built-in memory. Add a scoped, searchable project memory sidecar.
+```
+
+## Storage Modes
+
+ContextForge supports three storage modes.
+
+### Local
+
+Default mode for most users.
+
+- SQLite on the local machine
+- no server required
+- simple install
+- best for one developer on one machine
+
+### Project-Local
+
+Repo-bound storage in a gitignored directory.
+
+- useful when memory should stay near one checkout
+- default v0 path: `.contextforge/`
+- live DB files must not be committed
+
+### Remote
+
+Server-backed canonical memory for multi-machine and multi-agent users.
+
+- best for users who work from several machines
+- a VPS can become the source of truth
+- local clients act as retrieval/write clients
+- useful for sharing memory between Codex, Claude Code, Cursor, and custom
+  agents
+
+Do not use git as the live storage backend for SQLite or raw runtime data. Git
+can hold source, docs, migrations, example exports, and reviewed snapshots.
+
+## Scope Model
+
+Scopes are intentionally explicit.
 
 - `shared`: common user or organization knowledge
 - `repo`: project-specific memory
 - `local`: machine-specific notes and temporary state
 
-The default runtime should minimize prompt injection by preloading only compact
-context and using search/get calls for detail retrieval.
+`shared` and `repo` should be queryable together when appropriate. `local`
+should not leak into shared or remote scopes by default. Promotion from `local`
+or checkpoint content into durable `repo` or `shared` memory should be explicit.
+
+## Memory Layers
+
+ContextForge separates memory into layers.
+
+### Durable Memories
+
+Canonical facts, rules, decisions, and preferences. This is the highest-trust
+layer.
+
+### Checkpoints
+
+LLM-distilled recent continuity. Checkpoints answer:
+
+- where did we leave off?
+- what was recently decided?
+- what remains open?
+- what should a new agent know to continue?
+
+Checkpoints are important, but they are not canonical truth. They can suggest
+durable memories, but should not silently become durable memory.
+
+### Raw Evidence
+
+Append-only source material used for auditability, later distillation, summary
+debugging, and context recovery.
+
+Raw evidence should not be loaded by default. It should be opt-in and scoped.
+
+### Daily Summaries
+
+Daily summaries are not part of the essential core. They may become useful later
+for reporting or human review, but ContextForge v1 should center on durable
+memory, checkpoints, and raw evidence.
+
+## Distillation Policy
+
+Distillation is a core capability.
+
+Useful checkpoints require an LLM because string heuristics cannot reliably
+distinguish decisions, temporary chatter, durable facts, and open questions.
+
+Therefore:
+
+- distillation should be explicit and provider-backed
+- providers must be pluggable
+- distillation failure must not destroy raw evidence
+- raw capture and durable memory writes must work even if distillation fails
+
+## Provider Contract
+
+ContextForge should support bring-your-own distillation providers:
+
+- `codex_exec`
+- `claude_code_exec`
+- direct OpenAI-compatible APIs
+- z.ai-compatible APIs
+- local model runners such as Ollama or LM Studio
+
+Provider inputs should include:
+
+- scope
+- session id
+- conversation id
+- raw event slice
+- optional previous checkpoint
+- optional relevant durable memories
+- requested output schema
+
+Provider outputs should include:
+
+- `summaryShort`
+- `summaryText`
+- `decisions`
+- `todos`
+- `openQuestions`
+- `memoryCandidates`
+- `sourceEventCount`
+- `provider`
+- metadata sufficient to debug the run
+
+Memory candidates must not automatically become durable memories unless the
+caller explicitly chooses that policy.
+
+## Retrieval Policy
+
+Default retrieval should be compact, explainable, scoped, and on demand.
+
+Recommended order:
+
+1. current repository reality
+2. ContextForge durable memory from `repo + shared`
+3. checkpoints for recent continuity when requested
+4. raw evidence only when explicit
+5. built-in agent memory and markdown fallback as supporting context
+
+Avoid:
+
+- auto-loading all checkpoints
+- auto-loading raw events
+- dumping giant memory files into prompt context
+- treating vector results as unexplainable truth
+
+The default runtime should minimize prompt bloat by preloading only tiny
+bootstrap context, then using `search` and `getMemory` for detail.
+
+## Adapter Strategy
+
+Build adapters after the local core is stable.
+
+Likely adapter layers:
+
+- CLI
+- MCP server
+- Codex integration examples
+- Claude Code integration examples
+- remote HTTP API for VPS mode
+
+The first MCP surface should stay small:
+
+- `begin_session`
+- `search`
+- `get_memory`
+- `remember`
+- `append_raw`
+- `distill_checkpoint`
+- `promote_memory`
+
+## Public Repo Safety
+
+ContextForge is public. Never include real user memory, raw private transcripts,
+user-specific files, secrets, tokens, live SQLite DB files, or machine-specific
+paths as required defaults.
+
+Examples and tests should be synthetic.

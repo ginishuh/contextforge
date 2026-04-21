@@ -6,6 +6,10 @@ ContextForge is designed for agents that need more than a flat memory file:
 canonical project memory, scoped retrieval, evidence-preserving raw logs, and
 LLM-backed distillation into checkpoints.
 
+ContextForge is a sidecar memory runtime. It complements existing agent memory
+systems by providing canonical project/repo memory, evidence retention, and
+LLM-backed distillation.
+
 ## Goals
 
 - Keep durable memory in a canonical local store.
@@ -19,6 +23,9 @@ LLM-backed distillation into checkpoints.
 - `local`: default single-machine SQLite storage.
 - `project-local`: repo-bound storage in a gitignored directory.
 - `remote`: VPS or server-backed canonical memory for multiple machines.
+
+See [docs/architecture.md](docs/architecture.md) for the full product model and
+[docs/roadmap.md](docs/roadmap.md) for the implementation roadmap.
 
 ## Distillation
 
