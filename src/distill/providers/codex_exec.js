@@ -1,0 +1,301 @@
+import { spawn } from 'node:child_process';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+
+const OUTPUT_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: [
+    'summaryShort',
+    'summaryText',
+    'decisions',
+    'todos',
+    'openQuestions',
+    'memoryCandidates',
+    'sourceEventCount',
+    'provider',
+    'metadata',
+  ],
+  properties: {
+    summaryShort: { type: 'string', minLength: 1 },
+    summaryText: { type: 'string', minLength: 1 },
+    decisions: { type: 'array', items: { type: 'string' } },
+    todos: { type: 'array', items: { type: 'string' } },
+    openQuestions: { type: 'array', items: { type: 'string' } },
+    memoryCandidates: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['key', 'content', 'reason'],
+        properties: {
+          key: { type: 'string' },
+          content: { type: 'string' },
+          reason: { type: 'string' },
+        },
+      },
+    },
+    sourceEventCount: { type: 'integer', minimum: 0 },
+    provider: { type: 'string' },
+    metadata: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['providerNotes'],
+      properties: {
+        providerNotes: { type: 'string' },
+      },
+    },
+  },
+};
+
+function truncateText(value, maxChars) {
+  const text = String(value || '');
+  if (text.length <= maxChars) {
+    return { text, truncated: false };
+  }
+  return {
+    text: `${text.slice(0, Math.max(0, maxChars))}\n[truncated]`,
+    truncated: true,
+  };
+}
+
+function compactCheckpoint(checkpoint) {
+  if (!checkpoint) return null;
+  return {
+    id: checkpoint.id,
+    summaryShort: checkpoint.summaryShort,
+    summaryText: checkpoint.summaryText,
+    decisions: checkpoint.decisions,
+    todos: checkpoint.todos,
+    openQuestions: checkpoint.openQuestions,
+    sourceEventCount: checkpoint.sourceEventCount,
+    createdAt: checkpoint.createdAt,
+  };
+}
+
+function buildRawEventPayload(rawEvents, maxInputChars) {
+  const events = [];
+  let remaining = maxInputChars;
+  let truncated = false;
+
+  for (const event of rawEvents) {
+    const base = {
+      id: event.id,
+      role: event.role,
+      createdAt: event.createdAt,
+      metadata: event.metadata,
+    };
+
+    if (remaining <= 0) {
+      truncated = true;
+      events.push({ ...base, content: '[omitted: context budget exhausted]', truncated: true });
+      continue;
+    }
+
+    const content = truncateText(event.content, remaining);
+    remaining -= content.text.length;
+    truncated = truncated || content.truncated;
+    events.push({ ...base, content: content.text, truncated: content.truncated });
+  }
+
+  return { events, truncated };
+}
+
+export function buildCodexExecPrompt(input, options = {}) {
+  const maxInputChars = options.maxInputChars || 12000;
+  const rawPayload = buildRawEventPayload(input.rawEvents || [], maxInputChars);
+  const payload = {
+    task: 'Distill coding-agent raw events into one ContextForge checkpoint.',
+    rules: [
+      'Return only JSON that matches the requested schema.',
+      'Do not include Markdown, code fences, commentary, or private assumptions.',
+      'Preserve uncertainty in openQuestions instead of inventing facts.',
+      'Use only the raw events and previous checkpoint supplied in this request.',
+    ],
+    session: input.session,
+    requestedOutputSchema: input.requestedOutputSchema,
+    previousCheckpoint: compactCheckpoint(input.previousCheckpoint),
+    rawEvents: rawPayload.events,
+  };
+
+  return {
+    prompt: [
+      'You are the ContextForge codex_exec distillation provider.',
+      'Distill the supplied evidence into a checkpoint for future coding-agent continuity.',
+      'Return exactly one JSON object and no surrounding text.',
+      '',
+      JSON.stringify(payload, null, 2),
+    ].join('\n'),
+    metadata: {
+      rawEventCount: rawPayload.events.length,
+      inputTruncated: rawPayload.truncated,
+      maxInputChars,
+    },
+  };
+}
+
+async function readTextIfPresent(filePath) {
+  try {
+    return await fs.readFile(filePath, 'utf8');
+  } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      return '';
+    }
+    throw error;
+  }
+}
+
+function stripJsonFence(text) {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return fenced ? fenced[1].trim() : trimmed;
+}
+
+export function parseCodexExecJson(text) {
+  const stripped = stripJsonFence(text);
+  try {
+    return JSON.parse(stripped);
+  } catch {
+    const start = stripped.indexOf('{');
+    const end = stripped.lastIndexOf('}');
+    if (start !== -1 && end > start) {
+      try {
+        return JSON.parse(stripped.slice(start, end + 1));
+      } catch {
+        throw new Error('Codex exec did not return valid JSON.');
+      }
+    }
+    throw new Error('Codex exec did not return valid JSON.');
+  }
+}
+
+function summarizeStderr(stderr) {
+  const trimmed = stderr.trim();
+  if (!trimmed) return '';
+
+  const errorLines = trimmed
+    .split(/\r?\n/)
+    .filter((line) => /\b(error|failed|invalid|timeout)\b/i.test(line))
+    .join('\n')
+    .trim();
+  const summary = errorLines || trimmed.slice(-1000);
+  return summary.length > 2000 ? `${summary.slice(0, 2000)}\n[truncated]` : summary;
+}
+
+export function runCodexExecCommand({ command, args, prompt, timeoutMs, cwd, env = process.env }) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd,
+      env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill('SIGTERM');
+      reject(new Error(`codex_exec timed out after ${timeoutMs}ms.`));
+    }, timeoutMs);
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on('error', (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on('close', (code, signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (code === 0) {
+        resolve({ stdout, stderr, code, signal });
+      } else {
+        const stderrSummary = summarizeStderr(stderr);
+        const suffix = stderrSummary ? ` ${stderrSummary}` : '';
+        reject(new Error(`codex_exec exited with code ${code}.${suffix}`));
+      }
+    });
+
+    child.stdin.end(prompt);
+  });
+}
+
+export function createCodexExecProvider(options = {}) {
+  const runner = options.runner || runCodexExecCommand;
+  const command = options.command || 'codex';
+  const model = options.model || null;
+  const sandbox = options.sandbox || 'read-only';
+  const cwd = options.cwd || process.cwd();
+  const timeoutMs = options.timeoutMs || 120000;
+  const maxInputChars = options.maxInputChars || 12000;
+
+  return async function distillWithCodexExecProvider(input) {
+    const startedAt = Date.now();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'contextforge-codex-exec-'));
+    const schemaPath = path.join(tempDir, 'checkpoint.schema.json');
+    const outputPath = path.join(tempDir, 'checkpoint.json');
+    const prompt = buildCodexExecPrompt(input, { maxInputChars });
+
+    await fs.writeFile(schemaPath, `${JSON.stringify(OUTPUT_SCHEMA, null, 2)}\n`, 'utf8');
+
+    const args = [
+      'exec',
+      '--skip-git-repo-check',
+      '--ephemeral',
+      '--sandbox',
+      sandbox,
+      '--cd',
+      cwd,
+      '--output-schema',
+      schemaPath,
+      '--output-last-message',
+      outputPath,
+    ];
+    if (model) {
+      args.push('--model', model);
+    }
+    args.push('-');
+
+    try {
+      const result = await runner({
+        command,
+        args,
+        prompt: prompt.prompt,
+        timeoutMs,
+        cwd,
+        env: process.env,
+      });
+      const outputText = (await readTextIfPresent(outputPath)) || result.stdout || '';
+      const output = parseCodexExecJson(outputText);
+
+      return {
+        ...output,
+        provider: output.provider || 'codex_exec',
+        sourceEventCount: output.sourceEventCount ?? (input.rawEvents || []).length,
+        metadata: {
+          ...(output.metadata || {}),
+          codexExec: {
+            command,
+            model,
+            sandbox,
+            timeoutMs,
+            elapsedMs: Date.now() - startedAt,
+            ...prompt.metadata,
+          },
+        },
+      };
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  };
+}

@@ -21,6 +21,8 @@ Delivered:
 
 Tracking issue: #5.
 
+Status: merged in PR #12.
+
 Goals:
 
 - finalize distillation input/output schema
@@ -60,7 +62,7 @@ Goals:
 
 Tracking issue: #6.
 
-Recommended first provider: `codex_exec`.
+Selected first provider: `codex_exec`.
 
 Requirements:
 
@@ -125,8 +127,6 @@ Keep vector search as a retrieval surface, not the canonical source of truth.
 
 - What exact default should repo scope keys use: git remote URL, normalized
   `owner/repo`, absolute path hash, or explicit user config?
-- Should `codex_exec` be the first real provider, or should direct API come first
-  because it is easier to test in CI?
 - In remote mode, should distillation providers run client-side, server-side, or
   both depending on provider type?
 - How should provider prompts be versioned?

@@ -30,6 +30,10 @@ function withStore(config, fn) {
 export function createContextForge(options = {}) {
   const config = loadConfig(options);
   const distillProviders = options.distillProviders || {};
+  const codexExec = {
+    ...config.codexExec,
+    runner: options.codexExecRunner,
+  };
 
   return {
     config,
@@ -106,7 +110,9 @@ export function createContextForge(options = {}) {
     async distillCheckpoint(options) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.sessionId, 'sessionId');
-      const provider = createDistillProvider(options.provider || config.distillProvider, distillProviders);
+      const provider = createDistillProvider(options.provider || config.distillProvider, distillProviders, {
+        codexExec,
+      });
 
       return withStore(config, async (store) => {
         const rawEvents = store.listRawEvents({ ...scope, sessionId: options.sessionId });
