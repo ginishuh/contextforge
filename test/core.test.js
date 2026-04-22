@@ -6,6 +6,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import test from 'node:test';
 import { createContextForge } from '../src/core.js';
+import { startContextForgeServer } from '../src/server.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -392,6 +393,106 @@ test('CLI supports the v0 workflow with synthetic data', async () => {
     { env },
   );
   assert.match(runs.stdout, /"status": "succeeded"/);
+});
+
+test('remote storage mode delegates core calls and preserves scope semantics', async () => {
+  const dataDir = await makeTempDir();
+  const remote = await startContextForgeServer({
+    port: 0,
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+    },
+  });
+
+  try {
+    const app = createContextForge({
+      env: {
+        CONTEXTFORGE_STORAGE_MODE: 'remote',
+        CONTEXTFORGE_REMOTE_URL: remote.url,
+        CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+      },
+      cwd: process.cwd(),
+    });
+
+    await app.remember({
+      scope: 'repo',
+      scopeKey: 'repo-remote',
+      key: 'storage-mode',
+      content: 'Remote repo memory stays in repo scope.',
+      category: 'decision',
+    });
+    await app.remember({
+      scope: 'shared',
+      scopeKey: 'global',
+      key: 'storage-mode',
+      content: 'Shared memory stays in shared scope.',
+      category: 'policy',
+    });
+
+    const repoMemory = await app.getMemory({
+      scope: 'repo',
+      scopeKey: 'repo-remote',
+      key: 'storage-mode',
+    });
+    const sharedMemory = await app.getMemory({
+      scope: 'shared',
+      scopeKey: 'global',
+      key: 'storage-mode',
+    });
+    assert.equal(repoMemory.scopeType, 'repo');
+    assert.equal(repoMemory.content, 'Remote repo memory stays in repo scope.');
+    assert.equal(sharedMemory.scopeType, 'shared');
+    assert.equal(sharedMemory.content, 'Shared memory stays in shared scope.');
+
+    const repoResults = await app.search({
+      scope: 'repo',
+      scopeKey: 'repo-remote',
+      query: 'remote scope',
+    });
+    assert.equal(repoResults.length, 1);
+    assert.equal(repoResults[0].memory.scopeType, 'repo');
+
+    const info = await app.dbInfo();
+    assert.equal(info.tables.memories, 2);
+  } finally {
+    await remote.close();
+  }
+});
+
+test('remote storage mode rejects unauthorized writes', async () => {
+  const dataDir = await makeTempDir();
+  const remote = await startContextForgeServer({
+    port: 0,
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+    },
+  });
+
+  try {
+    const app = createContextForge({
+      env: {
+        CONTEXTFORGE_STORAGE_MODE: 'remote',
+        CONTEXTFORGE_REMOTE_URL: remote.url,
+        CONTEXTFORGE_REMOTE_TOKEN: 'wrong-token',
+      },
+      cwd: process.cwd(),
+    });
+
+    await assert.rejects(
+      () =>
+        app.remember({
+          scope: 'repo',
+          scopeKey: 'repo-remote',
+          key: 'unauthorized',
+          content: 'This should not be written.',
+        }),
+      /Unauthorized/,
+    );
+  } finally {
+    await remote.close();
+  }
 });
 
 test('runtime database artifacts are ignored by git rules', async () => {

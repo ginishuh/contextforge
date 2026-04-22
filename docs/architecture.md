@@ -31,19 +31,22 @@ Do not replace built-in memory. Add a scoped, searchable project memory sidecar.
 
 ContextForge supports three storage modes.
 
-ContextForge starts local for zero-friction setup, but remote mode is a
-first-class canonical deployment model. Local mode is the easiest entry point
-and a useful fallback/cache shape; remote mode is the power-user path for
-multi-machine and multi-agent workflows.
+ContextForge starts project-local for zero-friction setup, but remote mode is a
+first-class canonical deployment model. Local mode is a single-machine
+home-directory store; project-local mode keeps a repo-bound store near one
+checkout; remote mode is the power-user path for multi-machine and multi-agent
+workflows.
 
 ### Local
 
-Default mode for most users.
+Single-machine home-directory mode.
 
 - SQLite on the local machine
 - no server required
 - simple install
 - best for one developer on one machine
+- configured with `CONTEXTFORGE_STORAGE_MODE=local`
+- default path: `~/.contextforge/contextforge.db`
 
 ### Project-Local
 
@@ -51,6 +54,7 @@ Repo-bound storage in a gitignored directory.
 
 - useful when memory should stay near one checkout
 - default v0 path: `.contextforge/`
+- default v0 storage mode
 - live DB files must not be committed
 
 ### Remote
@@ -64,9 +68,34 @@ users.
 - useful for sharing memory between Codex, Claude Code, Cursor, and custom
   agents
 - should be considered an early product path, not a distant enterprise add-on
+- configured on clients with `CONTEXTFORGE_STORAGE_MODE=remote`,
+  `CONTEXTFORGE_REMOTE_URL`, and optional `CONTEXTFORGE_REMOTE_TOKEN`
+- served by `contextforge-server` or `node src/cli.js serve`
 
 Do not use git as the live storage backend for SQLite or raw runtime data. Git
 can hold source, docs, migrations, example exports, and reviewed snapshots.
+
+### Remote Client/Server Boundary
+
+The v0 remote boundary is intentionally narrow:
+
+- the client keeps no canonical SQLite database when `storageMode=remote`
+- the client sends JSON requests to `/v0/<method>`
+- the server executes the same core methods as local mode
+- bearer-token auth is optional but recommended for every networked server
+- scope type and scope key are part of every read/write request, so remote mode
+  does not change `shared`, `repo`, or `local` semantics
+
+Remote distillation currently runs server-side. This keeps raw evidence and
+provider run metadata in the canonical store and avoids split-brain checkpoint
+writes. Client-side provider execution may be added later for providers that
+must use client-local credentials or tools, but such writes still need to go
+through the remote canonical API.
+
+There is no automatic offline cache or write fallback in v0. If a remote client
+cannot reach the server, the operation should fail visibly. Users may configure
+`project-local` or `local` as an explicit fallback profile, but ContextForge
+should not silently fork canonical memory.
 
 ## Scope Model
 

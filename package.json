@@ -4,7 +4,8 @@
   "description": "Self-hosted memory and distillation runtime for coding agents.",
   "type": "module",
   "bin": {
-    "contextforge": "src/cli.js"
+    "contextforge": "src/cli.js",
+    "contextforge-server": "src/server.js"
   },
   "files": [
     "src",

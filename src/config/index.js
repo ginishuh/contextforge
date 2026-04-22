@@ -1,6 +1,8 @@
 import path from 'node:path';
+import os from 'node:os';
 
 const VALID_SCOPES = new Set(['shared', 'repo', 'local']);
+const VALID_STORAGE_MODES = new Set(['local', 'project-local', 'remote']);
 
 function parsePositiveInteger(value, name, fallback) {
   if (value == null || value === '') {
@@ -15,8 +17,15 @@ function parsePositiveInteger(value, name, fallback) {
 }
 
 export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
+  const storageMode = env.CONTEXTFORGE_STORAGE_MODE || (env.CONTEXTFORGE_REMOTE_URL ? 'remote' : 'project-local');
+  if (!VALID_STORAGE_MODES.has(storageMode)) {
+    throw new Error(`Invalid CONTEXTFORGE_STORAGE_MODE: ${storageMode}`);
+  }
+
   const dataDir = env.CONTEXTFORGE_DATA_DIR
     ? path.resolve(cwd, env.CONTEXTFORGE_DATA_DIR)
+    : storageMode === 'local'
+      ? path.join(env.HOME || os.homedir(), '.contextforge')
     : path.join(cwd, '.contextforge');
 
   const defaultScope = env.CONTEXTFORGE_DEFAULT_SCOPE || 'repo';
@@ -25,10 +34,20 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
   }
 
   return {
+    storageMode,
     dataDir,
     defaultScope,
     defaultScopeKey: env.CONTEXTFORGE_DEFAULT_SCOPE_KEY || null,
     distillProvider: env.CONTEXTFORGE_DISTILL_PROVIDER || 'mock',
+    remote: {
+      url: env.CONTEXTFORGE_REMOTE_URL || null,
+      token: env.CONTEXTFORGE_REMOTE_TOKEN || null,
+      timeoutMs: parsePositiveInteger(
+        env.CONTEXTFORGE_REMOTE_TIMEOUT_MS,
+        'CONTEXTFORGE_REMOTE_TIMEOUT_MS',
+        30000,
+      ),
+    },
     codexExec: {
       command: env.CONTEXTFORGE_CODEX_EXEC_COMMAND || 'codex',
       model: env.CONTEXTFORGE_CODEX_EXEC_MODEL || null,

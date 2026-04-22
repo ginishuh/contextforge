@@ -35,6 +35,8 @@ Goals:
 
 Tracking issue: #8.
 
+Status: initial implementation in progress.
+
 Remote mode is an early first-class path for users whose canonical work already
 lives on a VPS or server. Local mode remains the zero-friction install and a
 useful fallback/cache shape.
@@ -46,6 +48,14 @@ Goals:
 - multi-machine sync
 - local fallback behavior
 - clear shared/repo/local write policy
+
+Initial implementation:
+
+- JSON HTTP server for the stable core methods
+- remote client mode selected by `CONTEXTFORGE_STORAGE_MODE=remote`
+- bearer token auth with `CONTEXTFORGE_REMOTE_TOKEN`
+- visible failure when remote is unavailable instead of silent local fallback
+- server-side distillation for canonical checkpoint writes
 
 ## Milestone 3: Shared + Repo Retrieval
 
@@ -61,6 +71,8 @@ Goals:
 ## Milestone 4: First Real Distill Provider
 
 Tracking issue: #6.
+
+Status: merged in PR #13.
 
 Selected first provider: `codex_exec`.
 
@@ -127,8 +139,8 @@ Keep vector search as a retrieval surface, not the canonical source of truth.
 
 - What exact default should repo scope keys use: git remote URL, normalized
   `owner/repo`, absolute path hash, or explicit user config?
-- In remote mode, should distillation providers run client-side, server-side, or
-  both depending on provider type?
+- Which remote provider types should eventually support client-side execution
+  while still writing checkpoints through the remote canonical API?
 - How should provider prompts be versioned?
 - Should checkpoint memory candidates require explicit human approval or allow a
   configurable auto-promote policy?

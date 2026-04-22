@@ -20,14 +20,18 @@ LLM-backed distillation.
 
 ## Storage Modes
 
-- `local`: default single-machine SQLite storage.
-- `project-local`: repo-bound storage in a gitignored directory.
+- `project-local`: repo-bound SQLite storage in a gitignored directory. This is
+  the default v0 mode.
+- `local`: single-machine SQLite storage under the user's home directory.
 - `remote`: first-class VPS or server-backed canonical memory for multiple
   machines.
 
-ContextForge starts local for zero-friction setup, but remote mode is a
+ContextForge starts project-local for zero-friction setup, but remote mode is a
 first-class canonical deployment model for users who work from multiple machines
-or want several agents to share the same source of truth.
+or want several agents to share the same source of truth. Set
+`CONTEXTFORGE_STORAGE_MODE=local` to use home-directory storage, or
+`CONTEXTFORGE_STORAGE_MODE=remote` with `CONTEXTFORGE_REMOTE_URL` to use a
+server-backed store.
 
 See [docs/architecture.md](docs/architecture.md) for the full product model and
 [docs/roadmap.md](docs/roadmap.md) for the implementation roadmap.
@@ -74,6 +78,47 @@ node src/cli.js dbInfo
 By default, runtime data is stored in `.contextforge/contextforge.db` under the
 current working directory. This directory and SQLite sidecar files are ignored by
 git. To use another location, set `CONTEXTFORGE_DATA_DIR`.
+
+## Remote Mode
+
+Run a ContextForge server on the machine that should own canonical memory:
+
+```bash
+CONTEXTFORGE_REMOTE_TOKEN=change-me \
+node src/cli.js serve --host 127.0.0.1 --port 8765
+```
+
+Point a client at that server:
+
+```bash
+CONTEXTFORGE_STORAGE_MODE=remote \
+CONTEXTFORGE_REMOTE_URL=http://127.0.0.1:8765 \
+CONTEXTFORGE_REMOTE_TOKEN=change-me \
+node src/cli.js search \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --query "sqlite runtime"
+```
+
+Remote mode uses the same JSON CLI/core surface as local mode. The server owns
+reads and writes for `shared`, `repo`, and `local` scopes, and the client sends
+the requested scope explicitly with each operation. If a token is configured on
+the server, clients must send it with `CONTEXTFORGE_REMOTE_TOKEN`.
+
+Current v0 remote behavior is deliberately simple:
+
+- `CONTEXTFORGE_STORAGE_MODE=remote` delegates core calls to
+  `CONTEXTFORGE_REMOTE_URL`.
+- `CONTEXTFORGE_STORAGE_MODE=project-local` stores data under `.contextforge/`.
+- `CONTEXTFORGE_STORAGE_MODE=local` stores data under `~/.contextforge/`.
+- No automatic offline cache or fallback writes are performed yet. If the
+  remote server is unavailable, commands fail rather than silently writing to a
+  different canonical store.
+- Distillation runs server-side in remote mode, so provider configuration and
+  credentials belong on the server for now.
+
+Do not point git at live SQLite or raw runtime data. Use git only for source,
+docs, examples, migrations, and reviewed exports.
 
 ## v0 CLI Workflow
 
@@ -181,7 +226,7 @@ non-zero, times out, or returns malformed JSON, ContextForge records a failed
 ## Status
 
 Early v0 core. The current implementation includes SQLite migrations, scoped
-durable memories, raw event capture, lexical search with match reasons, and mock
-checkpoint distillation. The first real provider, `codex_exec`, is available for
-local Codex CLI-backed checkpoint distillation. MCP/agent adapters and additional
-providers are future work.
+durable memories, raw event capture, lexical search with match reasons, mock
+checkpoint distillation, `codex_exec` checkpoint distillation, and a minimal
+remote HTTP mode for server-backed canonical memory. MCP/agent adapters and
+additional providers are future work.
