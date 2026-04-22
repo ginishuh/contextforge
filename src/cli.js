@@ -45,6 +45,8 @@ function toCoreOptions(options) {
     importance: options.importance == null ? 0 : Number(options.importance),
     query: options.query,
     limit: options.limit == null ? 10 : Number(options.limit),
+    searchScopes: options.searchScopes,
+    sharedScopeKey: options.sharedScopeKey,
     sessionId: options.sessionId,
     conversationId: options.conversationId,
     role: options.role,

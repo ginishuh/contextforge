@@ -109,6 +109,11 @@ Scopes are intentionally explicit.
 should not leak into shared or remote scopes by default. Promotion from `local`
 or checkpoint content into durable `repo` or `shared` memory should be explicit.
 
+The default shared scope key is `global` unless configured with
+`CONTEXTFORGE_SHARED_SCOPE_KEY`. Combined retrieval should include source
+metadata for every result so callers can explain whether a memory came from the
+current repo, shared durable memory, or an explicitly requested local scope.
+
 ## Memory Layers
 
 ContextForge separates memory into layers.
@@ -234,6 +239,18 @@ Avoid:
 
 The default runtime should minimize prompt bloat by preloading only tiny
 bootstrap context, then using `search` and `getMemory` for detail.
+
+Search modes:
+
+- `scope`: search only the explicit scope and scope key
+- `repo`: search the repo scope
+- `shared`: search shared durable memory
+- `repo+shared`: search repo memory and shared durable memory together
+- `local`: search local memory only when explicitly requested
+
+When `repo+shared` is used, exact repo memory should rank ahead of equally
+relevant shared memory. Shared memory is still returned when relevant, and local
+memory is excluded unless requested.
 
 ## Adapter Strategy
 
