@@ -148,6 +148,10 @@ Provider inputs should include:
 - optional relevant durable memories
 - requested output schema
 
+The first real provider is `codex_exec`, which shells out to `codex exec`,
+requests structured JSON output, applies timeout and raw-input budget controls,
+and then uses the same provider validation path as every other adapter.
+
 Provider outputs should include:
 
 - `summaryShort`

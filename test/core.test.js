@@ -202,6 +202,113 @@ test('distillCheckpoint records provider failures without deleting raw evidence'
   assert.equal(runs[0].outputMetadata.providerFailed, true);
 });
 
+test('codex_exec provider distills synthetic raw events through a runner', async () => {
+  const dataDir = await makeTempDir();
+  let invocation;
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'codex_exec',
+      CONTEXTFORGE_CODEX_EXEC_COMMAND: 'codex-fake',
+      CONTEXTFORGE_CODEX_EXEC_MODEL: 'gpt-test',
+      CONTEXTFORGE_CODEX_EXEC_TIMEOUT_MS: '1234',
+      CONTEXTFORGE_CODEX_EXEC_MAX_INPUT_CHARS: '5000',
+    },
+    cwd: process.cwd(),
+    codexExecRunner: async (args) => {
+      invocation = args;
+      return {
+        stdout: JSON.stringify({
+          summaryShort: 'Codex checkpoint for synthetic events.',
+          summaryText: 'The user decided to test the codex_exec provider path.',
+          decisions: ['Use codex_exec behind the provider contract.'],
+          todos: ['Document setup expectations.'],
+          openQuestions: [],
+          memoryCandidates: [{ key: 'provider', content: 'codex_exec is available.' }],
+          sourceEventCount: 1,
+          metadata: { synthetic: true },
+        }),
+      };
+    },
+  });
+
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-codex',
+    sessionId: 'codex-session',
+    role: 'user',
+    content: 'Decision: test codex_exec with synthetic raw events.',
+  });
+
+  const checkpoint = await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'repo-codex',
+    sessionId: 'codex-session',
+  });
+
+  assert.equal(checkpoint.provider, 'codex_exec');
+  assert.equal(checkpoint.sourceEventCount, 1);
+  assert.equal(checkpoint.metadata.providerMetadata.synthetic, true);
+  assert.equal(checkpoint.metadata.providerMetadata.codexExec.command, 'codex-fake');
+  assert.equal(checkpoint.metadata.providerMetadata.codexExec.model, 'gpt-test');
+  assert.equal(checkpoint.metadata.providerMetadata.codexExec.timeoutMs, 1234);
+  assert.match(invocation.prompt, /Return exactly one JSON object/);
+  assert.deepEqual(invocation.args.slice(0, 2), ['exec', '--skip-git-repo-check']);
+  assert.ok(invocation.args.includes('--output-schema'));
+  assert.ok(invocation.args.includes('--output-last-message'));
+  assert.equal(invocation.timeoutMs, 1234);
+
+  const runs = app.listDistillRuns({
+    scope: 'repo',
+    scopeKey: 'repo-codex',
+    sessionId: 'codex-session',
+  });
+  assert.equal(runs[0].status, 'succeeded');
+});
+
+test('codex_exec parse failures preserve raw evidence', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'codex_exec',
+    },
+    cwd: process.cwd(),
+    codexExecRunner: async () => ({ stdout: 'not json' }),
+  });
+
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-codex-fail',
+    sessionId: 'codex-fail-session',
+    role: 'assistant',
+    content: 'Raw evidence should survive codex_exec parse failures.',
+  });
+
+  await assert.rejects(
+    () =>
+      app.distillCheckpoint({
+        scope: 'repo',
+        scopeKey: 'repo-codex-fail',
+        sessionId: 'codex-fail-session',
+      }),
+    /valid JSON/,
+  );
+
+  const info = app.dbInfo();
+  assert.equal(info.tables.rawEvents, 1);
+  assert.equal(info.tables.checkpoints, 0);
+  assert.equal(info.tables.distillRuns, 1);
+
+  const runs = app.listDistillRuns({
+    scope: 'repo',
+    scopeKey: 'repo-codex-fail',
+    sessionId: 'codex-fail-session',
+  });
+  assert.equal(runs[0].status, 'failed');
+  assert.equal(runs[0].outputMetadata.providerFailed, true);
+});
+
 test('CLI supports the v0 workflow with synthetic data', async () => {
   const dataDir = await makeTempDir();
   const env = { ...process.env, CONTEXTFORGE_DATA_DIR: dataDir };

@@ -42,9 +42,10 @@ bring-your-own distillation providers, such as:
 - direct model APIs
 - local model runners
 
-The v0 implementation ships with a `mock` provider first. It gives the storage,
-CLI, and checkpoint contract something deterministic to test before real model
-adapters are added.
+The v0 implementation ships with a deterministic `mock` provider and a
+`codex_exec` provider. The `codex_exec` provider shells out to `codex exec`,
+requests JSON-only output with a schema, validates the result, and records
+provider run metadata.
 
 ## Quick Start
 
@@ -141,6 +142,35 @@ node src/cli.js listDistillRuns \
 
 CLI output is JSON so adapters and scripts can consume it directly.
 
+## codex_exec Provider
+
+Use the Codex CLI as the distillation backend:
+
+```bash
+CONTEXTFORGE_DISTILL_PROVIDER=codex_exec \
+node src/cli.js distillCheckpoint \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --sessionId demo-session
+```
+
+Optional environment variables:
+
+- `CONTEXTFORGE_CODEX_EXEC_COMMAND`: Codex executable name or path. Default:
+  `codex`.
+- `CONTEXTFORGE_CODEX_EXEC_MODEL`: model passed to `codex exec --model`.
+- `CONTEXTFORGE_CODEX_EXEC_SANDBOX`: sandbox passed to `codex exec --sandbox`.
+  Default: `read-only`.
+- `CONTEXTFORGE_CODEX_EXEC_TIMEOUT_MS`: provider timeout. Default: `120000`.
+- `CONTEXTFORGE_CODEX_EXEC_MAX_INPUT_CHARS`: raw-event prompt budget. Default:
+  `12000`.
+- `CONTEXTFORGE_CODEX_EXEC_CWD`: working directory passed to `codex exec --cd`.
+  Default: current working directory.
+
+Failure modes are preserved as distillation runs. If `codex exec` exits
+non-zero, times out, or returns malformed JSON, ContextForge records a failed
+`distill_runs` row and leaves raw events untouched for retry or debugging.
+
 ## Public Repo Hygiene
 
 - Runtime state lives under `.contextforge/` by default and is ignored by git.
@@ -152,5 +182,6 @@ CLI output is JSON so adapters and scripts can consume it directly.
 
 Early v0 core. The current implementation includes SQLite migrations, scoped
 durable memories, raw event capture, lexical search with match reasons, and mock
-checkpoint distillation. Real distillation providers and MCP/agent adapters are
-future work.
+checkpoint distillation. The first real provider, `codex_exec`, is available for
+local Codex CLI-backed checkpoint distillation. MCP/agent adapters and additional
+providers are future work.
