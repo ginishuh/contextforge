@@ -68,6 +68,7 @@ async function main() {
         'getMemory',
         'appendRaw',
         'distillCheckpoint',
+        'listDistillRuns',
       ],
     });
     return;
@@ -90,6 +91,8 @@ async function main() {
     printJson(app.appendRaw(coreOptions));
   } else if (command === 'distillCheckpoint') {
     printJson(await app.distillCheckpoint(coreOptions));
+  } else if (command === 'listDistillRuns') {
+    printJson(app.listDistillRuns(coreOptions));
   } else {
     throw new Error(`Unknown command: ${command}`);
   }

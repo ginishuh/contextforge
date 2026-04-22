@@ -29,5 +29,8 @@ export async function distillWithMockProvider(input) {
     openQuestions: collectLines(events, /\?/),
     memoryCandidates: [],
     sourceEventCount,
+    metadata: {
+      roles,
+    },
   };
 }

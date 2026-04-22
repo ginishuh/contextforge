@@ -19,7 +19,7 @@ test('dbInfo initializes a fresh SQLite store', async () => {
 
   const info = app.dbInfo();
 
-  assert.equal(info.schemaVersion, 1);
+  assert.equal(info.schemaVersion, 2);
   assert.equal(info.tables.memories, 0);
   assert.match(info.dbPath, /contextforge\.db$/);
 });
@@ -86,12 +86,120 @@ test('appendRaw and mock distillCheckpoint preserve raw evidence', async () => {
 
   assert.equal(checkpoint.provider, 'mock');
   assert.equal(checkpoint.sourceEventCount, 2);
+  assert.ok(checkpoint.distillRunId);
+  assert.deepEqual(checkpoint.metadata.providerMetadata, { roles: 'user, assistant' });
   assert.equal(checkpoint.decisions.length, 1);
   assert.equal(checkpoint.todos.length, 1);
 
   const info = app.dbInfo();
   assert.equal(info.tables.rawEvents, 2);
   assert.equal(info.tables.checkpoints, 1);
+  assert.equal(info.tables.distillRuns, 1);
+
+  const runs = app.listDistillRuns({
+    scope: 'repo',
+    scopeKey: 'repo-a',
+    sessionId: session.sessionId,
+  });
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0].status, 'succeeded');
+  assert.equal(runs[0].outputMetadata.checkpointId, checkpoint.id);
+});
+
+test('distillCheckpoint rejects malformed provider output and preserves raw evidence', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'bad_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      bad_provider: async () => ({
+        summaryShort: 'Missing required arrays.',
+        summaryText: 'Malformed output should be rejected.',
+      }),
+    },
+  });
+
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-b',
+    sessionId: 'bad-session',
+    role: 'user',
+    content: 'Keep this raw event even when validation fails.',
+  });
+
+  await assert.rejects(
+    () =>
+      app.distillCheckpoint({
+        scope: 'repo',
+        scopeKey: 'repo-b',
+        sessionId: 'bad-session',
+      }),
+    /decisions.*array/,
+  );
+
+  const info = app.dbInfo();
+  assert.equal(info.tables.rawEvents, 1);
+  assert.equal(info.tables.checkpoints, 0);
+  assert.equal(info.tables.distillRuns, 1);
+
+  const runs = app.listDistillRuns({
+    scope: 'repo',
+    scopeKey: 'repo-b',
+    sessionId: 'bad-session',
+  });
+  assert.equal(runs[0].status, 'failed');
+  assert.equal(runs[0].outputMetadata.validationFailed, true);
+});
+
+test('distillCheckpoint records provider failures without deleting raw evidence', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'failing_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      failing_provider: async () => {
+        throw new Error('synthetic provider failure');
+      },
+    },
+  });
+
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-c',
+    sessionId: 'failing-session',
+    role: 'assistant',
+    content: 'Raw evidence should survive provider exceptions.',
+  });
+
+  await assert.rejects(
+    () =>
+      app.distillCheckpoint({
+        scope: 'repo',
+        scopeKey: 'repo-c',
+        sessionId: 'failing-session',
+      }),
+    /synthetic provider failure/,
+  );
+
+  const info = app.dbInfo();
+  assert.equal(info.tables.rawEvents, 1);
+  assert.equal(info.tables.checkpoints, 0);
+  assert.equal(info.tables.distillRuns, 1);
+
+  const runs = app.listDistillRuns({
+    scope: 'repo',
+    scopeKey: 'repo-c',
+    sessionId: 'failing-session',
+  });
+  assert.equal(runs[0].status, 'failed');
+  assert.equal(runs[0].errorMessage, 'synthetic provider failure');
+  assert.equal(runs[0].outputMetadata.providerFailed, true);
 });
 
 test('CLI supports the v0 workflow with synthetic data', async () => {
@@ -99,7 +207,7 @@ test('CLI supports the v0 workflow with synthetic data', async () => {
   const env = { ...process.env, CONTEXTFORGE_DATA_DIR: dataDir };
 
   const dbInfo = await execFileAsync('node', ['src/cli.js', 'dbInfo'], { env });
-  assert.match(dbInfo.stdout, /"schemaVersion": 1/);
+  assert.match(dbInfo.stdout, /"schemaVersion": 2/);
 
   await execFileAsync(
     'node',
@@ -161,6 +269,22 @@ test('CLI supports the v0 workflow with synthetic data', async () => {
     { env },
   );
   assert.match(checkpoint.stdout, /"provider": "mock"/);
+
+  const runs = await execFileAsync(
+    'node',
+    [
+      'src/cli.js',
+      'listDistillRuns',
+      '--scope',
+      'repo',
+      '--scopeKey',
+      'cli-repo',
+      '--sessionId',
+      'cli-session',
+    ],
+    { env },
+  );
+  assert.match(runs.stdout, /"status": "succeeded"/);
 });
 
 test('runtime database artifacts are ignored by git rules', async () => {

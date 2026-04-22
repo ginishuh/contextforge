@@ -163,6 +163,23 @@ Provider outputs should include:
 Memory candidates must not automatically become durable memories unless the
 caller explicitly chooses that policy.
 
+## Distill Run Metadata
+
+Every distillation attempt should be recorded separately from checkpoints.
+
+Distill run records should capture:
+
+- provider name
+- run status: `started`, `succeeded`, or `failed`
+- source event count and raw event ids
+- previous checkpoint id when present
+- requested output schema
+- provider metadata on success
+- error message and stack on failure
+
+Failed distillation must not delete or mutate raw evidence. A checkpoint should
+only be inserted after provider output passes validation.
+
 ## Retrieval Policy
 
 Default retrieval should be compact, explainable, scoped, and on demand.
