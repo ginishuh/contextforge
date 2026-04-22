@@ -91,6 +91,8 @@ export function createContextForge(options = {}) {
           ...scope,
           query: options.query,
           limit: options.limit,
+          searchScopes: options.searchScopes,
+          sharedScopeKey: options.sharedScopeKey || config.defaultSharedScopeKey,
         }),
       );
     },

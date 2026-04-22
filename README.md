@@ -143,6 +143,24 @@ node src/cli.js search \
   --query "sqlite runtime"
 ```
 
+Search repo memory together with shared rules:
+
+```bash
+node src/cli.js search \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --searchScopes repo+shared \
+  --sharedScopeKey global \
+  --query "retrieval policy"
+```
+
+`--searchScopes` accepts `scope`, `repo`, `shared`, `repo+shared`, or `local`.
+The default, `scope`, searches only the explicit `--scope` and `--scopeKey`.
+`repo+shared` searches the repo scope plus shared durable memory while leaving
+`local` memory out. Local memory appears only when `--scope local` or
+`--searchScopes local` is requested. If `--sharedScopeKey` is omitted,
+ContextForge uses `CONTEXTFORGE_SHARED_SCOPE_KEY` or `global`.
+
 Fetch one memory by key:
 
 ```bash
@@ -228,5 +246,6 @@ non-zero, times out, or returns malformed JSON, ContextForge records a failed
 Early v0 core. The current implementation includes SQLite migrations, scoped
 durable memories, raw event capture, lexical search with match reasons, mock
 checkpoint distillation, `codex_exec` checkpoint distillation, and a minimal
-remote HTTP mode for server-backed canonical memory. MCP/agent adapters and
+remote HTTP mode for server-backed canonical memory. Search can combine repo and
+shared memory while keeping local memory opt-in. MCP/agent adapters and
 additional providers are future work.

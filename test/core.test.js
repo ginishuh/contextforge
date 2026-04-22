@@ -59,6 +59,95 @@ test('remember, getMemory, and search use explicit scopes', async () => {
   assert.ok(results[0].why.some((hit) => hit.token === 'sqlite'));
 });
 
+test('search can combine repo and shared scopes while excluding local by default', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-combined',
+    key: 'repo-rule',
+    content: 'Always inspect repository code before changing retrieval behavior.',
+    category: 'decision',
+    importance: 1,
+  });
+  app.remember({
+    scope: 'shared',
+    scopeKey: 'global',
+    key: 'shared-rule',
+    content: 'Always keep retrieval explanations visible.',
+    category: 'policy',
+    importance: 10,
+  });
+  app.remember({
+    scope: 'local',
+    scopeKey: 'machine-a',
+    key: 'local-rule',
+    content: 'Always keep this local-only retrieval note private to this machine.',
+    category: 'note',
+    importance: 99,
+  });
+
+  const combined = app.search({
+    scope: 'repo',
+    scopeKey: 'repo-combined',
+    searchScopes: 'repo+shared',
+    query: 'always retrieval',
+  });
+
+  assert.deepEqual(
+    combined.map((result) => result.memory.key),
+    ['repo-rule', 'shared-rule'],
+  );
+  assert.deepEqual(
+    combined.map((result) => result.source.role),
+    ['repo', 'shared'],
+  );
+  assert.ok(combined.every((result) => result.source.scopeType !== 'local'));
+  assert.ok(combined.every((result) => result.why.some((hit) => hit.token === 'retrieval')));
+
+  const local = app.search({
+    scope: 'local',
+    scopeKey: 'machine-a',
+    searchScopes: 'local',
+    query: 'retrieval',
+  });
+  assert.equal(local.length, 1);
+  assert.equal(local[0].memory.key, 'local-rule');
+  assert.equal(local[0].source.role, 'local');
+});
+
+test('search supports shared-only retrieval with an explicit shared scope key', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-shared-only',
+    key: 'repo-rule',
+    content: 'Repo retrieval should not appear in a shared-only query.',
+  });
+  app.remember({
+    scope: 'shared',
+    scopeKey: 'team',
+    key: 'team-rule',
+    content: 'Shared retrieval can be requested independently.',
+  });
+
+  const results = app.search({
+    scope: 'repo',
+    scopeKey: 'repo-shared-only',
+    searchScopes: 'shared',
+    sharedScopeKey: 'team',
+    query: 'retrieval',
+  });
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].memory.key, 'team-rule');
+  assert.equal(results[0].source.scopeType, 'shared');
+  assert.equal(results[0].source.scopeKey, 'team');
+});
+
 test('appendRaw and mock distillCheckpoint preserve raw evidence', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });

@@ -61,12 +61,22 @@ Initial implementation:
 
 Tracking issue: #7.
 
+Status: initial implementation in progress.
+
 Goals:
 
 - allow querying `repo` and `shared` together
 - keep `local` opt-in
 - provide result source metadata
 - favor exact repo memory while including useful shared rules
+
+Initial implementation:
+
+- `searchScopes` option for `scope`, `repo`, `shared`, `repo+shared`, and
+  `local`
+- `sharedScopeKey` option with `CONTEXTFORGE_SHARED_SCOPE_KEY` fallback
+- result `source` metadata describing the returned scope and role
+- local memory remains excluded from `repo+shared`
 
 ## Milestone 4: First Real Distill Provider
 

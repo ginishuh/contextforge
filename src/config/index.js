@@ -38,6 +38,7 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
     dataDir,
     defaultScope,
     defaultScopeKey: env.CONTEXTFORGE_DEFAULT_SCOPE_KEY || null,
+    defaultSharedScopeKey: env.CONTEXTFORGE_SHARED_SCOPE_KEY || 'global',
     distillProvider: env.CONTEXTFORGE_DISTILL_PROVIDER || 'mock',
     remote: {
       url: env.CONTEXTFORGE_REMOTE_URL || null,
