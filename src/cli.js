@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { createContextForge } from './core.js';
+import { startContextForgeServer } from './server.js';
 
 function parseArgs(argv) {
   const command = argv[2];
@@ -69,8 +70,17 @@ async function main() {
         'appendRaw',
         'distillCheckpoint',
         'listDistillRuns',
+        'serve',
       ],
     });
+    return;
+  }
+
+  if (command === 'serve') {
+    const host = options.host || process.env.CONTEXTFORGE_REMOTE_HOST || '127.0.0.1';
+    const port = options.port == null ? Number(process.env.CONTEXTFORGE_REMOTE_PORT || 8765) : Number(options.port);
+    const server = await startContextForgeServer({ host, port });
+    printJson({ listening: server.url });
     return;
   }
 
@@ -78,21 +88,21 @@ async function main() {
   const coreOptions = toCoreOptions(options);
 
   if (command === 'dbInfo') {
-    printJson(app.dbInfo());
+    printJson(await app.dbInfo());
   } else if (command === 'beginSession') {
-    printJson(app.beginSession(coreOptions));
+    printJson(await app.beginSession(coreOptions));
   } else if (command === 'remember') {
-    printJson(app.remember(coreOptions));
+    printJson(await app.remember(coreOptions));
   } else if (command === 'search') {
-    printJson(app.search(coreOptions));
+    printJson(await app.search(coreOptions));
   } else if (command === 'getMemory') {
-    printJson(app.getMemory(coreOptions));
+    printJson(await app.getMemory(coreOptions));
   } else if (command === 'appendRaw') {
-    printJson(app.appendRaw(coreOptions));
+    printJson(await app.appendRaw(coreOptions));
   } else if (command === 'distillCheckpoint') {
     printJson(await app.distillCheckpoint(coreOptions));
   } else if (command === 'listDistillRuns') {
-    printJson(app.listDistillRuns(coreOptions));
+    printJson(await app.listDistillRuns(coreOptions));
   } else {
     throw new Error(`Unknown command: ${command}`);
   }

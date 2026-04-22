@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { loadConfig } from './config/index.js';
 import { createDistillProvider } from './distill/index.js';
 import { validateDistillOutput } from './distill/validate.js';
+import { createRemoteContextForge } from './remote/client.js';
 import { searchMemories } from './retrieval/search.js';
 import { normalizeScopeOptions } from './scopes/index.js';
 import { ContextForgeStore } from './storage/sqlite.js';
@@ -29,6 +30,10 @@ function withStore(config, fn) {
 
 export function createContextForge(options = {}) {
   const config = loadConfig(options);
+  if (config.storageMode === 'remote') {
+    return createRemoteContextForge(config, { fetchImpl: options.fetchImpl });
+  }
+
   const distillProviders = options.distillProviders || {};
   const codexExec = {
     ...config.codexExec,
