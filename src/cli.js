@@ -52,6 +52,15 @@ function toCoreOptions(options) {
     role: options.role,
     provider: options.provider,
     metadata: options.metadata ? JSON.parse(options.metadata) : {},
+    sourceCheckpointId: options.sourceCheckpointId,
+    sourceSessionId: options.sourceSessionId,
+    sourceRawEventIds: options.sourceRawEventIds
+      ? String(options.sourceRawEventIds)
+          .split(',')
+          .map((item) => item.trim())
+          .filter(Boolean)
+      : [],
+    reason: options.reason,
   };
 }
 
@@ -67,6 +76,7 @@ async function main() {
         'dbInfo',
         'beginSession',
         'remember',
+        'promoteMemory',
         'search',
         'getMemory',
         'appendRaw',
@@ -95,6 +105,8 @@ async function main() {
     printJson(await app.beginSession(coreOptions));
   } else if (command === 'remember') {
     printJson(await app.remember(coreOptions));
+  } else if (command === 'promoteMemory') {
+    printJson(await app.promoteMemory(coreOptions));
   } else if (command === 'search') {
     printJson(await app.search(coreOptions));
   } else if (command === 'getMemory') {

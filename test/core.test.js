@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import test from 'node:test';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { createContextForge } from '../src/core.js';
 import { startContextForgeServer } from '../src/server.js';
 
@@ -57,6 +59,69 @@ test('remember, getMemory, and search use explicit scopes', async () => {
   assert.equal(results.length, 1);
   assert.equal(results[0].memory.key, 'storage-mode');
   assert.ok(results[0].why.some((hit) => hit.token === 'sqlite'));
+});
+
+test('promoteMemory writes durable memory with explicit provenance', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+
+  const memory = app.promoteMemory({
+    scope: 'repo',
+    scopeKey: 'github.com/example/contextforge',
+    key: 'promotion-rule',
+    content: 'Checkpoint candidates require explicit promotion before becoming durable memory.',
+    category: 'decision',
+    tags: ['promotion'],
+    importance: 3,
+    sourceCheckpointId: 'checkpoint-1',
+    sourceSessionId: 'session-1',
+    sourceRawEventIds: ['raw-1'],
+    reason: 'Reviewed during MCP implementation.',
+  });
+
+  assert.equal(memory.key, 'promotion-rule');
+  assert.equal(memory.category, 'decision');
+
+  const fetched = app.getMemory({
+    scope: 'repo',
+    scopeKey: 'github.com/example/contextforge',
+    key: 'promotion-rule',
+  });
+  assert.equal(fetched.content, memory.content);
+});
+
+test('CLI supports promoteMemory', async () => {
+  const dataDir = await makeTempDir();
+  const env = { ...process.env, CONTEXTFORGE_DATA_DIR: dataDir };
+
+  const promoted = await execFileAsync(
+    'node',
+    [
+      'src/cli.js',
+      'promoteMemory',
+      '--scope',
+      'repo',
+      '--scopeKey',
+      'cli-repo',
+      '--key',
+      'promoted-rule',
+      '--content',
+      'Promoted memories are durable.',
+      '--sourceCheckpointId',
+      'checkpoint-cli',
+      '--reason',
+      'Synthetic CLI test.',
+    ],
+    { env },
+  );
+  assert.match(promoted.stdout, /"key": "promoted-rule"/);
+
+  const fetched = await execFileAsync(
+    'node',
+    ['src/cli.js', 'getMemory', '--scope', 'repo', '--scopeKey', 'cli-repo', '--key', 'promoted-rule'],
+    { env },
+  );
+  assert.match(fetched.stdout, /Promoted memories are durable/);
 });
 
 test('search can combine repo and shared scopes while excluding local by default', async () => {
@@ -482,6 +547,73 @@ test('CLI supports the v0 workflow with synthetic data', async () => {
     { env },
   );
   assert.match(runs.stdout, /"status": "succeeded"/);
+});
+
+test('MCP stdio server exposes core tools for synthetic integration', async () => {
+  const dataDir = await makeTempDir();
+  const client = new Client({ name: 'contextforge-test-client', version: '0.0.0' }, { capabilities: {} });
+  const transport = new StdioClientTransport({
+    command: 'node',
+    args: ['src/mcp.js'],
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      CONTEXTFORGE_DATA_DIR: dataDir,
+    },
+    stderr: 'pipe',
+  });
+
+  try {
+    await client.connect(transport);
+    const toolList = await client.listTools();
+    const toolNames = toolList.tools.map((tool) => tool.name).sort();
+    assert.deepEqual(toolNames, [
+      'append_raw',
+      'begin_session',
+      'distill_checkpoint',
+      'get_memory',
+      'promote_memory',
+      'remember',
+      'search',
+    ]);
+
+    const rememberResult = await client.callTool({
+      name: 'remember',
+      arguments: {
+        scope: 'repo',
+        scopeKey: 'mcp-repo',
+        key: 'mcp-rule',
+        content: 'Use MCP retrieval on demand.',
+        category: 'policy',
+      },
+    });
+    assert.equal(rememberResult.structuredContent.result.key, 'mcp-rule');
+
+    const searchResult = await client.callTool({
+      name: 'search',
+      arguments: {
+        scope: 'repo',
+        scopeKey: 'mcp-repo',
+        query: 'retrieval demand',
+      },
+    });
+    assert.equal(searchResult.structuredContent.result[0].memory.key, 'mcp-rule');
+
+    const promotedResult = await client.callTool({
+      name: 'promote_memory',
+      arguments: {
+        scope: 'repo',
+        scopeKey: 'mcp-repo',
+        key: 'promoted-mcp-rule',
+        content: 'Reviewed checkpoint candidates can become durable memory.',
+        sourceCheckpointId: 'checkpoint-mcp',
+        reason: 'Synthetic MCP test.',
+      },
+    });
+    assert.equal(promotedResult.structuredContent.result.key, 'promoted-mcp-rule');
+  } finally {
+    await client.close();
+  }
 });
 
 test('remote storage mode delegates core calls and preserves scope semantics', async () => {

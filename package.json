@@ -5,7 +5,8 @@
   "type": "module",
   "bin": {
     "contextforge": "src/cli.js",
-    "contextforge-server": "src/server.js"
+    "contextforge-server": "src/server.js",
+    "contextforge-mcp": "src/mcp.js"
   },
   "files": [
     "src",
@@ -36,6 +37,8 @@
   },
   "license": "MIT",
   "dependencies": {
-    "better-sqlite3": "^12.9.0"
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "better-sqlite3": "^12.9.0",
+    "zod": "^4.3.6"
   }
 }
