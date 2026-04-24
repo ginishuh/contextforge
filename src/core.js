@@ -91,9 +91,94 @@ export function createContextForge(options = {}) {
             sourceCheckpointId: options.sourceCheckpointId || null,
             sourceSessionId: options.sourceSessionId || null,
             sourceRawEventIds: options.sourceRawEventIds || [],
+            sourceCandidateIndex: options.sourceCandidateIndex ?? null,
             reason: options.reason || null,
           },
         }),
+      );
+    },
+
+    correctMemory(options) {
+      const scope = normalizeScopeOptions(options, config);
+      requireOption(options.key, 'key');
+      requireOption(options.content, 'content');
+
+      return withStore(config, (store) => {
+        const previous = store.getMemory({ ...scope, key: options.key });
+        if (!previous) {
+          throw new Error(`Memory not found: ${options.key}`);
+        }
+
+        return store.rememberMemory({
+          ...scope,
+          key: options.key,
+          content: options.content,
+          category: options.category || previous.category,
+          tags: options.tags?.length ? options.tags : previous.tags,
+          importance: options.importance == null ? previous.importance : options.importance,
+          supersedesMemoryId: previous.id,
+          eventType: 'correct',
+          eventMetadata: {
+            key: options.key,
+            previousMemoryId: previous.id,
+            previousContent: previous.content,
+            reason: options.reason || null,
+          },
+        });
+      });
+    },
+
+    deactivateMemory(options) {
+      const scope = normalizeScopeOptions(options, config);
+      requireOption(options.key, 'key');
+      return withStore(config, (store) =>
+        store.deactivateMemory({
+          ...scope,
+          key: options.key,
+          reason: options.reason,
+        }),
+      );
+    },
+
+    listMemoryEvents(options) {
+      const scope = normalizeScopeOptions(options, config);
+      requireOption(options.key, 'key');
+      return withStore(config, (store) =>
+        store.listMemoryEvents({
+          ...scope,
+          key: options.key,
+        }),
+      );
+    },
+
+    listMemoryCandidates(options) {
+      const scope = normalizeScopeOptions(options, config);
+      return withStore(config, (store) =>
+        store
+          .listCheckpoints({
+            ...scope,
+            sessionId: options.sessionId || null,
+          })
+          .filter((checkpoint) => !options.checkpointId || checkpoint.id === options.checkpointId)
+          .flatMap((checkpoint) => {
+            const candidates = checkpoint.metadata?.memoryCandidates || [];
+            return candidates.map((candidate, index) => ({
+              type: 'memory_candidate',
+              checkpointId: checkpoint.id,
+              sessionId: checkpoint.sessionId,
+              conversationId: checkpoint.conversationId,
+              scopeType: checkpoint.scopeType,
+              scopeKey: checkpoint.scopeKey,
+              index,
+              candidate,
+              source: {
+                provider: checkpoint.provider,
+                distillRunId: checkpoint.distillRunId,
+                sourceEventCount: checkpoint.sourceEventCount,
+                checkpointCreatedAt: checkpoint.createdAt,
+              },
+            }));
+          }),
       );
     },
 

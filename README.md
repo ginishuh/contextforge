@@ -219,6 +219,35 @@ node src/cli.js promoteMemory \
 
 Promotion is intentional: checkpoints can suggest memory candidates, but durable
 memory is written only when a caller promotes a reviewed fact or decision.
+Candidate review, correction, and deactivation use separate commands so durable
+memory changes remain auditable:
+
+```bash
+node src/cli.js listMemoryCandidates \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --sessionId demo-session
+
+node src/cli.js correctMemory \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --key retrieval-policy \
+  --content "Search repo and shared memory before loading raw evidence." \
+  --reason "Clarified the retrieval order."
+
+node src/cli.js listMemoryEvents \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --key retrieval-policy
+
+node src/cli.js deactivateMemory \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --key retrieval-policy \
+  --reason "Superseded by a newer policy."
+```
+
+Inactive memories are retained for provenance but excluded from search results.
 
 ## MCP Server
 
@@ -240,9 +269,13 @@ The MCP server exposes a narrow tool surface over the same core API:
 - `search`
 - `get_memory`
 - `remember`
+- `list_memory_events`
+- `list_memory_candidates`
 - `append_raw`
 - `distill_checkpoint`
 - `promote_memory`
+- `correct_memory`
+- `deactivate_memory`
 
 Example MCP client configuration:
 
@@ -264,7 +297,9 @@ Example MCP client configuration:
 Agents should use `search` for scoped retrieval on demand, call `get_memory`
 only when they know the durable key they need, append raw evidence for later
 distillation, and call `promote_memory` only after a checkpoint candidate or
-decision has been reviewed.
+decision has been reviewed. Use `correct_memory` to preserve the previous value
+while changing a durable key, and `deactivate_memory` to remove stale memories
+from retrieval without deleting their history.
 
 ## codex_exec Provider
 
@@ -308,5 +343,5 @@ Early v0 core. The current implementation includes SQLite migrations, scoped
 durable memories, raw event capture, lexical search with match reasons, mock
 checkpoint distillation, `codex_exec` checkpoint distillation, and a minimal
 remote HTTP mode for server-backed canonical memory. Search can combine repo and
-shared memory while keeping local memory opt-in. MCP/agent adapters and
-additional providers are future work.
+shared memory while keeping local memory opt-in. MCP stdio integration and an
+explicit promotion workflow are available. Additional providers are future work.

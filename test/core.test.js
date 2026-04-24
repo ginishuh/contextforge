@@ -22,7 +22,7 @@ test('dbInfo initializes a fresh SQLite store', async () => {
 
   const info = app.dbInfo();
 
-  assert.equal(info.schemaVersion, 2);
+  assert.equal(info.schemaVersion, 3);
   assert.equal(info.tables.memories, 0);
   assert.match(info.dbPath, /contextforge\.db$/);
 });
@@ -88,6 +88,145 @@ test('promoteMemory writes durable memory with explicit provenance', async () =>
     key: 'promotion-rule',
   });
   assert.equal(fetched.content, memory.content);
+});
+
+test('memory candidates require explicit promotion and can be corrected or deactivated', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'candidate_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      candidate_provider: async () => ({
+        summaryShort: 'Candidate checkpoint.',
+        summaryText: 'The checkpoint proposes one durable memory candidate.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'candidate-rule',
+            content: 'Promote reviewed checkpoint candidates explicitly.',
+            category: 'policy',
+            tags: ['promotion'],
+          },
+        ],
+        sourceEventCount: 1,
+        metadata: { synthetic: true },
+      }),
+    },
+  });
+
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-promote',
+    sessionId: 'candidate-session',
+    role: 'assistant',
+    content: 'Candidate: promote reviewed checkpoint candidates explicitly.',
+  });
+
+  const checkpoint = await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'repo-promote',
+    sessionId: 'candidate-session',
+  });
+
+  assert.equal(
+    app.getMemory({
+      scope: 'repo',
+      scopeKey: 'repo-promote',
+      key: 'candidate-rule',
+    }),
+    null,
+  );
+
+  const candidates = app.listMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'repo-promote',
+    sessionId: 'candidate-session',
+  });
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].checkpointId, checkpoint.id);
+  assert.equal(candidates[0].index, 0);
+  assert.equal(candidates[0].candidate.key, 'candidate-rule');
+
+  const promoted = app.promoteMemory({
+    scope: 'repo',
+    scopeKey: 'repo-promote',
+    key: candidates[0].candidate.key,
+    content: candidates[0].candidate.content,
+    category: candidates[0].candidate.category,
+    tags: candidates[0].candidate.tags,
+    sourceCheckpointId: candidates[0].checkpointId,
+    sourceSessionId: candidates[0].sessionId,
+    sourceCandidateIndex: candidates[0].index,
+    reason: 'Reviewed synthetic candidate.',
+  });
+  assert.equal(promoted.status, 'active');
+  assert.equal(promoted.key, 'candidate-rule');
+
+  const promoteEvents = app.listMemoryEvents({
+    scope: 'repo',
+    scopeKey: 'repo-promote',
+    key: 'candidate-rule',
+  });
+  assert.equal(promoteEvents.length, 1);
+  assert.equal(promoteEvents[0].eventType, 'promote');
+  assert.equal(promoteEvents[0].metadata.sourceCheckpointId, checkpoint.id);
+  assert.equal(promoteEvents[0].metadata.sourceCandidateIndex, 0);
+
+  const corrected = app.correctMemory({
+    scope: 'repo',
+    scopeKey: 'repo-promote',
+    key: 'candidate-rule',
+    content: 'Promote reviewed checkpoint candidates explicitly after human or agent review.',
+    reason: 'Clarify review requirement.',
+  });
+  assert.equal(corrected.supersedesMemoryId, promoted.id);
+  assert.match(corrected.content, /agent review/);
+
+  const correctEvents = app.listMemoryEvents({
+    scope: 'repo',
+    scopeKey: 'repo-promote',
+    key: 'candidate-rule',
+  });
+  assert.equal(correctEvents.length, 2);
+  assert.equal(correctEvents[1].eventType, 'correct');
+  assert.equal(correctEvents[1].metadata.previousContent, promoted.content);
+
+  const searchBeforeDeactivate = app.search({
+    scope: 'repo',
+    scopeKey: 'repo-promote',
+    query: 'agent review',
+  });
+  assert.equal(searchBeforeDeactivate.length, 1);
+  assert.equal(searchBeforeDeactivate[0].memory.key, 'candidate-rule');
+
+  const inactive = app.deactivateMemory({
+    scope: 'repo',
+    scopeKey: 'repo-promote',
+    key: 'candidate-rule',
+    reason: 'Superseded outside this test.',
+  });
+  assert.equal(inactive.status, 'inactive');
+  assert.ok(inactive.deactivatedAt);
+
+  const deactivateEvents = app.listMemoryEvents({
+    scope: 'repo',
+    scopeKey: 'repo-promote',
+    key: 'candidate-rule',
+  });
+  assert.equal(deactivateEvents.length, 3);
+  assert.equal(deactivateEvents[2].eventType, 'deactivate');
+
+  const searchAfterDeactivate = app.search({
+    scope: 'repo',
+    scopeKey: 'repo-promote',
+    query: 'agent review',
+  });
+  assert.deepEqual(searchAfterDeactivate, []);
 });
 
 test('CLI supports promoteMemory', async () => {
@@ -469,7 +608,7 @@ test('CLI supports the v0 workflow with synthetic data', async () => {
   const env = { ...process.env, CONTEXTFORGE_DATA_DIR: dataDir };
 
   const dbInfo = await execFileAsync('node', ['src/cli.js', 'dbInfo'], { env });
-  assert.match(dbInfo.stdout, /"schemaVersion": 2/);
+  assert.match(dbInfo.stdout, /"schemaVersion": 3/);
 
   await execFileAsync(
     'node',
@@ -570,8 +709,12 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.deepEqual(toolNames, [
       'append_raw',
       'begin_session',
+      'correct_memory',
+      'deactivate_memory',
       'distill_checkpoint',
       'get_memory',
+      'list_memory_candidates',
+      'list_memory_events',
       'promote_memory',
       'remember',
       'search',

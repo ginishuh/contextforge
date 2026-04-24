@@ -134,12 +134,23 @@ Initial implementation:
 
 Tracking issue: #10.
 
+Status: initial implementation in progress.
+
 Goals:
 
 - review memory candidates from checkpoints
 - promote to durable memory explicitly
 - track provenance from raw/checkpoint to durable memory
 - support correction/deactivation rather than destructive deletion
+
+Initial implementation:
+
+- checkpoint `memoryCandidates` can be listed without promotion
+- `promoteMemory` writes durable memory with source checkpoint/session/candidate metadata
+- `correctMemory` updates a durable key while preserving previous content in memory-event metadata
+- `deactivateMemory` marks memories inactive instead of deleting them
+- `listMemoryEvents` exposes provenance events for audit/debug flows
+- search excludes inactive memories while exact `getMemory` can still inspect them
 
 ## Milestone 7: Retrieval Quality
 
