@@ -17,9 +17,11 @@ export function createDistillProvider(name, overrides = {}, options = {}) {
   }
 
   if (name === 'codex_exec') {
+    const distill = createCodexExecProvider(options.codexExec);
     return {
       name,
-      distill: createCodexExecProvider(options.codexExec),
+      distill,
+      metadata: distill.metadata,
     };
   }
 

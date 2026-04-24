@@ -49,7 +49,7 @@ bring-your-own distillation providers, such as:
 The v0 implementation ships with a deterministic `mock` provider and a
 `codex_exec` provider. The `codex_exec` provider shells out to `codex exec`,
 requests JSON-only output with a schema, validates the result, and records
-provider run metadata.
+provider run metadata, including prompt and output schema versions.
 
 ## Quick Start
 
@@ -337,6 +337,8 @@ Optional environment variables:
 Failure modes are preserved as distillation runs. If `codex exec` exits
 non-zero, times out, or returns malformed JSON, ContextForge records a failed
 `distill_runs` row and leaves raw events untouched for retry or debugging.
+Failed and successful runs include provider prompt/schema version metadata so
+operators can tell which prompt contract produced the result.
 
 ## Public Repo Hygiene
 

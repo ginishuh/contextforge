@@ -220,6 +220,12 @@ Provider outputs should include:
 Memory candidates must not automatically become durable memories unless the
 caller explicitly chooses that policy.
 
+Provider prompts and output schemas should be versioned. Distill run input
+metadata records the provider prompt/schema version before execution, and
+successful or failed output metadata keeps the same version context for later
+debugging. A provider prompt change that can affect checkpoint shape or meaning
+should bump the provider prompt version.
+
 ## Promotion Policy
 
 Checkpoint memory candidates are review inputs, not canonical facts. A caller

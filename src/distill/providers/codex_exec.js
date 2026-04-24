@@ -3,7 +3,11 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+export const CODEX_EXEC_PROMPT_VERSION = 'codex_exec.prompt.v1';
+export const CODEX_EXEC_OUTPUT_SCHEMA_VERSION = 'contextforge.checkpoint.v1';
+
 const OUTPUT_SCHEMA = {
+  $id: CODEX_EXEC_OUTPUT_SCHEMA_VERSION,
   type: 'object',
   additionalProperties: false,
   required: [
@@ -128,6 +132,9 @@ export function buildCodexExecPrompt(input, options = {}) {
       JSON.stringify(payload, null, 2),
     ].join('\n'),
     metadata: {
+      provider: 'codex_exec',
+      promptVersion: CODEX_EXEC_PROMPT_VERSION,
+      outputSchemaVersion: CODEX_EXEC_OUTPUT_SCHEMA_VERSION,
       rawEventCount: rawPayload.events.length,
       inputTruncated: rawPayload.truncated,
       maxInputChars,
@@ -239,7 +246,13 @@ export function createCodexExecProvider(options = {}) {
   const timeoutMs = options.timeoutMs || 120000;
   const maxInputChars = options.maxInputChars || 12000;
 
-  return async function distillWithCodexExecProvider(input) {
+  const providerMetadata = {
+    provider: 'codex_exec',
+    promptVersion: CODEX_EXEC_PROMPT_VERSION,
+    outputSchemaVersion: CODEX_EXEC_OUTPUT_SCHEMA_VERSION,
+  };
+
+  async function distillWithCodexExecProvider(input) {
     const startedAt = Date.now();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'contextforge-codex-exec-'));
     const schemaPath = path.join(tempDir, 'checkpoint.schema.json');
@@ -285,6 +298,7 @@ export function createCodexExecProvider(options = {}) {
         metadata: {
           ...(output.metadata || {}),
           codexExec: {
+            ...providerMetadata,
             command,
             model,
             sandbox,
@@ -297,5 +311,8 @@ export function createCodexExecProvider(options = {}) {
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
-  };
+  }
+
+  distillWithCodexExecProvider.metadata = providerMetadata;
+  return distillWithCodexExecProvider;
 }
