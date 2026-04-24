@@ -230,6 +230,7 @@ export function createContextForge(options = {}) {
       const provider = createDistillProvider(options.provider || config.distillProvider, distillProviders, {
         codexExec,
       });
+      const providerMetadata = provider.metadata || {};
 
       return withStore(config, async (store) => {
         const rawEvents = store.listRawEvents({ ...scope, sessionId: options.sessionId });
@@ -257,6 +258,7 @@ export function createContextForge(options = {}) {
             rawEventIds: rawEvents.map((event) => event.id),
             previousCheckpointId: previousCheckpoint?.id || null,
             requestedOutputSchema,
+            providerMetadata,
           },
         });
 
@@ -278,6 +280,7 @@ export function createContextForge(options = {}) {
             error,
             outputMetadata: {
               providerFailed: true,
+              providerMetadata,
             },
           });
           throw error;
@@ -293,6 +296,7 @@ export function createContextForge(options = {}) {
             outputMetadata: {
               validationFailed: true,
               receivedType: Array.isArray(rawOutput) ? 'array' : typeof rawOutput,
+              providerMetadata,
             },
           });
           throw error;

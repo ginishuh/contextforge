@@ -183,7 +183,8 @@ Initial implementation:
   deterministic path keys. Explicit user config still wins.
 - Which remote provider types should eventually support client-side execution
   while still writing checkpoints through the remote canonical API?
-- How should provider prompts be versioned?
+- Provider prompt/schema versions are now recorded for `codex_exec` distill
+  runs; future providers should expose the same metadata contract.
 - Should checkpoint memory candidates require explicit human approval or allow a
   configurable auto-promote policy?
 - What is the minimum auth model for remote mode?
@@ -201,5 +202,6 @@ Each milestone after v0 has a focused tracking issue:
 - #10: explicit memory promotion workflow
 - #9: retrieval quality improvements
 - #19: default repo scope key inference
+- #21: distillation provider prompt versioning
 
 Those issues should stay narrow enough to produce reviewable PRs.
