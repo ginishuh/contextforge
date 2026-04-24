@@ -79,6 +79,12 @@ By default, runtime data is stored in `.contextforge/contextforge.db` under the
 current working directory. This directory and SQLite sidecar files are ignored by
 git. To use another location, set `CONTEXTFORGE_DATA_DIR`.
 
+Repo scope keys default to the current git checkout when possible. ContextForge
+normalizes common GitHub origin remotes to `github.com/owner/repo`; outside a
+git checkout it falls back to a deterministic `path:<hash>:<name>` key. Pass
+`--scopeKey` or set `CONTEXTFORGE_DEFAULT_SCOPE_KEY` when you want an explicit
+scope key.
+
 ## Remote Mode
 
 Run a ContextForge server on the machine that should own canonical memory:
@@ -127,7 +133,6 @@ Create or update a durable memory:
 ```bash
 node src/cli.js remember \
   --scope repo \
-  --scopeKey github.com/example/contextforge \
   --key storage-mode \
   --category decision \
   --tag storage \
@@ -139,7 +144,6 @@ Search durable memories:
 ```bash
 node src/cli.js search \
   --scope repo \
-  --scopeKey github.com/example/contextforge \
   --query "sqlite runtime"
 ```
 
