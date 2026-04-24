@@ -156,6 +156,8 @@ Initial implementation:
 
 Tracking issue: #9.
 
+Status: initial implementation in progress.
+
 Possible improvements:
 
 - SQLite FTS
@@ -165,6 +167,14 @@ Possible improvements:
 - stale memory warnings
 
 Keep vector search as a retrieval surface, not the canonical source of truth.
+
+Initial implementation:
+
+- SQLite FTS5 index over active durable memories
+- canonical memory remains in `memories`; FTS is rebuilt/updated as a retrieval index
+- weighted FTS rank is combined with explainable lexical scoring
+- result metadata includes `why` token/field/match-type details and `retrieval.ftsRank`
+- inactive memories remain excluded from search
 
 ## Open Decisions
 

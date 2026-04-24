@@ -114,6 +114,19 @@ The default shared scope key is `global` unless configured with
 metadata for every result so callers can explain whether a memory came from the
 current repo, shared durable memory, or an explicitly requested local scope.
 
+## Retrieval Quality
+
+Durable memory remains canonical in the `memories` table. SQLite FTS5 is a
+retrieval index over that table, not a second source of truth. The index is
+rebuilt during startup migration and updated when durable memories are
+remembered, corrected, promoted, or deactivated.
+
+Search results should stay explainable. Each result includes lexical `why`
+metadata describing matched query tokens, fields, and match types, plus
+retrieval metadata such as the FTS rank and method. This keeps better ranking
+debuggable and leaves room for future vector search as another retrieval
+surface, not canonical storage.
+
 ## Memory Layers
 
 ContextForge separates memory into layers.
