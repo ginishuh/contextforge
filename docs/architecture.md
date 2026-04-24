@@ -114,6 +114,12 @@ The default shared scope key is `global` unless configured with
 metadata for every result so callers can explain whether a memory came from the
 current repo, shared durable memory, or an explicitly requested local scope.
 
+Repo scope keys should be stable without being surprising. Explicit `scopeKey`
+arguments and `CONTEXTFORGE_DEFAULT_SCOPE_KEY` always win. Otherwise, repo scope
+defaults to the current git checkout: common GitHub origin remotes normalize to
+`github.com/owner/repo`, and directories without a usable git remote fall back
+to a deterministic `path:<hash>:<name>` key.
+
 ## Retrieval Quality
 
 Durable memory remains canonical in the `memories` table. SQLite FTS5 is a

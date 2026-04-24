@@ -178,8 +178,9 @@ Initial implementation:
 
 ## Open Decisions
 
-- What exact default should repo scope keys use: git remote URL, normalized
-  `owner/repo`, absolute path hash, or explicit user config?
+- Default repo scope keys now infer from git remotes when possible, normalize
+  common GitHub remotes to `github.com/owner/repo`, and fall back to
+  deterministic path keys. Explicit user config still wins.
 - Which remote provider types should eventually support client-side execution
   while still writing checkpoints through the remote canonical API?
 - How should provider prompts be versioned?
@@ -199,5 +200,6 @@ Each milestone after v0 has a focused tracking issue:
 - #4: MCP server surface
 - #10: explicit memory promotion workflow
 - #9: retrieval quality improvements
+- #19: default repo scope key inference
 
 Those issues should stay narrow enough to produce reviewable PRs.

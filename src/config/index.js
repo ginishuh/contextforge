@@ -1,5 +1,7 @@
 import path from 'node:path';
 import os from 'node:os';
+import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 
 const VALID_SCOPES = new Set(['shared', 'repo', 'local']);
 const VALID_STORAGE_MODES = new Set(['local', 'project-local', 'remote']);
@@ -14,6 +16,113 @@ function parsePositiveInteger(value, name, fallback) {
     throw new Error(`${name} must be a positive integer.`);
   }
   return parsed;
+}
+
+function findGitRoot(cwd) {
+  let current = path.resolve(cwd);
+  while (true) {
+    const dotGit = path.join(current, '.git');
+    if (fs.existsSync(dotGit)) {
+      return current;
+    }
+
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return null;
+    }
+    current = parent;
+  }
+}
+
+function parseGitConfigRemotes(configText) {
+  const remotes = new Map();
+  let currentRemote = null;
+
+  for (const rawLine of configText.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    const section = line.match(/^\[remote "(.+)"\]$/);
+    if (section) {
+      currentRemote = section[1];
+      continue;
+    }
+    if (line.startsWith('[')) {
+      currentRemote = null;
+      continue;
+    }
+    if (!currentRemote) {
+      continue;
+    }
+
+    const entry = line.match(/^url\s*=\s*(.+)$/);
+    if (entry) {
+      remotes.set(currentRemote, entry[1].trim());
+    }
+  }
+
+  return remotes;
+}
+
+function readGitConfig(gitRoot) {
+  const dotGitPath = path.join(gitRoot, '.git');
+  let configPath = path.join(dotGitPath, 'config');
+
+  if (fs.existsSync(dotGitPath) && fs.statSync(dotGitPath).isFile()) {
+    const dotGitContent = fs.readFileSync(dotGitPath, 'utf8');
+    const match = dotGitContent.match(/^gitdir:\s*(.+)$/m);
+    if (match) {
+      const gitDir = path.resolve(gitRoot, match[1].trim());
+      configPath = path.join(gitDir, 'config');
+    }
+  }
+
+  if (!fs.existsSync(configPath)) {
+    return null;
+  }
+  return fs.readFileSync(configPath, 'utf8');
+}
+
+function normalizeGitHubRemote(url) {
+  const trimmed = String(url || '').trim();
+  const patterns = [
+    /^git@github\.com:([^/]+)\/(.+?)(?:\.git)?$/i,
+    /^ssh:\/\/git@github\.com\/([^/]+)\/(.+?)(?:\.git)?$/i,
+    /^https:\/\/github\.com\/([^/]+)\/(.+?)(?:\.git)?$/i,
+    /^http:\/\/github\.com\/([^/]+)\/(.+?)(?:\.git)?$/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = trimmed.match(pattern);
+    if (match) {
+      return `github.com/${match[1]}/${match[2]}`;
+    }
+  }
+
+  return null;
+}
+
+function pathScopeKey(cwd) {
+  const resolved = path.resolve(cwd);
+  const digest = createHash('sha256').update(resolved).digest('hex').slice(0, 16);
+  return `path:${digest}:${path.basename(resolved) || 'root'}`;
+}
+
+function inferRepoScopeKey(cwd) {
+  const gitRoot = findGitRoot(cwd);
+  if (!gitRoot) {
+    return pathScopeKey(cwd);
+  }
+
+  const configText = readGitConfig(gitRoot);
+  if (configText) {
+    const remotes = parseGitConfigRemotes(configText);
+    const preferred = remotes.get('origin') || [...remotes.values()][0];
+    const githubKey = normalizeGitHubRemote(preferred);
+    if (githubKey) {
+      return githubKey;
+    }
+  }
+
+  return pathScopeKey(gitRoot);
 }
 
 export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
@@ -37,7 +146,8 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
     storageMode,
     dataDir,
     defaultScope,
-    defaultScopeKey: env.CONTEXTFORGE_DEFAULT_SCOPE_KEY || null,
+    defaultScopeKey:
+      env.CONTEXTFORGE_DEFAULT_SCOPE_KEY || (defaultScope === 'repo' ? inferRepoScopeKey(cwd) : null),
     defaultSharedScopeKey: env.CONTEXTFORGE_SHARED_SCOPE_KEY || 'global',
     distillProvider: env.CONTEXTFORGE_DISTILL_PROVIDER || 'mock',
     remote: {

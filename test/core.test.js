@@ -27,6 +27,40 @@ test('dbInfo initializes a fresh SQLite store', async () => {
   assert.match(info.dbPath, /contextforge\.db$/);
 });
 
+test('repo scope key defaults to normalized GitHub origin remote', async () => {
+  const cwd = await makeTempDir();
+  await fs.mkdir(path.join(cwd, '.git'), { recursive: true });
+  await fs.writeFile(
+    path.join(cwd, '.git', 'config'),
+    '[remote "origin"]\n\turl = git@github.com:example/contextforge.git\n',
+  );
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: path.join(cwd, 'data') }, cwd });
+
+  assert.equal(app.config.defaultScopeKey, 'github.com/example/contextforge');
+
+  const memory = app.remember({
+    key: 'default-scope',
+    content: 'Repo scope key can be inferred from origin remote.',
+  });
+  assert.equal(memory.scopeType, 'repo');
+  assert.equal(memory.scopeKey, 'github.com/example/contextforge');
+});
+
+test('repo scope key falls back to a deterministic path key outside git', async () => {
+  const cwd = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: path.join(cwd, 'data') }, cwd });
+
+  assert.match(app.config.defaultScopeKey, /^path:[a-f0-9]{16}:contextforge-test-/);
+
+  const explicit = app.remember({
+    scope: 'repo',
+    scopeKey: 'explicit/repo',
+    key: 'explicit-scope',
+    content: 'Explicit repo scope keys still win.',
+  });
+  assert.equal(explicit.scopeKey, 'explicit/repo');
+});
+
 test('remember, getMemory, and search use explicit scopes', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
