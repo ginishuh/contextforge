@@ -72,6 +72,31 @@ export function createContextForge(options = {}) {
       );
     },
 
+    promoteMemory(options) {
+      const scope = normalizeScopeOptions(options, config);
+      requireOption(options.key, 'key');
+      requireOption(options.content, 'content');
+
+      return withStore(config, (store) =>
+        store.rememberMemory({
+          ...scope,
+          key: options.key,
+          content: options.content,
+          category: options.category || 'note',
+          tags: options.tags,
+          importance: options.importance,
+          eventType: 'promote',
+          eventMetadata: {
+            key: options.key,
+            sourceCheckpointId: options.sourceCheckpointId || null,
+            sourceSessionId: options.sourceSessionId || null,
+            sourceRawEventIds: options.sourceRawEventIds || [],
+            reason: options.reason || null,
+          },
+        }),
+      );
+    },
+
     getMemory(options) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.key, 'key');

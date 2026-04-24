@@ -103,6 +103,8 @@ Follow-on providers:
 
 Tracking issue: #4.
 
+Status: initial implementation in progress.
+
 Goals:
 
 - expose core functions to Codex, Claude Code, Cursor, and other MCP clients
@@ -119,6 +121,14 @@ Initial tool surface:
 - `append_raw`
 - `distill_checkpoint`
 - `promote_memory`
+
+Initial implementation:
+
+- stdio MCP server entrypoint for local agent integrations
+- package binary `contextforge-mcp`
+- tool schemas for stable core methods
+- structured JSON results plus text fallback content
+- explicit `promote_memory` primitive for reviewed durable-memory writes
 
 ## Milestone 6: Promotion Workflow
 

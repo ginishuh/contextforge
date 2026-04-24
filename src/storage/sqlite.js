@@ -234,7 +234,17 @@ export class ContextForgeStore {
     };
   }
 
-  rememberMemory({ scopeType, scopeKey, key, content, category = 'note', tags = [], importance = 0 }) {
+  rememberMemory({
+    scopeType,
+    scopeKey,
+    key,
+    content,
+    category = 'note',
+    tags = [],
+    importance = 0,
+    eventType = 'remember',
+    eventMetadata,
+  }) {
     if (!key) throw new Error('memory key is required.');
     if (!content) throw new Error('memory content is required.');
 
@@ -273,7 +283,7 @@ export class ContextForgeStore {
         INSERT INTO memory_events (id, memory_id, event_type, metadata_json, created_at)
         VALUES (?, ?, ?, ?, ?)
       `)
-      .run(randomUUID(), row.id, 'remember', json({ key }, {}), nowIso());
+      .run(randomUUID(), row.id, eventType, json(eventMetadata || { key }, {}), nowIso());
 
     return hydrateMemory(row);
   }

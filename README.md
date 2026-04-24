@@ -205,6 +205,67 @@ node src/cli.js listDistillRuns \
 
 CLI output is JSON so adapters and scripts can consume it directly.
 
+Promote a reviewed checkpoint candidate into durable memory:
+
+```bash
+node src/cli.js promoteMemory \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --key retrieval-policy \
+  --content "Search repo and shared memory before loading raw evidence." \
+  --sourceCheckpointId checkpoint-id \
+  --reason "Reviewed and accepted by the maintainer."
+```
+
+Promotion is intentional: checkpoints can suggest memory candidates, but durable
+memory is written only when a caller promotes a reviewed fact or decision.
+
+## MCP Server
+
+Run ContextForge as a local stdio MCP server:
+
+```bash
+node src/mcp.js
+```
+
+Package installs also expose:
+
+```bash
+contextforge-mcp
+```
+
+The MCP server exposes a narrow tool surface over the same core API:
+
+- `begin_session`
+- `search`
+- `get_memory`
+- `remember`
+- `append_raw`
+- `distill_checkpoint`
+- `promote_memory`
+
+Example MCP client configuration:
+
+```json
+{
+  "mcpServers": {
+    "contextforge": {
+      "command": "contextforge-mcp",
+      "env": {
+        "CONTEXTFORGE_STORAGE_MODE": "project-local",
+        "CONTEXTFORGE_DEFAULT_SCOPE": "repo",
+        "CONTEXTFORGE_DEFAULT_SCOPE_KEY": "github.com/example/contextforge"
+      }
+    }
+  }
+}
+```
+
+Agents should use `search` for scoped retrieval on demand, call `get_memory`
+only when they know the durable key they need, append raw evidence for later
+distillation, and call `promote_memory` only after a checkpoint candidate or
+decision has been reviewed.
+
 ## codex_exec Provider
 
 Use the Codex CLI as the distillation backend:

@@ -2,6 +2,7 @@ const REMOTE_METHODS = [
   'dbInfo',
   'beginSession',
   'remember',
+  'promoteMemory',
   'getMemory',
   'search',
   'appendRaw',
