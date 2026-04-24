@@ -155,6 +155,43 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
   );
 
   server.registerTool(
+    'list_memory_events',
+    {
+      title: 'List Memory Events',
+      description: 'List provenance events for one durable memory key.',
+      inputSchema: z.object({
+        ...scopedSchema,
+        key: z.string(),
+      }),
+      annotations: {
+        title: 'List Memory Events',
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.listMemoryEvents(args)),
+  );
+
+  server.registerTool(
+    'list_memory_candidates',
+    {
+      title: 'List Memory Candidates',
+      description: 'List memory candidates saved on distilled checkpoints without promoting them.',
+      inputSchema: z.object({
+        ...scopedSchema,
+        sessionId: z.string().optional(),
+        checkpointId: z.string().optional(),
+      }),
+      annotations: {
+        title: 'List Memory Candidates',
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.listMemoryCandidates(args)),
+  );
+
+  server.registerTool(
     'promote_memory',
     {
       title: 'Promote Memory',
@@ -169,6 +206,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
         sourceCheckpointId: z.string().optional(),
         sourceSessionId: z.string().optional(),
         sourceRawEventIds: z.array(z.string()).optional(),
+        sourceCandidateIndex: z.number().int().optional(),
         reason: z.string().optional(),
       }),
       annotations: {
@@ -178,6 +216,48 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
       },
     },
     async (args) => jsonResult(await app.promoteMemory(args)),
+  );
+
+  server.registerTool(
+    'correct_memory',
+    {
+      title: 'Correct Memory',
+      description: 'Correct an existing durable memory while preserving prior content in provenance metadata.',
+      inputSchema: z.object({
+        ...scopedSchema,
+        key: z.string(),
+        content: z.string(),
+        category: z.string().optional(),
+        tags: optionalTags,
+        importance: z.number().int().optional(),
+        reason: z.string().optional(),
+      }),
+      annotations: {
+        title: 'Correct Memory',
+        readOnlyHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.correctMemory(args)),
+  );
+
+  server.registerTool(
+    'deactivate_memory',
+    {
+      title: 'Deactivate Memory',
+      description: 'Mark a durable memory inactive without deleting its provenance.',
+      inputSchema: z.object({
+        ...scopedSchema,
+        key: z.string(),
+        reason: z.string().optional(),
+      }),
+      annotations: {
+        title: 'Deactivate Memory',
+        readOnlyHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.deactivateMemory(args)),
   );
 
   return server;

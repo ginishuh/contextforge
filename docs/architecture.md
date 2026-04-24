@@ -201,6 +201,18 @@ Provider outputs should include:
 Memory candidates must not automatically become durable memories unless the
 caller explicitly chooses that policy.
 
+## Promotion Policy
+
+Checkpoint memory candidates are review inputs, not canonical facts. A caller
+can list candidates from checkpoint metadata and then promote a reviewed item
+into durable memory. Promotion records source checkpoint, session, raw event, and
+candidate metadata when supplied.
+
+Durable memory should be corrected or deactivated rather than deleted. A
+correction updates the durable key while preserving previous content in the
+memory event history. Deactivation marks a memory inactive so retrieval excludes
+it, while exact lookup can still inspect the retained record and provenance.
+
 ## Distill Run Metadata
 
 Every distillation attempt should be recorded separately from checkpoints.

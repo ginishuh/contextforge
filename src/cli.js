@@ -60,6 +60,8 @@ function toCoreOptions(options) {
           .map((item) => item.trim())
           .filter(Boolean)
       : [],
+    sourceCandidateIndex: options.sourceCandidateIndex == null ? undefined : Number(options.sourceCandidateIndex),
+    checkpointId: options.checkpointId,
     reason: options.reason,
   };
 }
@@ -77,6 +79,10 @@ async function main() {
         'beginSession',
         'remember',
         'promoteMemory',
+        'correctMemory',
+        'deactivateMemory',
+        'listMemoryEvents',
+        'listMemoryCandidates',
         'search',
         'getMemory',
         'appendRaw',
@@ -107,6 +113,14 @@ async function main() {
     printJson(await app.remember(coreOptions));
   } else if (command === 'promoteMemory') {
     printJson(await app.promoteMemory(coreOptions));
+  } else if (command === 'correctMemory') {
+    printJson(await app.correctMemory(coreOptions));
+  } else if (command === 'deactivateMemory') {
+    printJson(await app.deactivateMemory(coreOptions));
+  } else if (command === 'listMemoryEvents') {
+    printJson(await app.listMemoryEvents(coreOptions));
+  } else if (command === 'listMemoryCandidates') {
+    printJson(await app.listMemoryCandidates(coreOptions));
   } else if (command === 'search') {
     printJson(await app.search(coreOptions));
   } else if (command === 'getMemory') {

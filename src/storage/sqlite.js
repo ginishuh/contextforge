@@ -3,7 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 function nowIso() {
   return new Date().toISOString();
@@ -35,6 +35,9 @@ function hydrateMemory(row) {
     content: row.content,
     tags: parseJson(row.tags_json, []),
     importance: row.importance,
+    status: row.status || 'active',
+    supersedesMemoryId: row.supersedes_memory_id,
+    deactivatedAt: row.deactivated_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -96,6 +99,17 @@ function hydrateDistillRun(row) {
   };
 }
 
+function hydrateMemoryEvent(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    memoryId: row.memory_id,
+    eventType: row.event_type,
+    metadata: parseJson(row.metadata_json, {}),
+    createdAt: row.created_at,
+  };
+}
+
 export class ContextForgeStore {
   constructor({ dataDir }) {
     this.dataDir = dataDir;
@@ -133,6 +147,9 @@ export class ContextForgeStore {
         content TEXT NOT NULL,
         tags_json TEXT NOT NULL DEFAULT '[]',
         importance INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+        supersedes_memory_id TEXT,
+        deactivated_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         UNIQUE (scope_type, scope_key, memory_key)
@@ -206,6 +223,9 @@ export class ContextForgeStore {
 
     this.ensureColumn('checkpoints', 'distill_run_id', 'TEXT');
     this.ensureColumn('checkpoints', 'metadata_json', "TEXT NOT NULL DEFAULT '{}'");
+    this.ensureColumn('memories', 'status', "TEXT NOT NULL DEFAULT 'active'");
+    this.ensureColumn('memories', 'supersedes_memory_id', 'TEXT');
+    this.ensureColumn('memories', 'deactivated_at', 'TEXT');
 
     this.db
       .prepare(`
@@ -242,6 +262,9 @@ export class ContextForgeStore {
     category = 'note',
     tags = [],
     importance = 0,
+    status = 'active',
+    supersedesMemoryId = null,
+    deactivatedAt = null,
     eventType = 'remember',
     eventMetadata,
   }) {
@@ -254,14 +277,18 @@ export class ContextForgeStore {
       .prepare(`
         INSERT INTO memories (
           id, scope_type, scope_key, memory_key, category, content,
-          tags_json, importance, created_at, updated_at
+          tags_json, importance, status, supersedes_memory_id, deactivated_at,
+          created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(scope_type, scope_key, memory_key) DO UPDATE SET
           category = excluded.category,
           content = excluded.content,
           tags_json = excluded.tags_json,
           importance = excluded.importance,
+          status = excluded.status,
+          supersedes_memory_id = excluded.supersedes_memory_id,
+          deactivated_at = excluded.deactivated_at,
           updated_at = excluded.updated_at
         RETURNING *
       `)
@@ -274,6 +301,9 @@ export class ContextForgeStore {
         content,
         json(tags, []),
         Number(importance),
+        status,
+        supersedesMemoryId,
+        deactivatedAt,
         timestamp,
         timestamp,
       );
@@ -302,11 +332,69 @@ export class ContextForgeStore {
     return this.db
       .prepare(`
         SELECT * FROM memories
-        WHERE scope_type = ? AND scope_key = ?
+        WHERE scope_type = ? AND scope_key = ? AND status = 'active'
         ORDER BY importance DESC, updated_at DESC, memory_key ASC
       `)
       .all(scopeType, scopeKey)
       .map(hydrateMemory);
+  }
+
+  deactivateMemory({ scopeType, scopeKey, key, reason = null }) {
+    const existing = this.getMemory({ scopeType, scopeKey, key });
+    if (!existing) {
+      throw new Error(`Memory not found: ${key}`);
+    }
+
+    const timestamp = nowIso();
+    const row = this.db
+      .prepare(`
+        UPDATE memories
+        SET status = 'inactive',
+            deactivated_at = ?,
+            updated_at = ?
+        WHERE scope_type = ? AND scope_key = ? AND memory_key = ?
+        RETURNING *
+      `)
+      .get(timestamp, timestamp, scopeType, scopeKey, key);
+
+    this.db
+      .prepare(`
+        INSERT INTO memory_events (id, memory_id, event_type, metadata_json, created_at)
+        VALUES (?, ?, ?, ?, ?)
+      `)
+      .run(
+        randomUUID(),
+        row.id,
+        'deactivate',
+        json(
+          {
+            key,
+            reason,
+            previousContent: existing.content,
+            previousStatus: existing.status,
+          },
+          {},
+        ),
+        nowIso(),
+      );
+
+    return hydrateMemory(row);
+  }
+
+  listMemoryEvents({ scopeType, scopeKey, key }) {
+    const memory = this.getMemory({ scopeType, scopeKey, key });
+    if (!memory) {
+      throw new Error(`Memory not found: ${key}`);
+    }
+
+    return this.db
+      .prepare(`
+        SELECT * FROM memory_events
+        WHERE memory_id = ?
+        ORDER BY created_at ASC, id ASC
+      `)
+      .all(memory.id)
+      .map(hydrateMemoryEvent);
   }
 
   appendRawEvent({
@@ -366,6 +454,26 @@ export class ContextForgeStore {
       `)
       .get(scopeType, scopeKey, sessionId);
     return hydrateCheckpoint(row);
+  }
+
+  listCheckpoints({ scopeType, scopeKey, sessionId = null }) {
+    const rows = sessionId
+      ? this.db
+          .prepare(`
+            SELECT * FROM checkpoints
+            WHERE scope_type = ? AND scope_key = ? AND session_id = ?
+            ORDER BY created_at DESC, id DESC
+          `)
+          .all(scopeType, scopeKey, sessionId)
+      : this.db
+          .prepare(`
+            SELECT * FROM checkpoints
+            WHERE scope_type = ? AND scope_key = ?
+            ORDER BY created_at DESC, id DESC
+          `)
+          .all(scopeType, scopeKey);
+
+    return rows.map(hydrateCheckpoint);
   }
 
   insertCheckpoint({
