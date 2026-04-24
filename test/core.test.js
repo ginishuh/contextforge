@@ -22,7 +22,7 @@ test('dbInfo initializes a fresh SQLite store', async () => {
 
   const info = app.dbInfo();
 
-  assert.equal(info.schemaVersion, 3);
+  assert.equal(info.schemaVersion, 4);
   assert.equal(info.tables.memories, 0);
   assert.match(info.dbPath, /contextforge\.db$/);
 });
@@ -352,6 +352,50 @@ test('search supports shared-only retrieval with an explicit shared scope key', 
   assert.equal(results[0].source.scopeKey, 'team');
 });
 
+test('search uses explainable FTS-backed ranking while keeping durable memory canonical', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-quality',
+    key: 'retrieval-quality',
+    content: 'Use SQLite FTS for explainable retrieval ranking.',
+    category: 'decision',
+    tags: ['search'],
+    importance: 1,
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-quality',
+    key: 'general-note',
+    content: 'Retrieval can mention ranking in a lower priority note.',
+    category: 'note',
+    tags: [],
+    importance: 10,
+  });
+
+  const results = app.search({
+    scope: 'repo',
+    scopeKey: 'repo-quality',
+    query: 'retriev qual',
+  });
+
+  assert.equal(results.length, 2);
+  assert.equal(results[0].memory.key, 'retrieval-quality');
+  assert.equal(results[0].retrieval.method, 'fts5+lexical');
+  assert.ok(results[0].why.some((hit) => hit.token === 'retriev' && hit.matchTypes.includes('prefix')));
+  assert.ok(results[0].why.some((hit) => hit.fields.includes('key')));
+  assert.ok(results.every((result) => result.retrieval.ftsRank != null));
+
+  const fetched = app.getMemory({
+    scope: 'repo',
+    scopeKey: 'repo-quality',
+    key: 'retrieval-quality',
+  });
+  assert.equal(fetched.content, 'Use SQLite FTS for explainable retrieval ranking.');
+});
+
 test('appendRaw and mock distillCheckpoint preserve raw evidence', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
@@ -608,7 +652,7 @@ test('CLI supports the v0 workflow with synthetic data', async () => {
   const env = { ...process.env, CONTEXTFORGE_DATA_DIR: dataDir };
 
   const dbInfo = await execFileAsync('node', ['src/cli.js', 'dbInfo'], { env });
-  assert.match(dbInfo.stdout, /"schemaVersion": 3/);
+  assert.match(dbInfo.stdout, /"schemaVersion": 4/);
 
   await execFileAsync(
     'node',

@@ -161,6 +161,10 @@ The default, `scope`, searches only the explicit `--scope` and `--scopeKey`.
 `--searchScopes local` is requested. If `--sharedScopeKey` is omitted,
 ContextForge uses `CONTEXTFORGE_SHARED_SCOPE_KEY` or `global`.
 
+Search uses a SQLite FTS5 index as an explainable retrieval surface over the
+canonical `memories` table. Results include `why` match metadata and
+`retrieval` rank metadata so callers can debug why an item was returned.
+
 Fetch one memory by key:
 
 ```bash
@@ -340,7 +344,7 @@ non-zero, times out, or returns malformed JSON, ContextForge records a failed
 ## Status
 
 Early v0 core. The current implementation includes SQLite migrations, scoped
-durable memories, raw event capture, lexical search with match reasons, mock
+durable memories, raw event capture, FTS-backed explainable search, mock
 checkpoint distillation, `codex_exec` checkpoint distillation, and a minimal
 remote HTTP mode for server-backed canonical memory. Search can combine repo and
 shared memory while keeping local memory opt-in. MCP stdio integration and an

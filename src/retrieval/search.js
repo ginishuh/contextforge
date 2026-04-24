@@ -9,6 +9,19 @@ function unique(values) {
   return [...new Set(values)];
 }
 
+function toFtsQuery(tokens) {
+  return tokens
+    .map((token) => token.replace(/"/g, '').replace(/[^a-z0-9_]+/g, ' '))
+    .flatMap((token) => token.split(/\s+/).filter(Boolean))
+    .map((token) => `"${token}"*`)
+    .join(' OR ');
+}
+
+function ftsScore(rank) {
+  if (rank == null) return 0;
+  return Math.max(0, Math.round(Math.abs(Number(rank)) * 1000000));
+}
+
 function scoreMemory(memory, queryTokens) {
   const fields = {
     key: memory.key,
@@ -20,12 +33,33 @@ function scoreMemory(memory, queryTokens) {
   let score = 0;
   const matched = [];
   for (const token of queryTokens) {
-    const hitFields = Object.entries(fields)
-      .filter(([, value]) => String(value || '').toLowerCase().includes(token))
-      .map(([name]) => name);
+    const hitFields = [];
+    for (const [name, value] of Object.entries(fields)) {
+      const fieldTokens = tokenize(value);
+      const lowerValue = String(value || '').toLowerCase();
+      const matchType = fieldTokens.some((fieldToken) => fieldToken === token)
+        ? 'exact'
+        : fieldTokens.some((fieldToken) => fieldToken.startsWith(token))
+          ? 'prefix'
+          : lowerValue.includes(token)
+            ? 'substring'
+            : null;
+      if (matchType) {
+        hitFields.push({ name, matchType });
+      }
+    }
     if (hitFields.length > 0) {
-      score += hitFields.includes('content') ? 2 : 1;
-      matched.push({ token, fields: hitFields });
+      const fieldScore = hitFields.reduce((sum, field) => {
+        const fieldWeight = field.name === 'key' ? 4 : field.name === 'content' ? 2 : 1;
+        const matchWeight = field.matchType === 'exact' ? 3 : field.matchType === 'prefix' ? 2 : 1;
+        return sum + fieldWeight * matchWeight;
+      }, 0);
+      score += fieldScore;
+      matched.push({
+        token,
+        fields: hitFields.map((field) => field.name),
+        matchTypes: [...new Set(hitFields.map((field) => field.matchType))],
+      });
     }
   }
 
@@ -72,15 +106,37 @@ export function searchMemories(store, { scopeType, scopeKey, query, limit = 10, 
   }
 
   const scopes = normalizeSearchScopes({ scopeType, scopeKey, searchScopes, sharedScopeKey });
+  const ftsQuery = toFtsQuery(queryTokens);
 
   return scopes
-    .flatMap((source) =>
-      store.listMemories(source).map((memory) => {
+    .flatMap((source) => {
+      const ftsMatches = store.searchMemoryIndex
+        ? store.searchMemoryIndex({
+            scopeType: source.scopeType,
+            scopeKey: source.scopeKey,
+            ftsQuery,
+            limit: Math.max(limit * 4, 50),
+          })
+        : [];
+      const ftsById = new Map(ftsMatches.map((match) => [match.memory.id, match]));
+      const ftsIds = new Set(ftsById.keys());
+      const memoriesById = new Map([
+        ...store.listMemories(source).map((memory) => [memory.id, memory]),
+        ...ftsMatches.map((match) => [match.memory.id, match.memory]),
+      ]);
+
+      return [...memoriesById.values()].map((memory) => {
         const match = scoreMemory(memory, queryTokens);
+        const ftsMatch = ftsById.get(memory.id);
+        const score = match.score + ftsScore(ftsMatch?.ftsRank);
         return {
           type: 'memory',
-          score: match.score,
+          score,
           why: match.matched,
+          retrieval: {
+            method: ftsIds.has(memory.id) ? 'fts5+lexical' : 'lexical',
+            ftsRank: ftsMatch?.ftsRank ?? null,
+          },
           source: {
             scopeType: source.scopeType,
             scopeKey: source.scopeKey,
@@ -88,8 +144,8 @@ export function searchMemories(store, { scopeType, scopeKey, query, limit = 10, 
           },
           memory,
         };
-      }),
-    )
+      });
+    })
     .filter((result) => result.score > 0)
     .sort(
       (a, b) =>

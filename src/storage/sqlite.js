@@ -3,7 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 function nowIso() {
   return new Date().toISOString();
@@ -110,6 +110,10 @@ function hydrateMemoryEvent(row) {
   };
 }
 
+function ftsValue(value) {
+  return String(value || '').replace(/\0/g, ' ');
+}
+
 export class ContextForgeStore {
   constructor({ dataDir }) {
     this.dataDir = dataDir;
@@ -211,6 +215,16 @@ export class ContextForgeStore {
         FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE
       );
 
+      CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
+        memory_id UNINDEXED,
+        scope_type UNINDEXED,
+        scope_key UNINDEXED,
+        memory_key,
+        category,
+        content,
+        tags
+      );
+
       CREATE INDEX IF NOT EXISTS idx_memories_scope
         ON memories(scope_type, scope_key);
       CREATE INDEX IF NOT EXISTS idx_raw_events_session
@@ -226,6 +240,7 @@ export class ContextForgeStore {
     this.ensureColumn('memories', 'status', "TEXT NOT NULL DEFAULT 'active'");
     this.ensureColumn('memories', 'supersedes_memory_id', 'TEXT');
     this.ensureColumn('memories', 'deactivated_at', 'TEXT');
+    this.rebuildMemoryFts();
 
     this.db
       .prepare(`
@@ -252,6 +267,59 @@ export class ContextForgeStore {
         memoryEvents: count('memory_events'),
       },
     };
+  }
+
+  rebuildMemoryFts() {
+    this.db.prepare('DELETE FROM memory_fts').run();
+    const rows = this.db
+      .prepare(`
+        SELECT * FROM memories
+        WHERE status = 'active'
+      `)
+      .all();
+    const insert = this.db.prepare(`
+      INSERT INTO memory_fts (
+        memory_id, scope_type, scope_key, memory_key, category, content, tags
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    const transaction = this.db.transaction((memories) => {
+      for (const row of memories) {
+        insert.run(
+          row.id,
+          row.scope_type,
+          row.scope_key,
+          ftsValue(row.memory_key),
+          ftsValue(row.category),
+          ftsValue(row.content),
+          ftsValue(parseJson(row.tags_json, []).join(' ')),
+        );
+      }
+    });
+    transaction(rows);
+  }
+
+  upsertMemoryFts(memory) {
+    this.db.prepare('DELETE FROM memory_fts WHERE memory_id = ?').run(memory.id);
+    if (memory.status !== 'active') {
+      return;
+    }
+    this.db
+      .prepare(`
+        INSERT INTO memory_fts (
+          memory_id, scope_type, scope_key, memory_key, category, content, tags
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        memory.id,
+        memory.scopeType,
+        memory.scopeKey,
+        ftsValue(memory.key),
+        ftsValue(memory.category),
+        ftsValue(memory.content),
+        ftsValue(memory.tags.join(' ')),
+      );
   }
 
   rememberMemory({
@@ -315,7 +383,9 @@ export class ContextForgeStore {
       `)
       .run(randomUUID(), row.id, eventType, json(eventMetadata || { key }, {}), nowIso());
 
-    return hydrateMemory(row);
+    const memory = hydrateMemory(row);
+    this.upsertMemoryFts(memory);
+    return memory;
   }
 
   getMemory({ scopeType, scopeKey, key }) {
@@ -326,6 +396,32 @@ export class ContextForgeStore {
       `)
       .get(scopeType, scopeKey, key);
     return hydrateMemory(row);
+  }
+
+  searchMemoryIndex({ scopeType, scopeKey, ftsQuery, limit = 50 }) {
+    if (!ftsQuery) {
+      return [];
+    }
+
+    return this.db
+      .prepare(`
+        SELECT
+          memories.*,
+          bm25(memory_fts, 0.0, 0.0, 0.0, 8.0, 2.0, 5.0, 1.0) AS fts_rank
+        FROM memory_fts
+        JOIN memories ON memories.id = memory_fts.memory_id
+        WHERE memory_fts MATCH ?
+          AND memory_fts.scope_type = ?
+          AND memory_fts.scope_key = ?
+          AND memories.status = 'active'
+        ORDER BY fts_rank ASC, memories.importance DESC, memories.updated_at DESC
+        LIMIT ?
+      `)
+      .all(ftsQuery, scopeType, scopeKey, limit)
+      .map((row) => ({
+        memory: hydrateMemory(row),
+        ftsRank: row.fts_rank,
+      }));
   }
 
   listMemories({ scopeType, scopeKey }) {
