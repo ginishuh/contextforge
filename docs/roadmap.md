@@ -185,6 +185,8 @@ Initial implementation:
   while still writing checkpoints through the remote canonical API?
 - Provider prompt/schema versions are now recorded for `codex_exec` distill
   runs; future providers should expose the same metadata contract.
+- `codex_exec` can be checked with a dry doctor command and an opt-in live
+  structured smoke before users enable it as the distillation provider.
 - Should checkpoint memory candidates require explicit human approval or allow a
   configurable auto-promote policy?
 - What is the minimum auth model for remote mode?

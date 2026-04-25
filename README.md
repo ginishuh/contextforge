@@ -314,6 +314,20 @@ from retrieval without deleting their history.
 Use the Codex CLI as the distillation backend:
 
 ```bash
+node src/cli.js doctorCodexExec
+```
+
+That dry check verifies the configured Codex command without making a model
+call. To prove the logged-in Codex CLI can complete a structured `codex exec`
+request, run the opt-in live smoke:
+
+```bash
+node src/cli.js doctorCodexExec --live
+```
+
+Then enable the provider:
+
+```bash
 CONTEXTFORGE_DISTILL_PROVIDER=codex_exec \
 node src/cli.js distillCheckpoint \
   --scope repo \
