@@ -1,3 +1,5 @@
+import { normalizeScopeOptions } from '../scopes/index.js';
+
 const REMOTE_METHODS = [
   'dbInfo',
   'checkCodexExec',
@@ -15,6 +17,22 @@ const REMOTE_METHODS = [
   'distillCheckpoint',
   'listDistillRuns',
 ];
+
+const SCOPED_REMOTE_METHODS = new Set([
+  'beginSession',
+  'sessionStatus',
+  'remember',
+  'promoteMemory',
+  'correctMemory',
+  'deactivateMemory',
+  'listMemoryEvents',
+  'listMemoryCandidates',
+  'getMemory',
+  'search',
+  'appendRaw',
+  'distillCheckpoint',
+  'listDistillRuns',
+]);
 
 function remoteUrl(baseUrl, method) {
   const url = new URL(baseUrl);
@@ -86,7 +104,18 @@ export function createRemoteContextForge(config, options = {}) {
   const api = { config };
 
   for (const method of REMOTE_METHODS) {
-    api[method] = (callOptions = {}) => client.call(method, callOptions);
+    api[method] = (callOptions = {}) => {
+      if (!SCOPED_REMOTE_METHODS.has(method)) {
+        return client.call(method, callOptions);
+      }
+      const scope = normalizeScopeOptions(callOptions, config);
+      return client.call(method, {
+        ...callOptions,
+        scope: scope.scopeType,
+        scopeType: scope.scopeType,
+        scopeKey: scope.scopeKey,
+      });
+    };
   }
 
   return api;

@@ -46,6 +46,8 @@ function toCoreOptions(options) {
   return {
     scope: options.scope,
     scopeKey: options.scopeKey,
+    cwd: options.cwd,
+    repoPath: options.repoPath,
     key: options.key,
     content: options.content,
     category: options.category,

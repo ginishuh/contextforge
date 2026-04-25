@@ -395,12 +395,16 @@ codex mcp add contextforge \
 
 Do not pin the MCP server `cwd` to one project when the same registration should
 serve many repositories. Repo scope keys are inferred from the active git
-checkout when possible, and can be passed explicitly with `scopeKey` when the
-client cannot provide a useful working directory.
+checkout when possible. If an agent is launched outside the repository but is
+working on a specific checkout, pass `repoPath` or `cwd` on scoped tool calls so
+the client can resolve that checkout before talking to the remote store. Pass an
+explicit `scopeKey` when the client cannot provide a useful working directory.
 
 Agents should use `search` for scoped retrieval on demand, call `get_memory`
 only when they know the durable key they need, append raw evidence for later
-distillation, and call `promote_memory` only after a checkpoint candidate or
+distillation, and call `remember` when the user or agent intentionally decides
+that an important fact, preference, decision, or runbook note should become
+durable memory. Use `promote_memory` only after a checkpoint candidate or
 decision has been reviewed. Use `correct_memory` to preserve the previous value
 while changing a durable key, and `deactivate_memory` to remove stale memories
 from retrieval without deleting their history.
