@@ -8,6 +8,7 @@ import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { createContextForge } from '../src/core.js';
+import { searchMemories } from '../src/retrieval/search.js';
 import { startContextForgeServer } from '../src/server.js';
 
 const execFileAsync = promisify(execFile);
@@ -430,6 +431,35 @@ test('search uses explainable FTS-backed ranking while keeping durable memory ca
   assert.equal(fetched.content, 'Use SQLite FTS for explainable retrieval ranking.');
 });
 
+test('search scores only FTS candidates when the index returns matches', () => {
+  const memory = {
+    id: 'memory-1',
+    key: 'indexed-memory',
+    category: 'decision',
+    content: 'Use indexed candidate search.',
+    tags: [],
+    importance: 1,
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+  const results = searchMemories(
+    {
+      searchMemoryIndex: () => [{ memory, ftsRank: -0.0001 }],
+      listMemories: () => {
+        throw new Error('listMemories should not be called when FTS returns candidates.');
+      },
+    },
+    {
+      scopeType: 'repo',
+      scopeKey: 'repo-index',
+      query: 'indexed',
+    },
+  );
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].memory.key, 'indexed-memory');
+  assert.equal(results[0].retrieval.method, 'fts5+lexical');
+});
+
 test('appendRaw and mock distillCheckpoint preserve raw evidence', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
@@ -459,8 +489,17 @@ test('appendRaw and mock distillCheckpoint preserve raw evidence', async () => {
   assert.equal(statusBefore.rawEventCount, 2);
   assert.equal(statusBefore.eventsSinceLastCheckpoint, 2);
   assert.equal(statusBefore.latestCheckpointId, null);
-  assert.equal(statusBefore.shouldDistill, true);
-  assert.ok(statusBefore.reasons.includes('initial_event_threshold'));
+  assert.equal(statusBefore.shouldDistill, false);
+
+  const statusWithEnoughContent = app.sessionStatus({
+    scope: 'repo',
+    scopeKey: 'repo-a',
+    sessionId: session.sessionId,
+    minEvents: 2,
+    charThreshold: 1,
+  });
+  assert.equal(statusWithEnoughContent.shouldDistill, true);
+  assert.ok(statusWithEnoughContent.reasons.includes('initial_event_and_char_threshold'));
 
   const checkpoint = await app.distillCheckpoint({
     scope: 'repo',
@@ -667,6 +706,46 @@ test('codex_exec provider distills synthetic raw events through a runner', async
   assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v1');
   assert.equal(runs[0].inputMetadata.providerMetadata.outputSchemaVersion, 'contextforge.checkpoint.v1');
   assert.equal(runs[0].outputMetadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v1');
+});
+
+test('codex_exec records JSON brace fallback recovery metadata', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'codex_exec',
+    },
+    cwd: process.cwd(),
+    codexExecRunner: async () => ({
+      stdout: `prefix ${JSON.stringify({
+        summaryShort: 'Recovered checkpoint.',
+        summaryText: 'The provider output needed brace fallback recovery.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [],
+        sourceEventCount: 1,
+        provider: 'codex_exec',
+        metadata: { providerNotes: 'synthetic recovery' },
+      })} suffix`,
+    }),
+  });
+
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-json-recovery',
+    sessionId: 'json-recovery-session',
+    role: 'assistant',
+    content: 'Provider output may include recoverable surrounding text.',
+  });
+
+  const checkpoint = await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'repo-json-recovery',
+    sessionId: 'json-recovery-session',
+  });
+
+  assert.equal(checkpoint.metadata.providerMetadata.codexExec.jsonRecovery, 'brace-fallback');
 });
 
 test('codex_exec doctor reports dry and live smoke readiness through a runner', async () => {
@@ -1017,6 +1096,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
         scopeKey: 'mcp-repo',
         sessionId: 'mcp-session',
         minEvents: 1,
+        charThreshold: 1,
       },
     });
     assert.equal(statusResult.structuredContent.result.shouldDistill, true);
@@ -1108,6 +1188,7 @@ test('remote storage mode delegates core calls and preserves scope semantics', a
       scopeKey: 'repo-remote',
       sessionId: 'remote-session',
       minEvents: 1,
+      charThreshold: 1,
     });
     assert.equal(status.shouldDistill, true);
     assert.equal(status.rawEventCount, 1);

@@ -37,11 +37,11 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Begin Session',
       description: 'Create a ContextForge session id for a scoped agent run.',
-      inputSchema: z.object({
+      inputSchema: {
         ...scopedSchema,
         sessionId: z.string().optional(),
         conversationId: z.string().optional(),
-      }),
+      },
       annotations: {
         title: 'Begin Session',
         readOnlyHint: false,
@@ -56,13 +56,13 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Session Status',
       description: 'Inspect raw evidence and checkpoint thresholds for a session before deciding whether to distill.',
-      inputSchema: z.object({
+      inputSchema: {
         ...scopedSchema,
         sessionId: z.string(),
         minEvents: z.number().int().positive().optional(),
         minIntervalMs: z.number().int().positive().optional(),
         charThreshold: z.number().int().positive().optional(),
-      }),
+      },
       annotations: {
         title: 'Session Status',
         readOnlyHint: true,
@@ -77,13 +77,13 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Search Memory',
       description: 'Search durable ContextForge memories in the requested scope.',
-      inputSchema: z.object({
+      inputSchema: {
         ...scopedSchema,
         query: z.string(),
         limit: z.number().int().positive().optional(),
         searchScopes: z.enum(['scope', 'repo', 'shared', 'repo+shared', 'local']).optional(),
         sharedScopeKey: z.string().optional(),
-      }),
+      },
       annotations: {
         title: 'Search Memory',
         readOnlyHint: true,
@@ -98,10 +98,10 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Get Memory',
       description: 'Fetch one durable memory by key from a specific scope.',
-      inputSchema: z.object({
+      inputSchema: {
         ...scopedSchema,
         key: z.string(),
-      }),
+      },
       annotations: {
         title: 'Get Memory',
         readOnlyHint: true,
@@ -116,14 +116,14 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Remember',
       description: 'Create or update a durable memory in an explicit scope.',
-      inputSchema: z.object({
+      inputSchema: {
         ...scopedSchema,
         key: z.string(),
         content: z.string(),
         category: z.string().optional(),
         tags: optionalTags,
         importance: z.number().int().optional(),
-      }),
+      },
       annotations: {
         title: 'Remember',
         readOnlyHint: false,
@@ -138,14 +138,14 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Append Raw Evidence',
       description: 'Append raw scoped evidence for later distillation and debugging.',
-      inputSchema: z.object({
+      inputSchema: {
         ...scopedSchema,
         sessionId: z.string(),
         conversationId: z.string().optional(),
         role: z.string(),
         content: z.string(),
         metadata: metadataSchema.optional(),
-      }),
+      },
       annotations: {
         title: 'Append Raw Evidence',
         readOnlyHint: false,
@@ -160,12 +160,12 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Distill Checkpoint',
       description: 'Distill raw session evidence into a checkpoint with the configured provider.',
-      inputSchema: z.object({
+      inputSchema: {
         ...scopedSchema,
         sessionId: z.string(),
         conversationId: z.string().optional(),
         provider: z.string().optional(),
-      }),
+      },
       annotations: {
         title: 'Distill Checkpoint',
         readOnlyHint: false,
@@ -180,10 +180,10 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'List Memory Events',
       description: 'List provenance events for one durable memory key.',
-      inputSchema: z.object({
+      inputSchema: {
         ...scopedSchema,
         key: z.string(),
-      }),
+      },
       annotations: {
         title: 'List Memory Events',
         readOnlyHint: true,
@@ -198,11 +198,11 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'List Memory Candidates',
       description: 'List memory candidates saved on distilled checkpoints without promoting them.',
-      inputSchema: z.object({
+      inputSchema: {
         ...scopedSchema,
         sessionId: z.string().optional(),
         checkpointId: z.string().optional(),
-      }),
+      },
       annotations: {
         title: 'List Memory Candidates',
         readOnlyHint: true,
@@ -217,7 +217,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Promote Memory',
       description: 'Promote a checkpoint candidate or reviewed fact into durable memory with provenance metadata.',
-      inputSchema: z.object({
+      inputSchema: {
         ...scopedSchema,
         key: z.string(),
         content: z.string(),
@@ -229,7 +229,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
         sourceRawEventIds: z.array(z.string()).optional(),
         sourceCandidateIndex: z.number().int().optional(),
         reason: z.string().optional(),
-      }),
+      },
       annotations: {
         title: 'Promote Memory',
         readOnlyHint: false,
@@ -244,7 +244,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Correct Memory',
       description: 'Correct an existing durable memory while preserving prior content in provenance metadata.',
-      inputSchema: z.object({
+      inputSchema: {
         ...scopedSchema,
         key: z.string(),
         content: z.string(),
@@ -252,7 +252,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
         tags: optionalTags,
         importance: z.number().int().optional(),
         reason: z.string().optional(),
-      }),
+      },
       annotations: {
         title: 'Correct Memory',
         readOnlyHint: false,
@@ -267,11 +267,11 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Deactivate Memory',
       description: 'Mark a durable memory inactive without deleting its provenance.',
-      inputSchema: z.object({
+      inputSchema: {
         ...scopedSchema,
         key: z.string(),
         reason: z.string().optional(),
-      }),
+      },
       annotations: {
         title: 'Deactivate Memory',
         readOnlyHint: false,

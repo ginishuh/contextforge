@@ -173,15 +173,19 @@ function stripJsonFence(text) {
 }
 
 export function parseCodexExecJson(text) {
+  return parseCodexExecJsonResult(text).output;
+}
+
+function parseCodexExecJsonResult(text) {
   const stripped = stripJsonFence(text);
   try {
-    return JSON.parse(stripped);
+    return { output: JSON.parse(stripped), jsonRecovery: null };
   } catch {
     const start = stripped.indexOf('{');
     const end = stripped.lastIndexOf('}');
     if (start !== -1 && end > start) {
       try {
-        return JSON.parse(stripped.slice(start, end + 1));
+        return { output: JSON.parse(stripped.slice(start, end + 1)), jsonRecovery: 'brace-fallback' };
       } catch {
         throw new Error('Codex exec did not return valid JSON.');
       }
@@ -347,7 +351,7 @@ async function runLiveSmoke({ runner, command, model, reasoningEffort, sandbox, 
       env: process.env,
     });
     const outputText = (await readTextIfPresent(outputPath)) || result.stdout || '';
-    const output = parseCodexExecJson(outputText);
+    const { output } = parseCodexExecJsonResult(outputText);
     if (output.ok !== true || output.provider !== 'codex_exec') {
       throw new Error('codex_exec smoke returned JSON but did not confirm provider readiness.');
     }
@@ -463,7 +467,7 @@ export function createCodexExecProvider(options = {}) {
         env: process.env,
       });
       const outputText = (await readTextIfPresent(outputPath)) || result.stdout || '';
-      const output = parseCodexExecJson(outputText);
+      const { output, jsonRecovery } = parseCodexExecJsonResult(outputText);
 
       return {
         ...output,
@@ -480,6 +484,7 @@ export function createCodexExecProvider(options = {}) {
             timeoutMs,
             elapsedMs: Date.now() - startedAt,
             ...prompt.metadata,
+            ...(jsonRecovery ? { jsonRecovery } : {}),
           },
         },
       };

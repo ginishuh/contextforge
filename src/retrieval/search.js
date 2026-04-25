@@ -120,10 +120,9 @@ export function searchMemories(store, { scopeType, scopeKey, query, limit = 10, 
         : [];
       const ftsById = new Map(ftsMatches.map((match) => [match.memory.id, match]));
       const ftsIds = new Set(ftsById.keys());
-      const memoriesById = new Map([
-        ...store.listMemories(source).map((memory) => [memory.id, memory]),
-        ...ftsMatches.map((match) => [match.memory.id, match.memory]),
-      ]);
+      const candidateMemories =
+        ftsMatches.length > 0 ? ftsMatches.map((match) => match.memory) : store.listMemories(source);
+      const memoriesById = new Map(candidateMemories.map((memory) => [memory.id, memory]));
 
       return [...memoriesById.values()].map((memory) => {
         const match = scoreMemory(memory, queryTokens);
