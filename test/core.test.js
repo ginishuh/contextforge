@@ -10,6 +10,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { createContextForge } from '../src/core.js';
 import { validateDistillOutput } from '../src/distill/validate.js';
+import { watchCodexSessions } from '../src/ingest/codex.js';
 import { searchMemories } from '../src/retrieval/search.js';
 import { startContextForgeServer } from '../src/server.js';
 import { SCHEMA_VERSION } from '../src/storage/sqlite.js';
@@ -83,6 +84,19 @@ async function writeSyntheticCodexRollout(filePath, sessionId = 'codex-rollout-s
     },
   ];
   await fs.writeFile(filePath, `${records.map((record) => JSON.stringify(record)).join('\n')}\n`);
+}
+
+async function appendSyntheticCodexAssistantMessage(filePath, text) {
+  const record = {
+    timestamp: '2026-04-25T00:00:06.000Z',
+    type: 'response_item',
+    payload: {
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'output_text', text }],
+    },
+  };
+  await fs.appendFile(filePath, `${JSON.stringify(record)}\n`);
 }
 
 async function writeSyntheticSessionsTree(rootDir) {
@@ -721,6 +735,49 @@ test('CLI ingests multiple Codex session rollout files safely', async () => {
   });
   assert.equal(firstEvents.length, 4);
   assert.equal(secondEvents.length, 4);
+});
+
+test('Codex sessions watch loop picks up new events without duplicates', async () => {
+  const dataDir = await makeTempDir();
+  const sessionsDir = await makeTempDir();
+  const rolloutDir = path.join(sessionsDir, '2026', '04', '25');
+  const file = path.join(rolloutDir, 'rollout-watch.jsonl');
+  await fs.mkdir(rolloutDir, { recursive: true });
+  await writeSyntheticCodexRollout(file, 'codex-watch-session');
+  const app = createContextForge({
+    env: { CONTEXTFORGE_DATA_DIR: dataDir },
+    cwd: process.cwd(),
+  });
+  const iterationResults = [];
+
+  const result = await watchCodexSessions(app, {
+    sessionsDir,
+    scope: 'repo',
+    scopeKey: 'codex-watch-repo',
+    distill: 'never',
+    iterations: 2,
+    intervalMs: 1,
+    onResult: async (iterationResult) => {
+      iterationResults.push(iterationResult);
+      if (iterationResult.iteration === 1) {
+        await appendSyntheticCodexAssistantMessage(file, 'A new active TUI event arrived.');
+      }
+    },
+  });
+
+  assert.equal(result.iterations, 2);
+  assert.equal(result.totals.appendedEvents, 5);
+  assert.equal(iterationResults[0].appendedEvents, 4);
+  assert.equal(iterationResults[1].appendedEvents, 1);
+  assert.equal(iterationResults[1].skippedEvents, 4);
+
+  const events = app.listRawEvents({
+    scope: 'repo',
+    scopeKey: 'codex-watch-repo',
+    sessionId: 'codex-watch-session',
+  });
+  assert.equal(events.length, 5);
+  assert.equal(events.at(-1).content, 'A new active TUI event arrived.');
 });
 
 test('CLI Codex sessions scan is not capped by search limit defaults', async () => {

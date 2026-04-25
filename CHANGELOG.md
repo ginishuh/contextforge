@@ -7,6 +7,8 @@
   records, and can optionally trigger checkpoint distillation.
 - Added `ingestCodexSessions` for repeated multi-session scans of Codex rollout
   directories, including safe handling for actively-written trailing lines.
+- Added `ingestCodexSessions --watch` for long-running local TUI capture loops
+  with per-iteration JSON logs and bounded `--iterations` smoke checks.
 - The remote server now exposes a Streamable HTTP MCP endpoint at `/mcp`, so
   agents on multiple machines can connect directly to the same canonical memory
   store without launching a local stdio MCP bridge.

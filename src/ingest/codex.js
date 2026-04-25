@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 const DEFAULT_MAX_CONTENT_CHARS = 8000;
+const DEFAULT_WATCH_INTERVAL_MS = 30000;
 
 function truncate(value, maxChars = DEFAULT_MAX_CONTENT_CHARS) {
   const text = String(value || '');
@@ -274,5 +275,74 @@ export async function ingestCodexSessions(app, options = {}) {
     skippedEvents: results.reduce((total, result) => total + result.skippedEvents, 0),
     checkpointsCreated: results.filter((result) => result.checkpoint).length,
     fileResults: results,
+  };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function summarizeWatchResults(results) {
+  return {
+    filesScanned: results.reduce((total, result) => total + result.filesScanned, 0),
+    parsedEvents: results.reduce((total, result) => total + result.parsedEvents, 0),
+    appendedEvents: results.reduce((total, result) => total + result.appendedEvents, 0),
+    skippedEvents: results.reduce((total, result) => total + result.skippedEvents, 0),
+    checkpointsCreated: results.reduce((total, result) => total + result.checkpointsCreated, 0),
+  };
+}
+
+export async function watchCodexSessions(app, options = {}) {
+  const intervalMs =
+    options.intervalMs == null ? DEFAULT_WATCH_INTERVAL_MS : Math.max(0, Number(options.intervalMs));
+  const maxIterations = options.iterations == null ? null : Math.max(0, Number(options.iterations));
+  const startedAt = new Date().toISOString();
+  const results = [];
+  let iterations = 0;
+  let stopped = false;
+
+  const stop = () => {
+    stopped = true;
+  };
+
+  process.once('SIGINT', stop);
+  process.once('SIGTERM', stop);
+
+  try {
+    while (!stopped && (maxIterations == null || iterations < maxIterations)) {
+      iterations += 1;
+      const result = await ingestCodexSessions(app, options);
+      const iterationResult = {
+        ...result,
+        source: 'codex_sessions_watch_iteration',
+        iteration: iterations,
+        intervalMs,
+        watchedAt: new Date().toISOString(),
+      };
+      results.push(iterationResult);
+      if (options.onResult) {
+        await options.onResult(iterationResult);
+      }
+      if (!stopped && (maxIterations == null || iterations < maxIterations)) {
+        await sleep(intervalMs);
+      }
+    }
+  } finally {
+    process.removeListener('SIGINT', stop);
+    process.removeListener('SIGTERM', stop);
+  }
+
+  return {
+    source: 'codex_sessions_watch',
+    sessionsDir: path.resolve(options.sessionsDir || defaultSessionsDir()),
+    intervalMs,
+    iterations,
+    stopped,
+    startedAt,
+    completedAt: new Date().toISOString(),
+    totals: summarizeWatchResults(results),
+    results,
   };
 }

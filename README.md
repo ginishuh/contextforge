@@ -193,6 +193,29 @@ their Codex session id, skips already-ingested records, and ignores a trailing
 partial JSON line from an actively-written rollout file so the next scan can
 pick it up when complete.
 
+For local TUI use, the same command can stay resident and poll for new rollout
+events:
+
+```bash
+CONTEXTFORGE_STORAGE_MODE=remote \
+CONTEXTFORGE_REMOTE_URL=https://memory.example.com \
+CONTEXTFORGE_REMOTE_TOKEN=change-me \
+node src/cli.js ingestCodexSessions \
+  --sessionsDir ~/.codex/sessions \
+  --scope repo \
+  --repoPath /path/to/repo \
+  --sinceMinutes 1440 \
+  --distill auto \
+  --watch \
+  --intervalMs 30000
+```
+
+Watch mode emits one compact JSON object per scan iteration plus a final
+summary when it stops. Use `--iterations N` for bounded smoke checks or tests.
+Repeated watch scans do not spend model tokens while capturing raw evidence;
+model usage happens only when `--distill auto` decides to checkpoint or
+`--distill always` is set.
+
 Agents can call `sessionStatus` or the MCP `session_status` tool to inspect
 whether a session has enough new raw evidence to justify a checkpoint. The
 status response includes raw event counts, raw character counts, the latest
