@@ -27,6 +27,64 @@ async function makeGitRepo(remoteUrl = 'git@github.com:example/contextforge.git'
   return cwd;
 }
 
+async function writeSyntheticCodexRollout(filePath, sessionId = 'codex-rollout-session') {
+  const records = [
+    {
+      timestamp: '2026-04-25T00:00:00.000Z',
+      type: 'session_meta',
+      payload: {
+        id: sessionId,
+        cwd: path.dirname(filePath),
+      },
+    },
+    {
+      timestamp: '2026-04-25T00:00:01.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'developer',
+        content: [{ type: 'input_text', text: 'Developer instructions should not be captured.' }],
+      },
+    },
+    {
+      timestamp: '2026-04-25T00:00:02.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: 'Please continue the ContextForge ingest work.' }],
+      },
+    },
+    {
+      timestamp: '2026-04-25T00:00:03.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'function_call',
+        name: 'exec_command',
+        arguments: '{"cmd":"npm test"}',
+      },
+    },
+    {
+      timestamp: '2026-04-25T00:00:04.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'function_call_output',
+        output: 'tests passed',
+      },
+    },
+    {
+      timestamp: '2026-04-25T00:00:05.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: 'I added Codex rollout ingestion.' }],
+      },
+    },
+  ];
+  await fs.writeFile(filePath, `${records.map((record) => JSON.stringify(record)).join('\n')}\n`);
+}
+
 test('dbInfo initializes a fresh SQLite store', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
@@ -415,6 +473,172 @@ test('CLI reports invalid metadata JSON clearly', async () => {
       ),
     /Invalid --metadata JSON/,
   );
+});
+
+test('CLI ingests Codex rollout JSONL idempotently without capturing developer messages', async () => {
+  const dataDir = await makeTempDir();
+  const rolloutDir = await makeTempDir();
+  const file = path.join(rolloutDir, 'rollout.jsonl');
+  await writeSyntheticCodexRollout(file, 'codex-ingest-session');
+  const env = {
+    ...process.env,
+    CONTEXTFORGE_DATA_DIR: dataDir,
+    CONTEXTFORGE_DEFAULT_SCOPE_KEY: 'codex-ingest-repo',
+  };
+
+  const first = await execFileAsync(
+    'node',
+    [
+      'src/cli.js',
+      'ingestCodexRollout',
+      '--file',
+      file,
+      '--scope',
+      'repo',
+      '--scopeKey',
+      'codex-ingest-repo',
+      '--distill',
+      'never',
+    ],
+    { env },
+  );
+  const firstResult = JSON.parse(first.stdout);
+  assert.equal(firstResult.parsedEvents, 4);
+  assert.equal(firstResult.appendedEvents, 4);
+  assert.equal(firstResult.skippedEvents, 0);
+  assert.equal(firstResult.status.rawEventCount, 4);
+
+  const second = await execFileAsync(
+    'node',
+    [
+      'src/cli.js',
+      'ingestCodexRollout',
+      '--file',
+      file,
+      '--scope',
+      'repo',
+      '--scopeKey',
+      'codex-ingest-repo',
+      '--distill',
+      'never',
+    ],
+    { env },
+  );
+  const secondResult = JSON.parse(second.stdout);
+  assert.equal(secondResult.appendedEvents, 0);
+  assert.equal(secondResult.skippedEvents, 4);
+  assert.equal(secondResult.status.rawEventCount, 4);
+
+  const rawEvents = await execFileAsync(
+    'node',
+    [
+      'src/cli.js',
+      'listRawEvents',
+      '--scope',
+      'repo',
+      '--scopeKey',
+      'codex-ingest-repo',
+      '--sessionId',
+      'codex-ingest-session',
+    ],
+    { env },
+  );
+  const events = JSON.parse(rawEvents.stdout);
+  assert.deepEqual(
+    events.map((event) => event.role),
+    ['user', 'tool_call', 'tool_result', 'assistant'],
+  );
+  assert.equal(events.some((event) => event.content.includes('Developer instructions')), false);
+  assert.ok(events.every((event) => event.metadata.ingestId));
+});
+
+test('CLI ingest can auto-distill Codex rollout evidence', async () => {
+  const dataDir = await makeTempDir();
+  const rolloutDir = await makeTempDir();
+  const file = path.join(rolloutDir, 'rollout.jsonl');
+  await writeSyntheticCodexRollout(file, 'codex-auto-distill-session');
+  const env = {
+    ...process.env,
+    CONTEXTFORGE_DATA_DIR: dataDir,
+    CONTEXTFORGE_DEFAULT_SCOPE_KEY: 'codex-auto-distill-repo',
+    CONTEXTFORGE_DISTILL_PROVIDER: 'mock',
+  };
+
+  const ingested = await execFileAsync(
+    'node',
+    [
+      'src/cli.js',
+      'ingestCodexRollout',
+      '--file',
+      file,
+      '--scope',
+      'repo',
+      '--scopeKey',
+      'codex-auto-distill-repo',
+      '--distill',
+      'auto',
+      '--charThreshold',
+      '1',
+    ],
+    { env },
+  );
+  const result = JSON.parse(ingested.stdout);
+  assert.equal(result.appendedEvents, 4);
+  assert.equal(result.status.shouldDistill, true);
+  assert.equal(result.checkpoint.sessionId, 'codex-auto-distill-session');
+  assert.equal(result.checkpoint.provider, 'mock');
+});
+
+test('CLI ingest works through remote storage mode', async () => {
+  const dataDir = await makeTempDir();
+  const rolloutDir = await makeTempDir();
+  const file = path.join(rolloutDir, 'rollout.jsonl');
+  await writeSyntheticCodexRollout(file, 'codex-remote-ingest-session');
+  const remote = await startContextForgeServer({
+    port: 0,
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+    },
+  });
+
+  try {
+    const env = {
+      ...process.env,
+      CONTEXTFORGE_STORAGE_MODE: 'remote',
+      CONTEXTFORGE_REMOTE_URL: remote.url,
+      CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+    };
+    const ingested = await execFileAsync(
+      'node',
+      [
+        'src/cli.js',
+        'ingestCodexRollout',
+        '--file',
+        file,
+        '--scope',
+        'repo',
+        '--scopeKey',
+        'codex-remote-ingest-repo',
+        '--distill',
+        'never',
+      ],
+      { env },
+    );
+    const result = JSON.parse(ingested.stdout);
+    assert.equal(result.appendedEvents, 4);
+    assert.equal(result.status.rawEventCount, 4);
+
+    const app = createContextForge({ env, cwd: process.cwd() });
+    const rawEvents = await app.listRawEvents({
+      scope: 'repo',
+      scopeKey: 'codex-remote-ingest-repo',
+      sessionId: 'codex-remote-ingest-session',
+    });
+    assert.equal(rawEvents.length, 4);
+  } finally {
+    await remote.close();
+  }
 });
 
 test('search can combine repo and shared scopes while excluding local by default', async () => {

@@ -152,6 +152,27 @@ events are captured when callers use `appendRaw`, and checkpoints are produced
 only when a caller invokes `distillCheckpoint` or the MCP `distill_checkpoint`
 tool. This keeps cost and model usage explicit.
 
+Codex TUI sessions can also be ingested from their rollout JSONL artifacts
+without routing raw transcript text through the model. This keeps raw capture
+out of the token path:
+
+```bash
+CONTEXTFORGE_STORAGE_MODE=remote \
+CONTEXTFORGE_REMOTE_URL=https://memory.example.com \
+CONTEXTFORGE_REMOTE_TOKEN=change-me \
+node src/cli.js ingestCodexRollout \
+  --file ~/.codex/sessions/2026/04/25/rollout-example.jsonl \
+  --scope repo \
+  --repoPath /path/to/repo \
+  --distill auto
+```
+
+`ingestCodexRollout` captures user, assistant, tool-call, and tool-result
+records, skips developer/system instructions, deduplicates previously ingested
+records by stable ingest ids, then checks `sessionStatus`. Use `--distill never`
+to capture only, `--distill auto` to distill when thresholds recommend it, or
+`--distill always` to force a checkpoint after ingest.
+
 Agents can call `sessionStatus` or the MCP `session_status` tool to inspect
 whether a session has enough new raw evidence to justify a checkpoint. The
 status response includes raw event counts, raw character counts, the latest
