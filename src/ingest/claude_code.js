@@ -20,6 +20,17 @@ function claudeCodeSessionId(nativeSessionId) {
   return native ? `claude_code:${native}` : null;
 }
 
+function isPathWithin(parentPath, childPath) {
+  const parent = path.resolve(parentPath);
+  const child = path.resolve(childPath);
+  const relative = path.relative(parent, child);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function shouldSkipOutsideRepo(parsed, options = {}) {
+  return Boolean(options.repoPath && parsed.cwd && !isPathWithin(options.repoPath, parsed.cwd));
+}
+
 function truncate(value, maxChars = DEFAULT_MAX_CONTENT_CHARS) {
   const text = String(value || '');
   if (text.length <= maxChars) {
@@ -202,6 +213,24 @@ export async function ingestClaudeCodeFile(app, options = {}) {
     cwd: options.cwd || parsed.cwd,
     repoPath: options.repoPath,
   };
+  if (shouldSkipOutsideRepo(parsed, options)) {
+    return {
+      source: 'claude_code_jsonl',
+      file: options.file,
+      sessionId: parsed.sessionId,
+      conversationId: parsed.conversationId,
+      parsedEvents: parsed.events.length,
+      appendedEvents: 0,
+      skippedEvents: parsed.events.length,
+      warnings: parsed.warnings,
+      skipped: true,
+      skippedReason: 'cwd_outside_repo_path',
+      cwd: parsed.cwd,
+      repoPath: path.resolve(options.repoPath),
+      status: null,
+      checkpoint: null,
+    };
+  }
   const { appended, skipped } = await appendNewEvents(app, scopeOptions, parsed);
   const statusOptions = {
     ...scopeOptions,

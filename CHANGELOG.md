@@ -17,6 +17,9 @@
   promoted from CLI without copying candidate fields manually.
 - Added a systemd user service installer for long-running Codex watch ingest
   against a remote ContextForge server.
+- Repo-specific TUI ingest now skips transcript files whose recorded cwd is
+  outside `--repoPath`, preventing global session scans from crossing repo
+  scopes.
 - The remote server now exposes a Streamable HTTP MCP endpoint at `/mcp`, so
   agents on multiple machines can connect directly to the same canonical memory
   store without launching a local stdio MCP bridge.

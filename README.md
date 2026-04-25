@@ -200,7 +200,9 @@ node src/cli.js ingestCodexSessions \
 The sessions scan is safe to run repeatedly. It keeps rollout files isolated by
 their Codex session id, skips already-ingested records, and ignores a trailing
 partial JSON line from an actively-written rollout file so the next scan can
-pick it up when complete.
+pick it up when complete. When `--repoPath` is set, files whose recorded TUI
+cwd is outside that repo path are skipped so a global sessions directory can be
+watched safely by a repo-specific service.
 
 For local TUI use, the same command can stay resident and poll for new rollout
 events:
