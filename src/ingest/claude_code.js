@@ -31,6 +31,22 @@ function shouldSkipOutsideRepo(parsed, options = {}) {
   return Boolean(options.repoPath && parsed.cwd && !isPathWithin(options.repoPath, parsed.cwd));
 }
 
+async function shouldSkipRecentFailedAutoDistill(app, scopeOptions, sessionId, status) {
+  const runs = await app.listDistillRuns({
+    ...scopeOptions,
+    sessionId,
+  });
+  const latest = runs[0];
+  if (!latest || latest.status !== 'failed') {
+    return false;
+  }
+  const failedAt = Date.parse(latest.completedAt || latest.createdAt);
+  if (!Number.isFinite(failedAt)) {
+    return false;
+  }
+  return Date.now() - failedAt < status.thresholds.minIntervalMs;
+}
+
 function truncate(value, maxChars = DEFAULT_MAX_CONTENT_CHARS) {
   const text = String(value || '');
   if (text.length <= maxChars) {
@@ -242,20 +258,25 @@ export async function ingestClaudeCodeFile(app, options = {}) {
   const status = await app.sessionStatus(statusOptions);
   let checkpoint = null;
   let checkpointError = null;
+  let checkpointSkippedReason = null;
   const distill = options.distill || 'never';
   if (distill === 'always' || (distill === 'auto' && status.shouldDistill)) {
-    try {
-      checkpoint = await app.distillCheckpoint({
-        ...scopeOptions,
-        sessionId: parsed.sessionId,
-        conversationId: parsed.conversationId,
-        provider: options.provider,
-      });
-    } catch (error) {
-      checkpointError = {
-        message: error.message,
-        name: error.name,
-      };
+    if (distill === 'auto' && (await shouldSkipRecentFailedAutoDistill(app, scopeOptions, parsed.sessionId, status))) {
+      checkpointSkippedReason = 'recent_failed_distill';
+    } else {
+      try {
+        checkpoint = await app.distillCheckpoint({
+          ...scopeOptions,
+          sessionId: parsed.sessionId,
+          conversationId: parsed.conversationId,
+          provider: options.provider,
+        });
+      } catch (error) {
+        checkpointError = {
+          message: error.message,
+          name: error.name,
+        };
+      }
     }
   }
 
@@ -271,6 +292,7 @@ export async function ingestClaudeCodeFile(app, options = {}) {
     status,
     checkpoint,
     checkpointError,
+    checkpointSkippedReason,
   };
 }
 

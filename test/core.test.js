@@ -755,6 +755,24 @@ test('Codex ingest preserves raw evidence when auto distill fails', async () => 
     sessionId: 'codex:codex-auto-fail-session',
   });
   assert.equal(runs[0].status, 'failed');
+
+  const retry = await ingestCodexRolloutFile(app, {
+    file,
+    scope: 'repo',
+    scopeKey: 'codex-auto-fail-repo',
+    distill: 'auto',
+    charThreshold: 1,
+  });
+  assert.equal(retry.appendedEvents, 0);
+  assert.equal(retry.checkpointSkippedReason, 'recent_failed_distill');
+  assert.equal(
+    app.listDistillRuns({
+      scope: 'repo',
+      scopeKey: 'codex-auto-fail-repo',
+      sessionId: 'codex:codex-auto-fail-session',
+    }).length,
+    1,
+  );
 });
 
 test('CLI ingest works through remote storage mode', async () => {
