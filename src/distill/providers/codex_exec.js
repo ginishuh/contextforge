@@ -268,7 +268,13 @@ async function checkCommandAvailable({ runner, command, cwd, timeoutMs }) {
   };
 }
 
-async function runLiveSmoke({ runner, command, model, sandbox, cwd, timeoutMs }) {
+function appendReasoningEffortConfig(args, reasoningEffort) {
+  if (reasoningEffort) {
+    args.push('-c', `model_reasoning_effort="${reasoningEffort}"`);
+  }
+}
+
+async function runLiveSmoke({ runner, command, model, reasoningEffort, sandbox, cwd, timeoutMs }) {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'contextforge-codex-doctor-'));
   const schemaPath = path.join(tempDir, 'doctor.schema.json');
   const outputPath = path.join(tempDir, 'doctor.json');
@@ -290,6 +296,7 @@ async function runLiveSmoke({ runner, command, model, sandbox, cwd, timeoutMs })
     if (model) {
       args.push('--model', model);
     }
+    appendReasoningEffortConfig(args, reasoningEffort);
     args.push('-');
 
     const prompt = [
@@ -325,6 +332,7 @@ export async function checkCodexExecProvider(options = {}) {
   const runner = options.runner || runCodexExecCommand;
   const command = options.command || 'codex';
   const model = options.model || null;
+  const reasoningEffort = options.reasoningEffort || null;
   const sandbox = options.sandbox || 'read-only';
   const cwd = options.cwd || process.cwd();
   const timeoutMs = options.timeoutMs || 120000;
@@ -334,6 +342,7 @@ export async function checkCodexExecProvider(options = {}) {
     provider: 'codex_exec',
     command,
     model,
+    reasoningEffort,
     sandbox,
     cwd,
     timeoutMs,
@@ -350,7 +359,7 @@ export async function checkCodexExecProvider(options = {}) {
     result.version = commandCheck.version;
 
     if (live) {
-      result.smoke = await runLiveSmoke({ runner, command, model, sandbox, cwd, timeoutMs });
+      result.smoke = await runLiveSmoke({ runner, command, model, reasoningEffort, sandbox, cwd, timeoutMs });
     }
 
     result.ok = true;
@@ -371,6 +380,7 @@ export function createCodexExecProvider(options = {}) {
   const runner = options.runner || runCodexExecCommand;
   const command = options.command || 'codex';
   const model = options.model || null;
+  const reasoningEffort = options.reasoningEffort || null;
   const sandbox = options.sandbox || 'read-only';
   const cwd = options.cwd || process.cwd();
   const timeoutMs = options.timeoutMs || 120000;
@@ -407,6 +417,7 @@ export function createCodexExecProvider(options = {}) {
     if (model) {
       args.push('--model', model);
     }
+    appendReasoningEffortConfig(args, reasoningEffort);
     args.push('-');
 
     try {
@@ -431,6 +442,7 @@ export function createCodexExecProvider(options = {}) {
             ...providerMetadata,
             command,
             model,
+            reasoningEffort,
             sandbox,
             timeoutMs,
             elapsedMs: Date.now() - startedAt,
