@@ -92,6 +92,22 @@ function buildSessionStatus({ scope, sessionId, rawEvents, latestCheckpoint, pol
   };
 }
 
+function commonMetadataValue(rawEvents, key) {
+  const values = new Set(rawEvents.map((event) => event.metadata?.[key]).filter(Boolean));
+  return values.size === 1 ? [...values][0] : null;
+}
+
+function sourceProvenanceFromEvents(rawEvents) {
+  const provenance = {};
+  for (const key of ['sourceAgent', 'sourceRuntime', 'sourceAdapter', 'nativeSessionId']) {
+    const value = commonMetadataValue(rawEvents, key);
+    if (value) {
+      provenance[key] = value;
+    }
+  }
+  return provenance;
+}
+
 export function createContextForge(options = {}) {
   const config = loadConfig(options);
   if (config.storageMode === 'remote') {
@@ -353,6 +369,7 @@ export function createContextForge(options = {}) {
       return useStore(async (store) => {
         const rawEvents = store.listRawEvents({ ...scope, sessionId: options.sessionId });
         const previousCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId });
+        const sourceProvenance = sourceProvenanceFromEvents(rawEvents);
         const conversationId =
           options.conversationId || rawEvents.find((event) => event.conversationId)?.conversationId || null;
         const requestedOutputSchema = {
@@ -377,6 +394,7 @@ export function createContextForge(options = {}) {
             previousCheckpointId: previousCheckpoint?.id || null,
             requestedOutputSchema,
             providerMetadata,
+            sourceProvenance,
           },
         });
 
@@ -435,6 +453,7 @@ export function createContextForge(options = {}) {
           metadata: {
             providerMetadata: output.metadata,
             memoryCandidates: output.memoryCandidates,
+            sourceProvenance,
           },
         });
 

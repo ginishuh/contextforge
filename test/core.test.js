@@ -563,7 +563,7 @@ test('CLI ingests Codex rollout JSONL idempotently without capturing developer m
       '--scopeKey',
       'codex-ingest-repo',
       '--sessionId',
-      'codex-ingest-session',
+      'codex:codex-ingest-session',
     ],
     { env },
   );
@@ -574,6 +574,11 @@ test('CLI ingests Codex rollout JSONL idempotently without capturing developer m
   );
   assert.equal(events.some((event) => event.content.includes('Developer instructions')), false);
   assert.ok(events.every((event) => event.metadata.ingestId));
+  assert.ok(events.every((event) => event.metadata.sourceAgent === 'codex'));
+  assert.ok(events.every((event) => event.metadata.sourceRuntime === 'codex_tui'));
+  assert.ok(events.every((event) => event.metadata.sourceAdapter === 'codex_rollout_jsonl'));
+  assert.ok(events.every((event) => event.metadata.nativeSessionId === 'codex-ingest-session'));
+  assert.equal(firstResult.sessionId, 'codex:codex-ingest-session');
 });
 
 test('CLI ingest can auto-distill Codex rollout evidence', async () => {
@@ -609,8 +614,22 @@ test('CLI ingest can auto-distill Codex rollout evidence', async () => {
   const result = JSON.parse(ingested.stdout);
   assert.equal(result.appendedEvents, 4);
   assert.equal(result.status.shouldDistill, true);
-  assert.equal(result.checkpoint.sessionId, 'codex-auto-distill-session');
+  assert.equal(result.checkpoint.sessionId, 'codex:codex-auto-distill-session');
   assert.equal(result.checkpoint.provider, 'mock');
+  assert.deepEqual(result.checkpoint.metadata.sourceProvenance, {
+    sourceAgent: 'codex',
+    sourceRuntime: 'codex_tui',
+    sourceAdapter: 'codex_rollout_jsonl',
+    nativeSessionId: 'codex-auto-distill-session',
+  });
+
+  const app = createContextForge({ env, cwd: process.cwd() });
+  const runs = app.listDistillRuns({
+    scope: 'repo',
+    scopeKey: 'codex-auto-distill-repo',
+    sessionId: 'codex:codex-auto-distill-session',
+  });
+  assert.deepEqual(runs[0].inputMetadata.sourceProvenance, result.checkpoint.metadata.sourceProvenance);
 });
 
 test('CLI ingest works through remote storage mode', async () => {
@@ -657,7 +676,7 @@ test('CLI ingest works through remote storage mode', async () => {
     const rawEvents = await app.listRawEvents({
       scope: 'repo',
       scopeKey: 'codex-remote-ingest-repo',
-      sessionId: 'codex-remote-ingest-session',
+      sessionId: 'codex:codex-remote-ingest-session',
     });
     assert.equal(rawEvents.length, 4);
   } finally {
@@ -697,7 +716,7 @@ test('CLI ingests multiple Codex session rollout files safely', async () => {
   assert.equal(firstResult.skippedEvents, 0);
   assert.deepEqual(
     firstResult.fileResults.map((result) => result.sessionId).sort(),
-    ['codex-session-first', 'codex-session-second'],
+    ['codex:codex-session-first', 'codex:codex-session-second'],
   );
   assert.equal(firstResult.fileResults.some((result) => result.warnings.length > 0), true);
 
@@ -726,12 +745,12 @@ test('CLI ingests multiple Codex session rollout files safely', async () => {
   const firstEvents = app.listRawEvents({
     scope: 'repo',
     scopeKey: 'codex-multi-session-repo',
-    sessionId: 'codex-session-first',
+    sessionId: 'codex:codex-session-first',
   });
   const secondEvents = app.listRawEvents({
     scope: 'repo',
     scopeKey: 'codex-multi-session-repo',
-    sessionId: 'codex-session-second',
+    sessionId: 'codex:codex-session-second',
   });
   assert.equal(firstEvents.length, 4);
   assert.equal(secondEvents.length, 4);
@@ -774,7 +793,7 @@ test('Codex sessions watch loop picks up new events without duplicates', async (
   const events = app.listRawEvents({
     scope: 'repo',
     scopeKey: 'codex-watch-repo',
-    sessionId: 'codex-watch-session',
+    sessionId: 'codex:codex-watch-session',
   });
   assert.equal(events.length, 5);
   assert.equal(events.at(-1).content, 'A new active TUI event arrived.');
