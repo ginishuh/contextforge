@@ -8,6 +8,14 @@ import { REMOTE_METHODS } from './remote/client.js';
 const METHOD_SET = new Set(REMOTE_METHODS);
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
 
+class RequestBodyTooLargeError extends Error {
+  constructor() {
+    super('Request body is too large.');
+    this.name = 'RequestBodyTooLargeError';
+    this.statusCode = 413;
+  }
+}
+
 function sendJson(response, statusCode, body) {
   response.writeHead(statusCode, {
     'content-type': 'application/json',
@@ -37,7 +45,7 @@ function readJsonBody(request, { maxBodyBytes = DEFAULT_MAX_BODY_BYTES } = {}) {
       if (size > maxBodyBytes) {
         if (tooLarge) return;
         tooLarge = true;
-        reject(new Error('Request body is too large.'));
+        reject(new RequestBodyTooLargeError());
         return;
       }
       body += chunk.toString();
@@ -122,7 +130,7 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
       const result = await serverApp[method](options);
       sendJson(response, 200, { result });
     } catch (error) {
-      sendJson(response, 500, {
+      sendJson(response, error.statusCode || 500, {
         error: {
           message: error.message,
           name: error.name,

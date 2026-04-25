@@ -144,8 +144,8 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
   const dataDir = env.CONTEXTFORGE_DATA_DIR
     ? path.resolve(cwd, env.CONTEXTFORGE_DATA_DIR)
     : storageMode === 'local'
-        ? path.join(env.HOME || os.homedir(), '.contextforge')
-        : path.join(cwd, '.contextforge');
+      ? path.join(env.HOME || os.homedir(), '.contextforge')
+      : path.join(cwd, '.contextforge');
 
   const defaultScope = env.CONTEXTFORGE_DEFAULT_SCOPE || 'repo';
   if (!VALID_SCOPES.has(defaultScope)) {
