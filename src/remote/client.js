@@ -14,6 +14,7 @@ const REMOTE_METHODS = [
   'getMemory',
   'search',
   'appendRaw',
+  'listRawEvents',
   'distillCheckpoint',
   'listDistillRuns',
 ];

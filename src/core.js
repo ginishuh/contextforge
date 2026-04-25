@@ -336,6 +336,12 @@ export function createContextForge(options = {}) {
       );
     },
 
+    listRawEvents(options) {
+      const scope = normalizeScopeOptions(options, config);
+      requireOption(options.sessionId, 'sessionId');
+      return useStore((store) => store.listRawEvents({ ...scope, sessionId: options.sessionId }));
+    },
+
     async distillCheckpoint(options) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.sessionId, 'sessionId');

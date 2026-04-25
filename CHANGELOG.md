@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added `ingestCodexRollout`, which ingests Codex TUI rollout JSONL artifacts
+  into raw evidence without spending model tokens on capture, deduplicates
+  records, and can optionally trigger checkpoint distillation.
 - The remote server now exposes a Streamable HTTP MCP endpoint at `/mcp`, so
   agents on multiple machines can connect directly to the same canonical memory
   store without launching a local stdio MCP bridge.
