@@ -241,14 +241,22 @@ export async function ingestClaudeCodeFile(app, options = {}) {
   };
   const status = await app.sessionStatus(statusOptions);
   let checkpoint = null;
+  let checkpointError = null;
   const distill = options.distill || 'never';
   if (distill === 'always' || (distill === 'auto' && status.shouldDistill)) {
-    checkpoint = await app.distillCheckpoint({
-      ...scopeOptions,
-      sessionId: parsed.sessionId,
-      conversationId: parsed.conversationId,
-      provider: options.provider,
-    });
+    try {
+      checkpoint = await app.distillCheckpoint({
+        ...scopeOptions,
+        sessionId: parsed.sessionId,
+        conversationId: parsed.conversationId,
+        provider: options.provider,
+      });
+    } catch (error) {
+      checkpointError = {
+        message: error.message,
+        name: error.name,
+      };
+    }
   }
 
   return {
@@ -262,6 +270,7 @@ export async function ingestClaudeCodeFile(app, options = {}) {
     warnings: parsed.warnings,
     status,
     checkpoint,
+    checkpointError,
   };
 }
 
