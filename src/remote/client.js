@@ -18,21 +18,7 @@ const REMOTE_METHODS = [
   'listDistillRuns',
 ];
 
-const SCOPED_REMOTE_METHODS = new Set([
-  'beginSession',
-  'sessionStatus',
-  'remember',
-  'promoteMemory',
-  'correctMemory',
-  'deactivateMemory',
-  'listMemoryEvents',
-  'listMemoryCandidates',
-  'getMemory',
-  'search',
-  'appendRaw',
-  'distillCheckpoint',
-  'listDistillRuns',
-]);
+const UNSCOPED_REMOTE_METHODS = new Set(['dbInfo', 'checkCodexExec']);
 
 function remoteUrl(baseUrl, method) {
   const url = new URL(baseUrl);
@@ -105,12 +91,13 @@ export function createRemoteContextForge(config, options = {}) {
 
   for (const method of REMOTE_METHODS) {
     api[method] = (callOptions = {}) => {
-      if (!SCOPED_REMOTE_METHODS.has(method)) {
+      if (UNSCOPED_REMOTE_METHODS.has(method)) {
         return client.call(method, callOptions);
       }
+      const { cwd, repoPath, ...remoteOptions } = callOptions;
       const scope = normalizeScopeOptions(callOptions, config);
       return client.call(method, {
-        ...callOptions,
+        ...remoteOptions,
         scope: scope.scopeType,
         scopeType: scope.scopeType,
         scopeKey: scope.scopeKey,

@@ -397,8 +397,9 @@ Do not pin the MCP server `cwd` to one project when the same registration should
 serve many repositories. Repo scope keys are inferred from the active git
 checkout when possible. If an agent is launched outside the repository but is
 working on a specific checkout, pass `repoPath` or `cwd` on scoped tool calls so
-the client can resolve that checkout before talking to the remote store. Pass an
-explicit `scopeKey` when the client cannot provide a useful working directory.
+the client can resolve that checkout before talking to the remote store.
+`repoPath` takes precedence when both are provided. Pass an explicit `scopeKey`
+when the client cannot provide a useful working directory.
 
 Agents should use `search` for scoped retrieval on demand, call `get_memory`
 only when they know the durable key they need, append raw evidence for later

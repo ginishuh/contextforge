@@ -30,7 +30,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     },
     {
       instructions:
-        'Use ContextForge for scoped memory retrieval on demand. Prefer search before loading exact memories. If working on a repository while the MCP process cwd is elsewhere, pass repoPath or cwd so repo scope resolves to that checkout. Use remember for reviewed durable facts the user or assistant intentionally wants saved, and promote checkpoint candidates only when durable memory is intentional. Keep local scope opt-in.',
+        'Use ContextForge for scoped memory retrieval on demand. Prefer search before loading exact memories. If working on a repository while the MCP process cwd is elsewhere, pass repoPath or cwd so repo scope resolves to that checkout; repoPath takes precedence when both are provided. Use remember for reviewed durable facts the user or assistant intentionally wants saved, and promote checkpoint candidates only when durable memory is intentional. Keep local scope opt-in.',
     },
   );
 
@@ -39,7 +39,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Begin Session',
       description:
-        'Create a ContextForge session id for a scoped agent run. Pass repoPath or cwd when the active repository differs from the MCP process cwd.',
+        'Create a ContextForge session id for a scoped agent run. Pass repoPath or cwd when the active repository differs from the MCP process cwd; repoPath takes precedence.',
       inputSchema: {
         ...scopedSchema,
         sessionId: z.string().optional(),
@@ -80,7 +80,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Search Memory',
       description:
-        'Search durable ContextForge memories in the requested scope. Pass repoPath or cwd to retrieve repo memories for a checkout outside the MCP process cwd.',
+        'Search durable ContextForge memories in the requested scope. Pass repoPath or cwd to retrieve repo memories for a checkout outside the MCP process cwd; repoPath takes precedence.',
       inputSchema: {
         ...scopedSchema,
         query: z.string(),
