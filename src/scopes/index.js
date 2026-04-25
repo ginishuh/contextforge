@@ -1,3 +1,6 @@
+import path from 'node:path';
+import { inferRepoScopeKey } from '../config/index.js';
+
 const VALID_SCOPE_TYPES = new Set(['shared', 'repo', 'local']);
 
 export function validateScope(scopeType, scopeKey) {
@@ -14,6 +17,15 @@ export function validateScope(scopeType, scopeKey) {
 
 export function normalizeScopeOptions(options, config) {
   const scopeType = options.scopeType || options.scope || config.defaultScope;
-  const scopeKey = options.scopeKey || config.defaultScopeKey;
+  let scopeKey = options.scopeKey;
+  if (!scopeKey && scopeType === 'repo' && (options.repoPath || options.cwd)) {
+    scopeKey = inferRepoScopeKey(path.resolve(config.cwd || process.cwd(), options.repoPath || options.cwd));
+  }
+  if (!scopeKey && scopeType === 'shared') {
+    scopeKey = config.defaultSharedScopeKey || config.defaultScopeKey;
+  }
+  if (!scopeKey) {
+    scopeKey = config.defaultScopeKey;
+  }
   return validateScope(scopeType, scopeKey);
 }

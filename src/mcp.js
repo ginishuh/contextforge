@@ -11,6 +11,8 @@ const optionalTags = z.array(z.string()).optional();
 const scopedSchema = {
   scope: scopeSchema.optional(),
   scopeKey: z.string().optional(),
+  cwd: z.string().optional(),
+  repoPath: z.string().optional(),
 };
 
 function jsonResult(result) {
@@ -28,7 +30,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     },
     {
       instructions:
-        'Use ContextForge for scoped memory retrieval on demand. Prefer search before loading exact memories, keep local scope opt-in, and promote checkpoint candidates only when durable memory is intentional.',
+        'Use ContextForge for scoped memory retrieval on demand. Prefer search before loading exact memories. If working on a repository while the MCP process cwd is elsewhere, pass repoPath or cwd so repo scope resolves to that checkout. Use remember for reviewed durable facts the user or assistant intentionally wants saved, and promote checkpoint candidates only when durable memory is intentional. Keep local scope opt-in.',
     },
   );
 
@@ -36,7 +38,8 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     'begin_session',
     {
       title: 'Begin Session',
-      description: 'Create a ContextForge session id for a scoped agent run.',
+      description:
+        'Create a ContextForge session id for a scoped agent run. Pass repoPath or cwd when the active repository differs from the MCP process cwd.',
       inputSchema: {
         ...scopedSchema,
         sessionId: z.string().optional(),
@@ -76,7 +79,8 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     'search',
     {
       title: 'Search Memory',
-      description: 'Search durable ContextForge memories in the requested scope.',
+      description:
+        'Search durable ContextForge memories in the requested scope. Pass repoPath or cwd to retrieve repo memories for a checkout outside the MCP process cwd.',
       inputSchema: {
         ...scopedSchema,
         query: z.string(),
@@ -115,7 +119,8 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     'remember',
     {
       title: 'Remember',
-      description: 'Create or update a durable memory in an explicit scope.',
+      description:
+        'Create or update an intentional durable memory in the requested scope; use for important facts, decisions, preferences, or runbook notes that should outlive the session.',
       inputSchema: {
         ...scopedSchema,
         key: z.string(),
@@ -216,7 +221,8 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     'promote_memory',
     {
       title: 'Promote Memory',
-      description: 'Promote a checkpoint candidate or reviewed fact into durable memory with provenance metadata.',
+      description:
+        'Promote a checkpoint candidate or reviewed fact into intentional durable memory with provenance metadata.',
       inputSchema: {
         ...scopedSchema,
         key: z.string(),

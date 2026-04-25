@@ -116,7 +116,7 @@ function defaultScopeKeyFor(scope, cwd, sharedScopeKey) {
   return pathScopeKey(cwd);
 }
 
-function inferRepoScopeKey(cwd) {
+export function inferRepoScopeKey(cwd) {
   const gitRoot = findGitRoot(cwd);
   if (!gitRoot) {
     return pathScopeKey(cwd);
@@ -136,16 +136,17 @@ function inferRepoScopeKey(cwd) {
 }
 
 export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
+  const resolvedCwd = path.resolve(cwd);
   const storageMode = env.CONTEXTFORGE_STORAGE_MODE || (env.CONTEXTFORGE_REMOTE_URL ? 'remote' : 'project-local');
   if (!VALID_STORAGE_MODES.has(storageMode)) {
     throw new Error(`Invalid CONTEXTFORGE_STORAGE_MODE: ${storageMode}`);
   }
 
   const dataDir = env.CONTEXTFORGE_DATA_DIR
-    ? path.resolve(cwd, env.CONTEXTFORGE_DATA_DIR)
+    ? path.resolve(resolvedCwd, env.CONTEXTFORGE_DATA_DIR)
     : storageMode === 'local'
       ? path.join(env.HOME || os.homedir(), '.contextforge')
-      : path.join(cwd, '.contextforge');
+      : path.join(resolvedCwd, '.contextforge');
 
   const defaultScope = env.CONTEXTFORGE_DEFAULT_SCOPE || 'repo';
   if (!VALID_SCOPES.has(defaultScope)) {
@@ -158,10 +159,11 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
   );
   const defaultSharedScopeKey = env.CONTEXTFORGE_SHARED_SCOPE_KEY || 'global';
   const defaultScopeKey =
-    env.CONTEXTFORGE_DEFAULT_SCOPE_KEY || defaultScopeKeyFor(defaultScope, cwd, defaultSharedScopeKey);
+    env.CONTEXTFORGE_DEFAULT_SCOPE_KEY || defaultScopeKeyFor(defaultScope, resolvedCwd, defaultSharedScopeKey);
 
   return {
     storageMode,
+    cwd: resolvedCwd,
     dataDir,
     defaultScope,
     defaultScopeKey,
@@ -181,7 +183,9 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
       model: env.CONTEXTFORGE_CODEX_EXEC_MODEL || null,
       reasoningEffort: env.CONTEXTFORGE_CODEX_EXEC_REASONING_EFFORT || null,
       sandbox: env.CONTEXTFORGE_CODEX_EXEC_SANDBOX || 'read-only',
-      cwd: env.CONTEXTFORGE_CODEX_EXEC_CWD ? path.resolve(cwd, env.CONTEXTFORGE_CODEX_EXEC_CWD) : cwd,
+      cwd: env.CONTEXTFORGE_CODEX_EXEC_CWD
+        ? path.resolve(resolvedCwd, env.CONTEXTFORGE_CODEX_EXEC_CWD)
+        : resolvedCwd,
       timeoutMs: parsePositiveInteger(
         env.CONTEXTFORGE_CODEX_EXEC_TIMEOUT_MS,
         'CONTEXTFORGE_CODEX_EXEC_TIMEOUT_MS',

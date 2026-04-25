@@ -19,6 +19,13 @@ async function makeTempDir() {
   return fs.mkdtemp(path.join(os.tmpdir(), 'contextforge-test-'));
 }
 
+async function makeGitRepo(remoteUrl = 'git@github.com:example/contextforge.git') {
+  const cwd = await makeTempDir();
+  await fs.mkdir(path.join(cwd, '.git'), { recursive: true });
+  await fs.writeFile(path.join(cwd, '.git', 'config'), `[remote "origin"]\n\turl = ${remoteUrl}\n`);
+  return cwd;
+}
+
 test('dbInfo initializes a fresh SQLite store', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
@@ -31,12 +38,7 @@ test('dbInfo initializes a fresh SQLite store', async () => {
 });
 
 test('repo scope key defaults to normalized GitHub origin remote', async () => {
-  const cwd = await makeTempDir();
-  await fs.mkdir(path.join(cwd, '.git'), { recursive: true });
-  await fs.writeFile(
-    path.join(cwd, '.git', 'config'),
-    '[remote "origin"]\n\turl = git@github.com:example/contextforge.git\n',
-  );
+  const cwd = await makeGitRepo();
   const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: path.join(cwd, 'data') }, cwd });
 
   assert.equal(app.config.defaultScopeKey, 'github.com/example/contextforge');
@@ -60,6 +62,38 @@ test('repo scope key falls back to a deterministic path key outside git', async 
     scopeKey: 'explicit/repo',
     key: 'explicit-scope',
     content: 'Explicit repo scope keys still win.',
+  });
+  assert.equal(explicit.scopeKey, 'explicit/repo');
+});
+
+test('repoPath and cwd resolve repo scope independently of the app cwd', async () => {
+  const appCwd = await makeTempDir();
+  const repoPath = await makeGitRepo('https://github.com/example/target-repo.git');
+  const repoSubdir = path.join(repoPath, 'src');
+  await fs.mkdir(repoSubdir);
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: path.join(appCwd, 'data') }, cwd: appCwd });
+
+  const fromRepoPath = app.remember({
+    scope: 'repo',
+    repoPath,
+    key: 'repo-path-memory',
+    content: 'Repo path selects the target checkout.',
+  });
+  assert.equal(fromRepoPath.scopeKey, 'github.com/example/target-repo');
+
+  const fromCwd = app.beginSession({
+    scope: 'repo',
+    cwd: repoSubdir,
+    sessionId: 'repo-cwd-session',
+  });
+  assert.equal(fromCwd.scopeKey, 'github.com/example/target-repo');
+
+  const explicit = app.remember({
+    scope: 'repo',
+    scopeKey: 'explicit/repo',
+    repoPath,
+    key: 'explicit-wins',
+    content: 'Explicit scopeKey still wins over repoPath.',
   });
   assert.equal(explicit.scopeKey, 'explicit/repo');
 });
@@ -325,6 +359,31 @@ test('CLI supports promoteMemory', async () => {
     { env },
   );
   assert.match(fetched.stdout, /Promoted memories are durable/);
+});
+
+test('CLI accepts repoPath for repo-scoped memory', async () => {
+  const dataDir = await makeTempDir();
+  const appCwd = await makeTempDir();
+  const repoPath = await makeGitRepo('git@github.com:example/cli-repo.git');
+  const env = { ...process.env, CONTEXTFORGE_DATA_DIR: dataDir };
+
+  const remembered = await execFileAsync(
+    'node',
+    [
+      path.resolve('src/cli.js'),
+      'remember',
+      '--scope',
+      'repo',
+      '--repoPath',
+      repoPath,
+      '--key',
+      'repo-path-cli',
+      '--content',
+      'CLI repoPath resolves repo scope.',
+    ],
+    { cwd: appCwd, env },
+  );
+  assert.match(remembered.stdout, /"scopeKey": "github.com\/example\/cli-repo"/);
 });
 
 test('CLI reports invalid metadata JSON clearly', async () => {
@@ -1090,6 +1149,7 @@ test('CLI supports the v0 workflow with synthetic data', async () => {
 
 test('MCP stdio server exposes core tools for synthetic integration', async () => {
   const dataDir = await makeTempDir();
+  const repoPath = await makeGitRepo('git@github.com:example/mcp-repo.git');
   const client = new Client({ name: 'contextforge-test-client', version: '0.0.0' }, { capabilities: {} });
   const transport = new StdioClientTransport({
     command: 'node',
@@ -1120,6 +1180,9 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'search',
       'session_status',
     ]);
+    const rememberTool = toolList.tools.find((tool) => tool.name === 'remember');
+    assert.ok(rememberTool.inputSchema.properties.repoPath);
+    assert.ok(rememberTool.inputSchema.properties.cwd);
 
     const rememberResult = await client.callTool({
       name: 'remember',
@@ -1142,6 +1205,17 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       },
     });
     assert.equal(searchResult.structuredContent.result[0].memory.key, 'mcp-rule');
+
+    const repoPathResult = await client.callTool({
+      name: 'remember',
+      arguments: {
+        scope: 'repo',
+        repoPath,
+        key: 'mcp-repo-path-rule',
+        content: 'MCP repoPath resolves the target checkout.',
+      },
+    });
+    assert.equal(repoPathResult.structuredContent.result.scopeKey, 'github.com/example/mcp-repo');
 
     const sessionResult = await client.callTool({
       name: 'begin_session',
@@ -1270,6 +1344,47 @@ test('remote storage mode delegates core calls and preserves scope semantics', a
 
     const info = await app.dbInfo();
     assert.equal(info.tables.memories, 2);
+  } finally {
+    await remote.close();
+  }
+});
+
+test('remote storage mode resolves repoPath before sending scoped calls', async () => {
+  const dataDir = await makeTempDir();
+  const appCwd = await makeTempDir();
+  const repoPath = await makeGitRepo('https://github.com/example/remote-client-repo.git');
+  const remote = await startContextForgeServer({
+    port: 0,
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+    },
+  });
+
+  try {
+    const app = createContextForge({
+      env: {
+        CONTEXTFORGE_STORAGE_MODE: 'remote',
+        CONTEXTFORGE_REMOTE_URL: remote.url,
+        CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+      },
+      cwd: appCwd,
+    });
+
+    const memory = await app.remember({
+      scope: 'repo',
+      repoPath,
+      key: 'remote-client-repo-path',
+      content: 'Remote clients resolve repoPath locally before posting.',
+    });
+    assert.equal(memory.scopeKey, 'github.com/example/remote-client-repo');
+
+    const fetched = await app.getMemory({
+      scope: 'repo',
+      scopeKey: 'github.com/example/remote-client-repo',
+      key: 'remote-client-repo-path',
+    });
+    assert.equal(fetched.content, 'Remote clients resolve repoPath locally before posting.');
   } finally {
     await remote.close();
   }
