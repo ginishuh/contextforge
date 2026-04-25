@@ -126,6 +126,88 @@ Current v0 remote behavior is deliberately simple:
 Do not point git at live SQLite or raw runtime data. Use git only for source,
 docs, examples, migrations, and reviewed exports.
 
+### New Machine Setup
+
+Use this path when another PC should share the same canonical memory server.
+The remote server should already be running and exposed through HTTPS.
+
+1. Install ContextForge:
+
+```bash
+git clone https://github.com/ginishuh/contextforge.git
+cd contextforge
+npm install
+```
+
+2. Store the remote bearer token in a private env file:
+
+```bash
+mkdir -p ~/.config/contextforge
+printf 'CONTEXTFORGE_REMOTE_TOKEN=%s\n' 'change-me' > ~/.config/contextforge/server.env
+chmod 600 ~/.config/contextforge/server.env
+```
+
+Do not commit this file. Use the token configured on the remote server.
+
+3. Register the remote HTTP MCP endpoint with Codex:
+
+```bash
+set -a
+. ~/.config/contextforge/server.env
+set +a
+
+codex mcp add contextforge \
+  --url https://memory.example.com/mcp \
+  --bearer-token-env-var CONTEXTFORGE_REMOTE_TOKEN
+```
+
+Codex reads the token from `CONTEXTFORGE_REMOTE_TOKEN` when it connects to the
+HTTP MCP endpoint. If your shell does not export that variable automatically,
+source the env file before starting Codex or add equivalent shell startup
+configuration.
+
+4. Verify the remote server and MCP registration:
+
+```bash
+set -a
+. ~/.config/contextforge/server.env
+set +a
+
+curl -fsS https://memory.example.com/healthz
+codex mcp list
+CONTEXTFORGE_STORAGE_MODE=remote \
+CONTEXTFORGE_REMOTE_URL=https://memory.example.com \
+CONTEXTFORGE_REMOTE_TOKEN="$CONTEXTFORGE_REMOTE_TOKEN" \
+node src/cli.js dbInfo
+```
+
+5. For each repo that should auto-capture local Codex TUI sessions, install a
+repo-specific watch service:
+
+```bash
+CONTEXTFORGE_REMOTE_URL=https://memory.example.com \
+scripts/install-codex-watch-service.sh \
+  --name my-repo \
+  --repo-path /absolute/path/to/my-repo \
+  --token-env-file ~/.config/contextforge/server.env \
+  --distill auto
+```
+
+The service scans the global Codex sessions directory but only ingests rollout
+files whose recorded TUI `cwd` is inside `--repo-path`, so one machine can have
+separate watch services for separate repos without crossing repo scopes.
+
+6. Check service logs:
+
+```bash
+systemctl --user status contextforge-codex-watch-my-repo.service
+journalctl --user -u contextforge-codex-watch-my-repo.service -n 50 --no-pager
+```
+
+Use the same remote URL and token on every machine that should share memory.
+Use different `--repo-path` values per checkout; repo scope keys are inferred
+from the checkout's git remote when possible.
+
 ### Remote Operation
 
 A typical remote deployment runs the HTTP server behind nginx, Caddy, or another
