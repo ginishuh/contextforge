@@ -126,6 +126,55 @@ Current v0 remote behavior is deliberately simple:
 Do not point git at live SQLite or raw runtime data. Use git only for source,
 docs, examples, migrations, and reviewed exports.
 
+### Remote Operation
+
+A typical remote deployment runs the HTTP server behind nginx, Caddy, or another
+TLS reverse proxy:
+
+```bash
+CONTEXTFORGE_REMOTE_HOST=127.0.0.1 \
+CONTEXTFORGE_REMOTE_PORT=8765 \
+CONTEXTFORGE_REMOTE_TOKEN=change-me \
+CONTEXTFORGE_SERVER_STORAGE_MODE=local \
+CONTEXTFORGE_DATA_DIR=/var/lib/contextforge \
+CONTEXTFORGE_DISTILL_PROVIDER=codex_exec \
+CONTEXTFORGE_CODEX_EXEC_MODEL=gpt-5.4-mini \
+CONTEXTFORGE_CODEX_EXEC_REASONING_EFFORT=low \
+node src/server.js
+```
+
+Keep the bearer token in a private environment file and do not commit it. The
+reverse proxy should expose only HTTPS to clients and forward to the local
+server port.
+
+ContextForge does not currently run distillation on a built-in timer. Raw
+events are captured when callers use `appendRaw`, and checkpoints are produced
+only when a caller invokes `distillCheckpoint` or the MCP `distill_checkpoint`
+tool. This keeps cost and model usage explicit.
+
+Recommended cadence depends on the agent workflow:
+
+- Run distillation at session end when an agent finishes a coherent task.
+- Run it every 10 to 30 minutes for long-running interactive sessions.
+- Avoid distilling after every raw event unless the raw stream is very small.
+- Retry failed distill runs after fixing the provider; raw evidence is retained.
+
+Use an external scheduler if you want unattended checkpoints. For example, a
+systemd timer or cron job can call:
+
+```bash
+CONTEXTFORGE_STORAGE_MODE=remote \
+CONTEXTFORGE_REMOTE_URL=https://memory.example.com \
+CONTEXTFORGE_REMOTE_TOKEN=change-me \
+node src/cli.js distillCheckpoint \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --sessionId current-session-id
+```
+
+That scheduler must choose the session id and scope key intentionally.
+ContextForge will not guess which active session should be distilled.
+
 ## v0 CLI Workflow
 
 Create or update a durable memory:
@@ -301,6 +350,23 @@ Example MCP client configuration:
   }
 }
 ```
+
+Codex can register ContextForge as a stdio MCP server while still using the
+remote canonical store:
+
+```bash
+codex mcp add contextforge \
+  --env CONTEXTFORGE_STORAGE_MODE=remote \
+  --env CONTEXTFORGE_REMOTE_URL=https://memory.example.com \
+  --env CONTEXTFORGE_REMOTE_TOKEN="$CONTEXTFORGE_REMOTE_TOKEN" \
+  --env CONTEXTFORGE_DISTILL_PROVIDER=codex_exec \
+  -- node /path/to/contextforge/src/mcp.js
+```
+
+Do not pin the MCP server `cwd` to one project when the same registration should
+serve many repositories. Repo scope keys are inferred from the active git
+checkout when possible, and can be passed explicitly with `scopeKey` when the
+client cannot provide a useful working directory.
 
 Agents should use `search` for scoped retrieval on demand, call `get_memory`
 only when they know the durable key they need, append raw evidence for later
