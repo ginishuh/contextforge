@@ -20,6 +20,8 @@
 - Repo-specific TUI ingest now skips transcript files whose recorded cwd is
   outside `--repoPath`, preventing global session scans from crossing repo
   scopes.
+- Checkpoint distillation now uses bounded recent raw-event windows with
+  configurable max event/character limits and records source window metadata.
 - The remote server now exposes a Streamable HTTP MCP endpoint at `/mcp`, so
   agents on multiple machines can connect directly to the same canonical memory
   store without launching a local stdio MCP bridge.

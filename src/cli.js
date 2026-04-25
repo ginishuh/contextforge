@@ -79,6 +79,8 @@ function toCoreOptions(options) {
     minEvents: options.minEvents == null ? undefined : Number(options.minEvents),
     minIntervalMs: options.minIntervalMs == null ? undefined : Number(options.minIntervalMs),
     charThreshold: options.charThreshold == null ? undefined : Number(options.charThreshold),
+    maxEvents: options.maxEvents == null ? undefined : Number(options.maxEvents),
+    maxChars: options.maxChars == null ? undefined : Number(options.maxChars),
     file: options.file,
     sessionsDir: options.sessionsDir,
     projectsDir: options.projectsDir,

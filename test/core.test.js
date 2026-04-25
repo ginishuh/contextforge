@@ -1324,6 +1324,7 @@ test('appendRaw and mock distillCheckpoint preserve raw evidence', async () => {
   });
   assert.equal(statusBefore.rawEventCount, 2);
   assert.equal(statusBefore.eventsSinceLastCheckpoint, 2);
+  assert.equal(statusBefore.distillWindow.selectedEventCount, 2);
   assert.equal(statusBefore.latestCheckpointId, null);
   assert.equal(statusBefore.shouldDistill, false);
 
@@ -1363,6 +1364,7 @@ test('appendRaw and mock distillCheckpoint preserve raw evidence', async () => {
   assert.equal(runs.length, 1);
   assert.equal(runs[0].status, 'succeeded');
   assert.equal(runs[0].outputMetadata.checkpointId, checkpoint.id);
+  assert.equal(runs[0].inputMetadata.sourceEventWindow.selectedEventCount, 2);
 
   const statusAfter = app.sessionStatus({
     scope: 'repo',
@@ -1372,7 +1374,76 @@ test('appendRaw and mock distillCheckpoint preserve raw evidence', async () => {
   });
   assert.equal(statusAfter.latestCheckpointId, checkpoint.id);
   assert.equal(statusAfter.eventsSinceLastCheckpoint, 0);
+  assert.equal(statusAfter.distillWindow.selectedEventCount, 0);
   assert.equal(statusAfter.shouldDistill, false);
+});
+
+test('distillCheckpoint uses a bounded recent raw-event window', async () => {
+  const dataDir = await makeTempDir();
+  const seen = [];
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'window_provider',
+      CONTEXTFORGE_DISTILL_MAX_EVENTS: '3',
+      CONTEXTFORGE_DISTILL_MAX_CHARS: '60',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      window_provider: async (input) => {
+        seen.push(input.rawEvents.map((event) => event.content));
+        return {
+          summaryShort: 'Window checkpoint.',
+          summaryText: 'The provider saw a bounded recent raw-event window.',
+          decisions: [],
+          todos: [],
+          openQuestions: [],
+          memoryCandidates: [],
+          sourceEventCount: input.rawEvents.length,
+          metadata: { synthetic: true },
+        };
+      },
+    },
+  });
+
+  for (let index = 0; index < 6; index += 1) {
+    app.appendRaw({
+      scope: 'repo',
+      scopeKey: 'repo-window',
+      sessionId: 'window-session',
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      content: `event-${index}`,
+    });
+  }
+
+  const status = app.sessionStatus({
+    scope: 'repo',
+    scopeKey: 'repo-window',
+    sessionId: 'window-session',
+  });
+  assert.equal(status.rawEventCount, 6);
+  assert.equal(status.distillWindow.candidateEventCount, 6);
+  assert.equal(status.distillWindow.selectedEventCount, 3);
+  assert.equal(status.distillWindow.truncated, true);
+
+  const checkpoint = await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'repo-window',
+    sessionId: 'window-session',
+  });
+  assert.deepEqual(seen[0], ['event-3', 'event-4', 'event-5']);
+  assert.equal(checkpoint.sourceEventCount, 3);
+  assert.equal(checkpoint.metadata.sourceRawEventIds.length, 3);
+  assert.equal(checkpoint.metadata.sourceEventWindow.selectedEventCount, 3);
+  assert.equal(checkpoint.metadata.sourceEventWindow.truncated, true);
+
+  const runs = app.listDistillRuns({
+    scope: 'repo',
+    scopeKey: 'repo-window',
+    sessionId: 'window-session',
+  });
+  assert.equal(runs[0].inputMetadata.rawEventIds.length, 3);
+  assert.equal(runs[0].inputMetadata.sourceEventWindow.totalRawEventCount, 6);
 });
 
 test('distillCheckpoint rejects malformed provider output and preserves raw evidence', async () => {

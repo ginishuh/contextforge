@@ -205,6 +205,12 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
         'CONTEXTFORGE_DISTILL_CHAR_THRESHOLD',
         Math.floor(codexExecMaxInputChars * 0.8),
       ),
+      maxEvents: parsePositiveInteger(env.CONTEXTFORGE_DISTILL_MAX_EVENTS, 'CONTEXTFORGE_DISTILL_MAX_EVENTS', 80),
+      maxChars: parsePositiveInteger(
+        env.CONTEXTFORGE_DISTILL_MAX_CHARS,
+        'CONTEXTFORGE_DISTILL_MAX_CHARS',
+        codexExecMaxInputChars,
+      ),
     },
   };
 }
