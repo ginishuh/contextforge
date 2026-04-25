@@ -63,6 +63,8 @@ const DOCTOR_OUTPUT_SCHEMA = {
     message: { type: 'string' },
   },
 };
+const REASONING_EFFORTS = new Set(['minimal', 'low', 'medium', 'high']);
+const KILL_GRACE_MS = 5000;
 
 function truncateText(value, maxChars) {
   const text = String(value || '');
@@ -212,10 +214,32 @@ export function runCodexExecCommand({ command, args, prompt, timeoutMs, cwd, env
     let stdout = '';
     let stderr = '';
     let settled = false;
+    let killTimer = null;
+    function cleanup() {
+      clearTimeout(timer);
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
+    }
+    function settle(fn) {
+      if (settled) return false;
+      settled = true;
+      cleanup();
+      fn();
+      return true;
+    }
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
+      clearTimeout(timer);
       child.kill('SIGTERM');
+      killTimer = setTimeout(() => {
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          // Process may already be gone.
+        }
+      }, KILL_GRACE_MS);
       reject(new Error(`codex_exec timed out after ${timeoutMs}ms.`));
     }, timeoutMs);
 
@@ -226,22 +250,26 @@ export function runCodexExecCommand({ command, args, prompt, timeoutMs, cwd, env
       stderr += chunk.toString();
     });
     child.on('error', (error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(error);
+      if (settled) {
+        cleanup();
+        return;
+      }
+      settle(() => reject(error));
     });
     child.on('close', (code, signal) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (code === 0) {
-        resolve({ stdout, stderr, code, signal });
-      } else {
-        const stderrSummary = summarizeStderr(stderr);
-        const suffix = stderrSummary ? ` ${stderrSummary}` : '';
-        reject(new Error(`codex_exec exited with code ${code}.${suffix}`));
+      if (settled) {
+        cleanup();
+        return;
       }
+      settle(() => {
+        if (code === 0) {
+          resolve({ stdout, stderr, code, signal });
+        } else {
+          const stderrSummary = summarizeStderr(stderr);
+          const suffix = stderrSummary ? ` ${stderrSummary}` : '';
+          reject(new Error(`codex_exec exited with code ${code}.${suffix}`));
+        }
+      });
     });
 
     child.stdin.end(prompt || '');
@@ -270,6 +298,11 @@ async function checkCommandAvailable({ runner, command, cwd, timeoutMs }) {
 
 function appendReasoningEffortConfig(args, reasoningEffort) {
   if (reasoningEffort) {
+    if (!REASONING_EFFORTS.has(reasoningEffort)) {
+      throw new Error(
+        `Invalid codex_exec reasoning effort "${reasoningEffort}". Expected one of: minimal, low, medium, high.`,
+      );
+    }
     args.push('-c', `model_reasoning_effort="${reasoningEffort}"`);
   }
 }

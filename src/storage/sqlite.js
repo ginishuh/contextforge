@@ -26,6 +26,7 @@ function parseJson(value, fallback) {
 
 function hydrateMemory(row) {
   if (!row) return null;
+  const tags = parseJson(row.tags_json, []);
   return {
     id: row.id,
     scopeType: row.scope_type,
@@ -33,7 +34,7 @@ function hydrateMemory(row) {
     key: row.memory_key,
     category: row.category,
     content: row.content,
-    tags: parseJson(row.tags_json, []),
+    tags: Array.isArray(tags) ? tags : [],
     importance: row.importance,
     status: row.status || 'active',
     supersedesMemoryId: row.supersedes_memory_id,
@@ -112,6 +113,10 @@ function hydrateMemoryEvent(row) {
 
 function ftsValue(value) {
   return String(value || '').replace(/\0/g, ' ');
+}
+
+function normalizeTags(tags) {
+  return Array.isArray(tags) ? tags.map((tag) => String(tag)) : [];
 }
 
 export class ContextForgeStore {
@@ -240,7 +245,7 @@ export class ContextForgeStore {
     this.ensureColumn('memories', 'status', "TEXT NOT NULL DEFAULT 'active'");
     this.ensureColumn('memories', 'supersedes_memory_id', 'TEXT');
     this.ensureColumn('memories', 'deactivated_at', 'TEXT');
-    this.rebuildMemoryFts();
+    this.ensureMemoryFts();
 
     this.db
       .prepare(`
@@ -292,11 +297,22 @@ export class ContextForgeStore {
           ftsValue(row.memory_key),
           ftsValue(row.category),
           ftsValue(row.content),
-          ftsValue(parseJson(row.tags_json, []).join(' ')),
+          ftsValue(normalizeTags(parseJson(row.tags_json, [])).join(' ')),
         );
       }
     });
     transaction(rows);
+  }
+
+  ensureMemoryFts() {
+    const schemaRow = this.db.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").get();
+    const activeCount = this.db
+      .prepare("SELECT COUNT(*) AS count FROM memories WHERE status = 'active'")
+      .get().count;
+    const ftsCount = this.db.prepare('SELECT COUNT(*) AS count FROM memory_fts').get().count;
+    if (schemaRow?.value !== String(SCHEMA_VERSION) || (activeCount > 0 && ftsCount === 0)) {
+      this.rebuildMemoryFts();
+    }
   }
 
   upsertMemoryFts(memory) {
@@ -318,7 +334,7 @@ export class ContextForgeStore {
         ftsValue(memory.key),
         ftsValue(memory.category),
         ftsValue(memory.content),
-        ftsValue(memory.tags.join(' ')),
+        ftsValue(normalizeTags(memory.tags).join(' ')),
       );
   }
 
@@ -338,6 +354,7 @@ export class ContextForgeStore {
   }) {
     if (!key) throw new Error('memory key is required.');
     if (!content) throw new Error('memory content is required.');
+    const normalizedTags = normalizeTags(tags);
 
     const id = randomUUID();
     const timestamp = nowIso();
@@ -367,7 +384,7 @@ export class ContextForgeStore {
         key,
         category,
         content,
-        json(tags, []),
+        json(normalizedTags, []),
         Number(importance),
         status,
         supersedesMemoryId,
@@ -474,7 +491,9 @@ export class ContextForgeStore {
         nowIso(),
       );
 
-    return hydrateMemory(row);
+    const memory = hydrateMemory(row);
+    this.upsertMemoryFts(memory);
+    return memory;
   }
 
   listMemoryEvents({ scopeType, scopeKey, key }) {

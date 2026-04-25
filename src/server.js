@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import crypto from 'node:crypto';
 import http from 'node:http';
 import { createContextForge } from './core.js';
 import { REMOTE_METHODS } from './remote/client.js';
@@ -41,9 +42,24 @@ function readJsonBody(request) {
   });
 }
 
+function isLoopbackHost(host) {
+  return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]';
+}
+
+function timingSafeStringEqual(actual, expected) {
+  const actualBuffer = Buffer.from(String(actual || ''));
+  const expectedBuffer = Buffer.from(String(expected || ''));
+  const maxLength = Math.max(actualBuffer.length, expectedBuffer.length, 1);
+  const paddedActual = Buffer.alloc(maxLength);
+  const paddedExpected = Buffer.alloc(maxLength);
+  actualBuffer.copy(paddedActual);
+  expectedBuffer.copy(paddedExpected);
+  return crypto.timingSafeEqual(paddedActual, paddedExpected) && actualBuffer.length === expectedBuffer.length;
+}
+
 function isAuthorized(request, token) {
   if (!token) return true;
-  return request.headers.authorization === `Bearer ${token}`;
+  return timingSafeStringEqual(request.headers.authorization, `Bearer ${token}`);
 }
 
 function serverStorageEnv(env) {
@@ -55,10 +71,10 @@ function serverStorageEnv(env) {
 }
 
 export function createContextForgeServer({ app, env = process.env } = {}) {
-  const serverApp = app || createContextForge({ env: serverStorageEnv(env) });
+  const serverApp = app || createContextForge({ env: serverStorageEnv(env), reuseStore: true });
   const authToken = env.CONTEXTFORGE_REMOTE_TOKEN || null;
 
-  return http.createServer(async (request, response) => {
+  const server = http.createServer(async (request, response) => {
     const requestUrl = new URL(request.url, 'http://localhost');
 
     if (request.method === 'GET' && requestUrl.pathname === '/healthz') {
@@ -95,9 +111,21 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
       });
     }
   });
+  server.closeContextForge = () => {
+    if (typeof serverApp.close === 'function') {
+      serverApp.close();
+    }
+  };
+  return server;
 }
 
 export function startContextForgeServer({ host = '127.0.0.1', port = 8765, env = process.env, app } = {}) {
+  if (!env.CONTEXTFORGE_REMOTE_TOKEN && !isLoopbackHost(host)) {
+    throw new Error('CONTEXTFORGE_REMOTE_TOKEN is required when binding ContextForge remote server to a non-loopback host.');
+  }
+  if (!env.CONTEXTFORGE_REMOTE_TOKEN) {
+    console.error('Warning: CONTEXTFORGE_REMOTE_TOKEN is not set; remote API is unauthenticated on loopback only.');
+  }
   const server = createContextForgeServer({ app, env });
   return new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -111,8 +139,14 @@ export function startContextForgeServer({ host = '127.0.0.1', port = 8765, env =
         close: () =>
           new Promise((closeResolve, closeReject) => {
             server.close((error) => {
-              if (error) closeReject(error);
-              else closeResolve();
+              try {
+                if (server.closeContextForge) {
+                  server.closeContextForge();
+                }
+              } finally {
+                if (error) closeReject(error);
+                else closeResolve();
+              }
             });
           }),
       });

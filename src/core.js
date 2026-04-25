@@ -98,17 +98,30 @@ export function createContextForge(options = {}) {
     return createRemoteContextForge(config, { fetchImpl: options.fetchImpl });
   }
 
+  const sharedStore = options.store || (options.reuseStore ? new ContextForgeStore({ dataDir: config.dataDir }) : null);
   const distillProviders = options.distillProviders || {};
   const codexExec = {
     ...config.codexExec,
     runner: options.codexExecRunner,
   };
+  const useStore = (fn) => {
+    if (sharedStore) {
+      return fn(sharedStore);
+    }
+    return withStore(config, fn);
+  };
 
   return {
     config,
 
+    close() {
+      if (sharedStore) {
+        sharedStore.close();
+      }
+    },
+
     dbInfo() {
-      return withStore(config, (store) => store.dbInfo());
+      return useStore((store) => store.dbInfo());
     },
 
     checkCodexExec(options = {}) {
@@ -146,7 +159,7 @@ export function createContextForge(options = {}) {
           'charThreshold',
         ),
       };
-      return withStore(config, (store) =>
+      return useStore((store) =>
         buildSessionStatus({
           scope,
           sessionId: options.sessionId,
@@ -159,7 +172,7 @@ export function createContextForge(options = {}) {
 
     remember(options) {
       const scope = normalizeScopeOptions(options, config);
-      return withStore(config, (store) =>
+      return useStore((store) =>
         store.rememberMemory({
           ...scope,
           key: options.key,
@@ -176,7 +189,7 @@ export function createContextForge(options = {}) {
       requireOption(options.key, 'key');
       requireOption(options.content, 'content');
 
-      return withStore(config, (store) =>
+      return useStore((store) =>
         store.rememberMemory({
           ...scope,
           key: options.key,
@@ -202,7 +215,7 @@ export function createContextForge(options = {}) {
       requireOption(options.key, 'key');
       requireOption(options.content, 'content');
 
-      return withStore(config, (store) => {
+      return useStore((store) => {
         const previous = store.getMemory({ ...scope, key: options.key });
         if (!previous) {
           throw new Error(`Memory not found: ${options.key}`);
@@ -230,7 +243,7 @@ export function createContextForge(options = {}) {
     deactivateMemory(options) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.key, 'key');
-      return withStore(config, (store) =>
+      return useStore((store) =>
         store.deactivateMemory({
           ...scope,
           key: options.key,
@@ -242,7 +255,7 @@ export function createContextForge(options = {}) {
     listMemoryEvents(options) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.key, 'key');
-      return withStore(config, (store) =>
+      return useStore((store) =>
         store.listMemoryEvents({
           ...scope,
           key: options.key,
@@ -252,7 +265,7 @@ export function createContextForge(options = {}) {
 
     listMemoryCandidates(options) {
       const scope = normalizeScopeOptions(options, config);
-      return withStore(config, (store) =>
+      return useStore((store) =>
         store
           .listCheckpoints({
             ...scope,
@@ -284,7 +297,7 @@ export function createContextForge(options = {}) {
     getMemory(options) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.key, 'key');
-      return withStore(config, (store) =>
+      return useStore((store) =>
         store.getMemory({
           ...scope,
           key: options.key,
@@ -295,7 +308,7 @@ export function createContextForge(options = {}) {
     search(options) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.query, 'query');
-      return withStore(config, (store) =>
+      return useStore((store) =>
         searchMemories(store, {
           ...scope,
           query: options.query,
@@ -311,7 +324,7 @@ export function createContextForge(options = {}) {
       requireOption(options.sessionId, 'sessionId');
       requireOption(options.role, 'role');
       requireOption(options.content, 'content');
-      return withStore(config, (store) =>
+      return useStore((store) =>
         store.appendRawEvent({
           ...scope,
           sessionId: options.sessionId,
@@ -331,7 +344,7 @@ export function createContextForge(options = {}) {
       });
       const providerMetadata = provider.metadata || {};
 
-      return withStore(config, async (store) => {
+      return useStore(async (store) => {
         const rawEvents = store.listRawEvents({ ...scope, sessionId: options.sessionId });
         const previousCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId });
         const conversationId =
@@ -436,7 +449,7 @@ export function createContextForge(options = {}) {
     listDistillRuns(options) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.sessionId, 'sessionId');
-      return withStore(config, (store) =>
+      return useStore((store) =>
         store.listDistillRuns({
           ...scope,
           sessionId: options.sessionId,

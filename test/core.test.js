@@ -716,6 +716,37 @@ test('codex_exec doctor reports dry and live smoke readiness through a runner', 
   assert.equal(invocations[2].timeoutMs, 1234);
 });
 
+test('codex_exec rejects unsupported reasoning effort values', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'codex_exec',
+      CONTEXTFORGE_CODEX_EXEC_REASONING_EFFORT: 'low\" other=\"x',
+    },
+    cwd: process.cwd(),
+    codexExecRunner: async () => ({ stdout: '{}' }),
+  });
+
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-invalid-reasoning',
+    sessionId: 'invalid-reasoning-session',
+    role: 'user',
+    content: 'This should fail before codex exec receives invalid config.',
+  });
+
+  await assert.rejects(
+    () =>
+      app.distillCheckpoint({
+        scope: 'repo',
+        scopeKey: 'repo-invalid-reasoning',
+        sessionId: 'invalid-reasoning-session',
+      }),
+    /Invalid codex_exec reasoning effort/,
+  );
+});
+
 test('codex_exec doctor returns structured errors', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({
@@ -734,6 +765,27 @@ test('codex_exec doctor returns structured errors', async () => {
   assert.equal(result.commandAvailable, false);
   assert.equal(result.command, 'codex-missing');
   assert.match(result.error.message, /ENOENT/);
+});
+
+test('memory tags are normalized before FTS indexing', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+
+  const memory = app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-tags',
+    key: 'string-tags',
+    content: 'String tags should not break memory indexing.',
+    tags: 'not-an-array',
+  });
+
+  assert.deepEqual(memory.tags, []);
+  const results = app.search({
+    scope: 'repo',
+    scopeKey: 'repo-tags',
+    query: 'indexing',
+  });
+  assert.equal(results[0].memory.key, 'string-tags');
 });
 
 test('codex_exec parse failures preserve raw evidence', async () => {
@@ -1100,6 +1152,20 @@ test('remote storage mode rejects unauthorized writes', async () => {
   } finally {
     await remote.close();
   }
+});
+
+test('remote server requires a token on non-loopback hosts', async () => {
+  assert.throws(
+    () =>
+      startContextForgeServer({
+        host: '0.0.0.0',
+        port: 0,
+        env: {
+          CONTEXTFORGE_DATA_DIR: '/tmp/contextforge-token-required',
+        },
+      }),
+    /CONTEXTFORGE_REMOTE_TOKEN is required/,
+  );
 });
 
 test('runtime database artifacts are ignored by git rules', async () => {
