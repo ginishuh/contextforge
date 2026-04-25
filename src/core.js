@@ -62,11 +62,11 @@ function buildSessionStatus({ scope, sessionId, rawEvents, latestCheckpoint, pol
   if (rawEventCount === 0) {
     reasons.push('no_raw_events');
   }
-  if (!latestCheckpoint && rawEventCount >= policy.minEvents) {
-    reasons.push('initial_event_threshold');
-  }
   if (!latestCheckpoint && rawCharTotal >= policy.charThreshold) {
     reasons.push('initial_char_threshold');
+  }
+  if (!latestCheckpoint && rawEventCount >= policy.minEvents && rawCharTotal >= policy.charThreshold) {
+    reasons.push('initial_event_and_char_threshold');
   }
   if (latestCheckpoint && eventsSinceLastCheckpoint.length >= policy.minEvents && elapsedMs >= policy.minIntervalMs) {
     reasons.push('events_and_interval_since_checkpoint');

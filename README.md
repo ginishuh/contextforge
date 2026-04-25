@@ -172,6 +172,13 @@ Default distill recommendation thresholds are:
 - `CONTEXTFORGE_DISTILL_CHAR_THRESHOLD`: 80% of
   `CONTEXTFORGE_CODEX_EXEC_MAX_INPUT_CHARS`, which defaults to `9600`
 
+Before the first checkpoint, `sessionStatus` recommends distillation only when
+the raw character threshold is reached. The event threshold is combined with the
+character threshold for diagnostics, but it does not trigger an initial
+checkpoint by itself. After a checkpoint exists, the event threshold is paired
+with the interval threshold, and the character threshold can trigger on its own
+to avoid overrunning the provider input budget.
+
 Use an external scheduler if you want unattended checkpoints. For example, a
 systemd timer or cron job can call:
 
