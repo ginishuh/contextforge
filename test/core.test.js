@@ -10,7 +10,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { createContextForge } from '../src/core.js';
 import { validateDistillOutput } from '../src/distill/validate.js';
-import { watchCodexSessions } from '../src/ingest/codex.js';
+import { ingestCodexRolloutFile, watchCodexSessions } from '../src/ingest/codex.js';
 import { searchMemories } from '../src/retrieval/search.js';
 import { startContextForgeServer } from '../src/server.js';
 import { SCHEMA_VERSION } from '../src/storage/sqlite.js';
@@ -711,6 +711,50 @@ test('CLI ingest can auto-distill Codex rollout evidence', async () => {
     sessionId: 'codex:codex-auto-distill-session',
   });
   assert.deepEqual(runs[0].inputMetadata.sourceProvenance, result.checkpoint.metadata.sourceProvenance);
+});
+
+test('Codex ingest preserves raw evidence when auto distill fails', async () => {
+  const dataDir = await makeTempDir();
+  const rolloutDir = await makeTempDir();
+  const file = path.join(rolloutDir, 'rollout.jsonl');
+  await writeSyntheticCodexRollout(file, 'codex-auto-fail-session');
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'failing_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      failing_provider: async () => {
+        throw new Error('synthetic provider failure');
+      },
+    },
+  });
+
+  const result = await ingestCodexRolloutFile(app, {
+    file,
+    scope: 'repo',
+    scopeKey: 'codex-auto-fail-repo',
+    distill: 'auto',
+    charThreshold: 1,
+  });
+
+  assert.equal(result.appendedEvents, 4);
+  assert.equal(result.checkpoint, null);
+  assert.match(result.checkpointError.message, /synthetic provider failure/);
+
+  const events = app.listRawEvents({
+    scope: 'repo',
+    scopeKey: 'codex-auto-fail-repo',
+    sessionId: 'codex:codex-auto-fail-session',
+  });
+  assert.equal(events.length, 4);
+  const runs = app.listDistillRuns({
+    scope: 'repo',
+    scopeKey: 'codex-auto-fail-repo',
+    sessionId: 'codex:codex-auto-fail-session',
+  });
+  assert.equal(runs[0].status, 'failed');
 });
 
 test('CLI ingest works through remote storage mode', async () => {
