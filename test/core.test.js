@@ -1345,7 +1345,8 @@ test('remote server supports configurable request body limits', async () => {
       body: '{"tooLarge":true}',
     });
     const body = await response.json();
-    assert.equal(response.status, 500);
+    assert.equal(response.status, 413);
+    assert.equal(body.error.name, 'RequestBodyTooLargeError');
     assert.match(body.error.message, /too large/);
   } finally {
     await remote.close();
