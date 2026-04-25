@@ -173,6 +173,26 @@ records by stable ingest ids, then checks `sessionStatus`. Use `--distill never`
 to capture only, `--distill auto` to distill when thresholds recommend it, or
 `--distill always` to force a checkpoint after ingest.
 
+For local machines with several active or recent Codex TUI sessions, scan the
+sessions tree instead of naming one file:
+
+```bash
+CONTEXTFORGE_STORAGE_MODE=remote \
+CONTEXTFORGE_REMOTE_URL=https://memory.example.com \
+CONTEXTFORGE_REMOTE_TOKEN=change-me \
+node src/cli.js ingestCodexSessions \
+  --sessionsDir ~/.codex/sessions \
+  --scope repo \
+  --repoPath /path/to/repo \
+  --sinceMinutes 1440 \
+  --distill auto
+```
+
+The sessions scan is safe to run repeatedly. It keeps rollout files isolated by
+their Codex session id, skips already-ingested records, and ignores a trailing
+partial JSON line from an actively-written rollout file so the next scan can
+pick it up when complete.
+
 Agents can call `sessionStatus` or the MCP `session_status` tool to inspect
 whether a session has enough new raw evidence to justify a checkpoint. The
 status response includes raw event counts, raw character counts, the latest
