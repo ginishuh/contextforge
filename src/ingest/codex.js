@@ -4,6 +4,21 @@ import path from 'node:path';
 
 const DEFAULT_MAX_CONTENT_CHARS = 8000;
 const DEFAULT_WATCH_INTERVAL_MS = 30000;
+const CODEX_AGENT_PROVENANCE = {
+  sourceAgent: 'codex',
+  sourceRuntime: 'codex_tui',
+  sourceAdapter: 'codex_rollout_jsonl',
+};
+
+function stripCodexSessionPrefix(sessionId) {
+  const text = String(sessionId || '');
+  return text.startsWith('codex:') ? text.slice('codex:'.length) : text;
+}
+
+function codexSessionId(nativeSessionId) {
+  const native = stripCodexSessionPrefix(nativeSessionId);
+  return native ? `codex:${native}` : null;
+}
 
 function truncate(value, maxChars = DEFAULT_MAX_CONTENT_CHARS) {
   const text = String(value || '');
@@ -47,8 +62,10 @@ function normalizeFunctionOutput(payload) {
 
 export function normalizeCodexRolloutRecord(record, context, options = {}) {
   if (record.type === 'session_meta') {
-    context.sessionId = context.sessionId || record.payload?.id;
-    context.conversationId = context.conversationId || record.payload?.id;
+    const nativeSessionId = record.payload?.id;
+    context.nativeSessionId = context.nativeSessionId || nativeSessionId;
+    context.sessionId = context.sessionId || codexSessionId(nativeSessionId);
+    context.conversationId = context.conversationId || codexSessionId(nativeSessionId);
     context.cwd = context.cwd || record.payload?.cwd || null;
     return null;
   }
@@ -80,7 +97,11 @@ export function normalizeCodexRolloutRecord(record, context, options = {}) {
     content: content.text,
     metadata: {
       source: 'codex_rollout_jsonl',
-      ingestId: `codex-rollout:${context.sessionId || 'unknown'}:${context.lineNumber}`,
+      ...CODEX_AGENT_PROVENANCE,
+      nativeSessionId: context.nativeSessionId || stripCodexSessionPrefix(context.sessionId) || null,
+      ingestId: `codex-rollout:${context.nativeSessionId || stripCodexSessionPrefix(context.sessionId) || 'unknown'}:${
+        context.lineNumber
+      }`,
       recordType: record.type,
       payloadType: payload.type || null,
       codexRole: payload.role || null,
@@ -93,10 +114,13 @@ export function normalizeCodexRolloutRecord(record, context, options = {}) {
 
 export async function parseCodexRolloutFile(filePath, options = {}) {
   const text = await fs.readFile(filePath, 'utf8');
+  const nativeSessionId = options.sessionId ? stripCodexSessionPrefix(options.sessionId) : null;
+  const sessionId = nativeSessionId ? codexSessionId(nativeSessionId) : null;
   const context = {
     filePath,
-    sessionId: options.sessionId || null,
-    conversationId: options.conversationId || null,
+    nativeSessionId,
+    sessionId,
+    conversationId: options.conversationId ? codexSessionId(options.conversationId) : sessionId,
     cwd: null,
     lineNumber: 0,
   };
@@ -129,8 +153,9 @@ export async function parseCodexRolloutFile(filePath, options = {}) {
   }
 
   return {
-    sessionId: options.sessionId || context.sessionId,
-    conversationId: options.conversationId || context.conversationId || context.sessionId,
+    nativeSessionId: context.nativeSessionId,
+    sessionId: context.sessionId,
+    conversationId: context.conversationId || context.sessionId,
     cwd: context.cwd,
     events,
     warnings,

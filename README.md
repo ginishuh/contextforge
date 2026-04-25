@@ -173,6 +173,15 @@ records by stable ingest ids, then checks `sessionStatus`. Use `--distill never`
 to capture only, `--distill auto` to distill when thresholds recommend it, or
 `--distill always` to force a checkpoint after ingest.
 
+Codex-ingested raw events use a namespaced session id:
+`codex:<native-codex-session-id>`. Their metadata also includes
+`sourceAgent: "codex"`, `sourceRuntime: "codex_tui"`,
+`sourceAdapter: "codex_rollout_jsonl"`, and `nativeSessionId`. Future TUI
+adapters should use the same provenance pattern, for example
+`claude_code:<native-session-id>` plus a distinct `sourceAgent` and
+`sourceAdapter`. Durable repo memory stays shared across agents; raw evidence
+and checkpoints stay attributable to the originating TUI session.
+
 For local machines with several active or recent Codex TUI sessions, scan the
 sessions tree instead of naming one file:
 
