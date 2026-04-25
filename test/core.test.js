@@ -8,8 +8,10 @@ import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { createContextForge } from '../src/core.js';
+import { validateDistillOutput } from '../src/distill/validate.js';
 import { searchMemories } from '../src/retrieval/search.js';
 import { startContextForgeServer } from '../src/server.js';
+import { SCHEMA_VERSION } from '../src/storage/sqlite.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -23,7 +25,7 @@ test('dbInfo initializes a fresh SQLite store', async () => {
 
   const info = app.dbInfo();
 
-  assert.equal(info.schemaVersion, 4);
+  assert.equal(info.schemaVersion, SCHEMA_VERSION);
   assert.equal(info.tables.memories, 0);
   assert.match(info.dbPath, /contextforge\.db$/);
 });
@@ -60,6 +62,33 @@ test('repo scope key falls back to a deterministic path key outside git', async 
     content: 'Explicit repo scope keys still win.',
   });
   assert.equal(explicit.scopeKey, 'explicit/repo');
+});
+
+test('default shared and local scopes get usable default keys', async () => {
+  const cwd = await makeTempDir();
+  const sharedApp = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: path.join(cwd, 'shared-data'),
+      CONTEXTFORGE_DEFAULT_SCOPE: 'shared',
+      CONTEXTFORGE_SHARED_SCOPE_KEY: 'team',
+    },
+    cwd,
+  });
+  const sharedMemory = sharedApp.remember({
+    key: 'shared-default',
+    content: 'Shared scope has a default key.',
+  });
+  assert.equal(sharedMemory.scopeType, 'shared');
+  assert.equal(sharedMemory.scopeKey, 'team');
+
+  const localApp = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: path.join(cwd, 'local-data'),
+      CONTEXTFORGE_DEFAULT_SCOPE: 'local',
+    },
+    cwd,
+  });
+  assert.match(localApp.config.defaultScopeKey, /^path:[a-f0-9]{16}:contextforge-test-/);
 });
 
 test('remember, getMemory, and search use explicit scopes', async () => {
@@ -296,6 +325,36 @@ test('CLI supports promoteMemory', async () => {
     { env },
   );
   assert.match(fetched.stdout, /Promoted memories are durable/);
+});
+
+test('CLI reports invalid metadata JSON clearly', async () => {
+  const dataDir = await makeTempDir();
+  const env = { ...process.env, CONTEXTFORGE_DATA_DIR: dataDir };
+
+  await assert.rejects(
+    () =>
+      execFileAsync(
+        'node',
+        [
+          'src/cli.js',
+          'appendRaw',
+          '--scope',
+          'repo',
+          '--scopeKey',
+          'cli-repo',
+          '--sessionId',
+          'cli-session',
+          '--role',
+          'user',
+          '--content',
+          'Invalid metadata should fail clearly.',
+          '--metadata',
+          '{bad',
+        ],
+        { env },
+      ),
+    /Invalid --metadata JSON/,
+  );
 });
 
 test('search can combine repo and shared scopes while excluding local by default', async () => {
@@ -585,6 +644,22 @@ test('distillCheckpoint rejects malformed provider output and preserves raw evid
   });
   assert.equal(runs[0].status, 'failed');
   assert.equal(runs[0].outputMetadata.validationFailed, true);
+});
+
+test('distill output validation includes received types', () => {
+  assert.throws(() => validateDistillOutput(null), /received null/);
+  assert.throws(
+    () =>
+      validateDistillOutput({
+        summaryShort: 'Invalid checkpoint.',
+        summaryText: 'Array fields are not valid here.',
+        decisions: 'not-array',
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [],
+      }),
+    /decisions.*received string/,
+  );
 });
 
 test('distillCheckpoint records provider failures without deleting raw evidence', async () => {
@@ -917,7 +992,7 @@ test('CLI supports the v0 workflow with synthetic data', async () => {
   const env = { ...process.env, CONTEXTFORGE_DATA_DIR: dataDir };
 
   const dbInfo = await execFileAsync('node', ['src/cli.js', 'dbInfo'], { env });
-  assert.match(dbInfo.stdout, /"schemaVersion": 4/);
+  assert.match(dbInfo.stdout, new RegExp(`"schemaVersion": ${SCHEMA_VERSION}`));
 
   await execFileAsync(
     'node',
@@ -1247,6 +1322,34 @@ test('remote server requires a token on non-loopback hosts', async () => {
       }),
     /CONTEXTFORGE_REMOTE_TOKEN is required/,
   );
+});
+
+test('remote server supports configurable request body limits', async () => {
+  const dataDir = await makeTempDir();
+  const remote = await startContextForgeServer({
+    port: 0,
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+      CONTEXTFORGE_REMOTE_MAX_BODY_BYTES: '8',
+    },
+  });
+
+  try {
+    const response = await fetch(`${remote.url}/v0/dbInfo`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer test-token',
+        'content-type': 'application/json',
+      },
+      body: '{"tooLarge":true}',
+    });
+    const body = await response.json();
+    assert.equal(response.status, 500);
+    assert.match(body.error.message, /too large/);
+  } finally {
+    await remote.close();
+  }
 });
 
 test('runtime database artifacts are ignored by git rules', async () => {

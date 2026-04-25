@@ -94,6 +94,7 @@ function normalizeSearchScopes({ scopeType, scopeKey, searchScopes, sharedScopeK
 }
 
 function scopeBoost(source) {
+  // Scope boost is intentionally a tie-breaker after lexical/FTS relevance.
   if (source.role === 'repo') return 1000;
   if (source.role === 'shared') return 100;
   return 0;
