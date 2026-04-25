@@ -63,6 +63,7 @@ function toCoreOptions(options) {
     sourceCandidateIndex: options.sourceCandidateIndex == null ? undefined : Number(options.sourceCandidateIndex),
     checkpointId: options.checkpointId,
     reason: options.reason,
+    live: options.live === true || options.live === 'true',
   };
 }
 
@@ -76,6 +77,7 @@ async function main() {
     printJson({
       commands: [
         'dbInfo',
+        'doctorCodexExec',
         'beginSession',
         'remember',
         'promoteMemory',
@@ -107,6 +109,8 @@ async function main() {
 
   if (command === 'dbInfo') {
     printJson(await app.dbInfo());
+  } else if (command === 'doctorCodexExec') {
+    printJson(await app.checkCodexExec(coreOptions));
   } else if (command === 'beginSession') {
     printJson(await app.beginSession(coreOptions));
   } else if (command === 'remember') {

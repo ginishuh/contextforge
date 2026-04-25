@@ -53,6 +53,17 @@ const OUTPUT_SCHEMA = {
   },
 };
 
+const DOCTOR_OUTPUT_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['ok', 'provider', 'message'],
+  properties: {
+    ok: { type: 'boolean' },
+    provider: { type: 'string' },
+    message: { type: 'string' },
+  },
+};
+
 function truncateText(value, maxChars) {
   const text = String(value || '');
   if (text.length <= maxChars) {
@@ -233,8 +244,127 @@ export function runCodexExecCommand({ command, args, prompt, timeoutMs, cwd, env
       }
     });
 
-    child.stdin.end(prompt);
+    child.stdin.end(prompt || '');
   });
+}
+
+function firstLine(text) {
+  return String(text || '').trim().split(/\r?\n/).find(Boolean) || '';
+}
+
+async function checkCommandAvailable({ runner, command, cwd, timeoutMs }) {
+  const result = await runner({
+    command,
+    args: ['--version'],
+    prompt: '',
+    timeoutMs,
+    cwd,
+    env: process.env,
+  });
+
+  return {
+    ok: true,
+    version: firstLine(result.stdout) || firstLine(result.stderr) || null,
+  };
+}
+
+async function runLiveSmoke({ runner, command, model, sandbox, cwd, timeoutMs }) {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'contextforge-codex-doctor-'));
+  const schemaPath = path.join(tempDir, 'doctor.schema.json');
+  const outputPath = path.join(tempDir, 'doctor.json');
+  try {
+    await fs.writeFile(schemaPath, `${JSON.stringify(DOCTOR_OUTPUT_SCHEMA, null, 2)}\n`, 'utf8');
+    const args = [
+      'exec',
+      '--skip-git-repo-check',
+      '--ephemeral',
+      '--sandbox',
+      sandbox,
+      '--cd',
+      cwd,
+      '--output-schema',
+      schemaPath,
+      '--output-last-message',
+      outputPath,
+    ];
+    if (model) {
+      args.push('--model', model);
+    }
+    args.push('-');
+
+    const prompt = [
+      'Return exactly one JSON object with these fields:',
+      '{"ok": true, "provider": "codex_exec", "message": "codex_exec smoke ok"}',
+      'No Markdown or surrounding text.',
+    ].join('\n');
+
+    const result = await runner({
+      command,
+      args,
+      prompt,
+      timeoutMs,
+      cwd,
+      env: process.env,
+    });
+    const outputText = (await readTextIfPresent(outputPath)) || result.stdout || '';
+    const output = parseCodexExecJson(outputText);
+    if (output.ok !== true || output.provider !== 'codex_exec') {
+      throw new Error('codex_exec smoke returned JSON but did not confirm provider readiness.');
+    }
+
+    return {
+      ok: true,
+      output,
+    };
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+export async function checkCodexExecProvider(options = {}) {
+  const runner = options.runner || runCodexExecCommand;
+  const command = options.command || 'codex';
+  const model = options.model || null;
+  const sandbox = options.sandbox || 'read-only';
+  const cwd = options.cwd || process.cwd();
+  const timeoutMs = options.timeoutMs || 120000;
+  const live = Boolean(options.live);
+  const result = {
+    ok: false,
+    provider: 'codex_exec',
+    command,
+    model,
+    sandbox,
+    cwd,
+    timeoutMs,
+    live,
+    promptVersion: CODEX_EXEC_PROMPT_VERSION,
+    outputSchemaVersion: CODEX_EXEC_OUTPUT_SCHEMA_VERSION,
+    commandAvailable: false,
+    version: null,
+  };
+
+  try {
+    const commandCheck = await checkCommandAvailable({ runner, command, cwd, timeoutMs });
+    result.commandAvailable = commandCheck.ok;
+    result.version = commandCheck.version;
+
+    if (live) {
+      result.smoke = await runLiveSmoke({ runner, command, model, sandbox, cwd, timeoutMs });
+    }
+
+    result.ok = true;
+    return result;
+  } catch (error) {
+    return {
+      ...result,
+      ok: false,
+      error: {
+        message: error.message,
+        name: error.name,
+      },
+    };
+  }
 }
 
 export function createCodexExecProvider(options = {}) {

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { loadConfig } from './config/index.js';
 import { createDistillProvider } from './distill/index.js';
+import { checkCodexExecProvider } from './distill/providers/codex_exec.js';
 import { validateDistillOutput } from './distill/validate.js';
 import { createRemoteContextForge } from './remote/client.js';
 import { searchMemories } from './retrieval/search.js';
@@ -45,6 +46,13 @@ export function createContextForge(options = {}) {
 
     dbInfo() {
       return withStore(config, (store) => store.dbInfo());
+    },
+
+    checkCodexExec(options = {}) {
+      return checkCodexExecProvider({
+        ...codexExec,
+        live: Boolean(options.live),
+      });
     },
 
     beginSession(options = {}) {

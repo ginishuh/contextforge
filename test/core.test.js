@@ -643,6 +643,70 @@ test('codex_exec provider distills synthetic raw events through a runner', async
   assert.equal(runs[0].outputMetadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v1');
 });
 
+test('codex_exec doctor reports dry and live smoke readiness through a runner', async () => {
+  const dataDir = await makeTempDir();
+  const invocations = [];
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_CODEX_EXEC_COMMAND: 'codex-fake',
+      CONTEXTFORGE_CODEX_EXEC_MODEL: 'gpt-test',
+      CONTEXTFORGE_CODEX_EXEC_TIMEOUT_MS: '1234',
+    },
+    cwd: process.cwd(),
+    codexExecRunner: async (args) => {
+      invocations.push(args);
+      if (args.args.includes('--version')) {
+        return { stdout: 'codex-fake 1.2.3\n' };
+      }
+      return {
+        stdout: JSON.stringify({
+          ok: true,
+          provider: 'codex_exec',
+          message: 'codex_exec smoke ok',
+        }),
+      };
+    },
+  });
+
+  const dry = await app.checkCodexExec();
+  assert.equal(dry.ok, true);
+  assert.equal(dry.commandAvailable, true);
+  assert.equal(dry.version, 'codex-fake 1.2.3');
+  assert.equal(dry.live, false);
+  assert.equal(dry.command, 'codex-fake');
+  assert.equal(dry.model, 'gpt-test');
+  assert.equal(invocations.length, 1);
+
+  const live = await app.checkCodexExec({ live: true });
+  assert.equal(live.ok, true);
+  assert.equal(live.live, true);
+  assert.equal(live.smoke.output.provider, 'codex_exec');
+  assert.ok(invocations[1].args.includes('--version'));
+  assert.ok(invocations[2].args.includes('--output-schema'));
+  assert.equal(invocations[2].timeoutMs, 1234);
+});
+
+test('codex_exec doctor returns structured errors', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_CODEX_EXEC_COMMAND: 'codex-missing',
+    },
+    cwd: process.cwd(),
+    codexExecRunner: async () => {
+      throw new Error('spawn codex-missing ENOENT');
+    },
+  });
+
+  const result = await app.checkCodexExec({ live: true });
+  assert.equal(result.ok, false);
+  assert.equal(result.commandAvailable, false);
+  assert.equal(result.command, 'codex-missing');
+  assert.match(result.error.message, /ENOENT/);
+});
+
 test('codex_exec parse failures preserve raw evidence', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({
