@@ -189,6 +189,123 @@ Current v0 remote behavior is deliberately simple:
 Do not point git at live SQLite or raw runtime data. Use git only for source,
 docs, examples, migrations, and reviewed exports.
 
+### VPS Server Setup For HTTP Remote Mode
+
+Use this path on the VPS or always-on machine that should own the canonical
+ContextForge database. Client machines should use the later "New Machine Setup"
+section instead.
+
+1. Install Node.js 20 or newer, git, and a reverse proxy such as nginx or
+Caddy.
+
+2. Create a dedicated runtime user and directories:
+
+```bash
+sudo useradd --system --create-home \
+  --home-dir /var/lib/contextforge \
+  --shell /usr/sbin/nologin \
+  contextforge
+
+sudo install -d -o contextforge -g contextforge /opt/contextforge
+sudo install -d -o contextforge -g contextforge /var/lib/contextforge
+sudo install -d -m 750 -o root -g contextforge /etc/contextforge
+```
+
+3. Install ContextForge:
+
+```bash
+sudo git clone https://github.com/ginishuh/contextforge.git /opt/contextforge
+sudo chown -R contextforge:contextforge /opt/contextforge
+cd /opt/contextforge
+sudo -u contextforge npm install --omit=dev
+```
+
+4. Create the private server environment file:
+
+```bash
+sudo install -m 640 -o root -g contextforge /dev/null /etc/contextforge/server.env
+sudoedit /etc/contextforge/server.env
+```
+
+Example contents:
+
+```bash
+CONTEXTFORGE_REMOTE_HOST=127.0.0.1
+CONTEXTFORGE_REMOTE_PORT=8765
+CONTEXTFORGE_REMOTE_TOKEN=change-me
+CONTEXTFORGE_SERVER_STORAGE_MODE=local
+CONTEXTFORGE_DATA_DIR=/var/lib/contextforge
+CONTEXTFORGE_DISTILL_PROVIDER=codex_exec
+CONTEXTFORGE_CODEX_EXEC_MODEL=gpt-5.4-mini
+CONTEXTFORGE_CODEX_EXEC_REASONING_EFFORT=low
+```
+
+Use a long random token and store the same value on client machines as
+`CONTEXTFORGE_REMOTE_TOKEN`. Do not put this file in git.
+
+5. Install a systemd service:
+
+```ini
+# /etc/systemd/system/contextforge-remote.service
+[Unit]
+Description=ContextForge remote memory server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=contextforge
+Group=contextforge
+WorkingDirectory=/opt/contextforge
+EnvironmentFile=/etc/contextforge/server.env
+ExecStart=/usr/bin/node /opt/contextforge/src/server.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and verify it:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now contextforge-remote.service
+systemctl status contextforge-remote.service
+curl -fsS http://127.0.0.1:8765/healthz
+```
+
+6. Put HTTPS in front of the local server. A minimal nginx location is:
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name memory.example.com;
+
+    ssl_certificate /etc/letsencrypt/live/memory.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/memory.example.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:8765;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+Reload the proxy and verify the public endpoint:
+
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+curl -fsS https://memory.example.com/healthz
+```
+
+After the VPS is healthy, configure each laptop, desktop, or agent host with
+the same HTTPS URL and bearer token using the next section.
+
 ### New Machine Setup For HTTP Remote Mode
 
 Use this path when another PC should share the same canonical memory server.
