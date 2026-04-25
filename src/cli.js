@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { createContextForge } from './core.js';
+import { ingestClaudeCodeFile, ingestClaudeCodeSessions, watchClaudeCodeSessions } from './ingest/claude_code.js';
 import { ingestCodexRolloutFile, ingestCodexSessions, watchCodexSessions } from './ingest/codex.js';
 import { startContextForgeServer } from './server.js';
 
@@ -80,6 +81,7 @@ function toCoreOptions(options) {
     charThreshold: options.charThreshold == null ? undefined : Number(options.charThreshold),
     file: options.file,
     sessionsDir: options.sessionsDir,
+    projectsDir: options.projectsDir,
     distill: options.distill,
     maxContentChars: options.maxContentChars == null ? undefined : Number(options.maxContentChars),
     sinceMinutes: options.sinceMinutes == null ? undefined : Number(options.sinceMinutes),
@@ -103,6 +105,7 @@ async function main() {
     sessionStatus: (app, coreOptions) => app.sessionStatus(coreOptions),
     remember: (app, coreOptions) => app.remember(coreOptions),
     promoteMemory: (app, coreOptions) => app.promoteMemory(coreOptions),
+    promoteMemoryCandidate: (app, coreOptions) => app.promoteMemoryCandidate(coreOptions),
     correctMemory: (app, coreOptions) => app.correctMemory(coreOptions),
     deactivateMemory: (app, coreOptions) => app.deactivateMemory(coreOptions),
     listMemoryEvents: (app, coreOptions) => app.listMemoryEvents(coreOptions),
@@ -123,6 +126,16 @@ async function main() {
             },
           })
         : ingestCodexSessions(app, coreOptions),
+    ingestClaudeCodeFile: (app, coreOptions) => ingestClaudeCodeFile(app, coreOptions),
+    ingestClaudeCodeSessions: (app, coreOptions) =>
+      coreOptions.watch
+        ? watchClaudeCodeSessions(app, {
+            ...coreOptions,
+            onResult: (result) => {
+              console.log(JSON.stringify(result));
+            },
+          })
+        : ingestClaudeCodeSessions(app, coreOptions),
   };
 
   if (!command || command === 'help' || command === '--help') {

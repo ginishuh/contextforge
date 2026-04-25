@@ -310,6 +310,48 @@ export function createContextForge(options = {}) {
       );
     },
 
+    promoteMemoryCandidate(options) {
+      const scope = normalizeScopeOptions(options, config);
+      requireOption(options.checkpointId, 'checkpointId');
+      const candidateIndex = options.sourceCandidateIndex == null ? 0 : options.sourceCandidateIndex;
+      return useStore((store) => {
+        const checkpoint = store
+          .listCheckpoints({
+            ...scope,
+            sessionId: options.sessionId || null,
+          })
+          .find((item) => item.id === options.checkpointId);
+        if (!checkpoint) {
+          throw new Error(`Checkpoint not found: ${options.checkpointId}`);
+        }
+        const candidates = checkpoint.metadata?.memoryCandidates || [];
+        const candidate = candidates[candidateIndex];
+        if (!candidate) {
+          throw new Error(`Memory candidate not found at index ${candidateIndex}.`);
+        }
+        const key = options.key || candidate.key;
+        requireOption(key, 'key');
+        const content = options.content || candidate.content;
+        requireOption(content, 'content');
+        return store.rememberMemory({
+          ...scope,
+          key,
+          content,
+          category: options.category || candidate.category || 'note',
+          tags: options.tags?.length ? options.tags : candidate.tags || [],
+          importance: options.importance == null ? candidate.importance || 0 : options.importance,
+          eventType: 'promote',
+          eventMetadata: {
+            sourceCheckpointId: checkpoint.id,
+            sourceSessionId: checkpoint.sessionId,
+            sourceCandidateIndex: candidateIndex,
+            sourceRawEventIds: options.sourceRawEventIds || [],
+            reason: options.reason || null,
+          },
+        });
+      });
+    },
+
     getMemory(options) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.key, 'key');

@@ -225,6 +225,42 @@ Repeated watch scans do not spend model tokens while capturing raw evidence;
 model usage happens only when `--distill auto` decides to checkpoint or
 `--distill always` is set.
 
+To install that Codex watch loop as a systemd user service:
+
+```bash
+CONTEXTFORGE_REMOTE_URL=https://memory.example.com \
+scripts/install-codex-watch-service.sh \
+  --name contextforge \
+  --repo-path /path/to/repo \
+  --token-env-file ~/.config/contextforge/server.env \
+  --distill auto
+```
+
+The token env file should define `CONTEXTFORGE_REMOTE_TOKEN`. The installer
+creates and starts a `contextforge-codex-watch-<name>.service` user unit. Use
+`systemctl --user status contextforge-codex-watch-<name>.service` to inspect
+logs and health.
+
+Claude Code transcripts can be ingested with the same model:
+
+```bash
+CONTEXTFORGE_STORAGE_MODE=remote \
+CONTEXTFORGE_REMOTE_URL=https://memory.example.com \
+CONTEXTFORGE_REMOTE_TOKEN=change-me \
+node src/cli.js ingestClaudeCodeSessions \
+  --projectsDir ~/.claude/projects \
+  --scope repo \
+  --repoPath /path/to/repo \
+  --sinceMinutes 1440 \
+  --distill auto
+```
+
+Claude Code sessions are stored as `claude_code:<native-session-id>` with
+`sourceAgent: "claude_code"`, `sourceRuntime: "claude_code_tui"`, and
+`sourceAdapter: "claude_code_jsonl"` metadata. This lets Codex and Claude Code
+share durable repo memory while keeping raw evidence and checkpoints
+attributable to the originating TUI.
+
 Agents can call `sessionStatus` or the MCP `session_status` tool to inspect
 whether a session has enough new raw evidence to justify a checkpoint. The
 status response includes raw event counts, raw character counts, the latest
@@ -373,6 +409,18 @@ node src/cli.js promoteMemory \
   --key retrieval-policy \
   --content "Search repo and shared memory before loading raw evidence." \
   --sourceCheckpointId checkpoint-id \
+  --reason "Reviewed and accepted by the maintainer."
+```
+
+If the checkpoint already contains a reviewed memory candidate, promote it by
+checkpoint id and candidate index without copying the candidate fields by hand:
+
+```bash
+node src/cli.js promoteMemoryCandidate \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --checkpointId checkpoint-id \
+  --sourceCandidateIndex 0 \
   --reason "Reviewed and accepted by the maintainer."
 ```
 
