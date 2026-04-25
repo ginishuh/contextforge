@@ -1390,6 +1390,47 @@ test('remote storage mode resolves repoPath before sending scoped calls', async 
   }
 });
 
+test('remote storage mode strips local path hints after resolving scope', async () => {
+  const appCwd = await makeTempDir();
+  const repoPath = await makeGitRepo('https://github.com/example/remote-strip-repo.git');
+  let postedBody = null;
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_STORAGE_MODE: 'remote',
+      CONTEXTFORGE_REMOTE_URL: 'https://memory.example.test',
+      CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+    },
+    cwd: appCwd,
+    fetchImpl: async (_url, request) => {
+      postedBody = JSON.parse(request.body);
+      return {
+        ok: true,
+        text: async () =>
+          JSON.stringify({
+            result: {
+              key: postedBody.key,
+              scopeType: postedBody.scopeType,
+              scopeKey: postedBody.scopeKey,
+            },
+          }),
+      };
+    },
+  });
+
+  const memory = await app.remember({
+    scope: 'repo',
+    repoPath,
+    cwd: appCwd,
+    key: 'remote-strip-paths',
+    content: 'Remote payloads should not include local paths.',
+  });
+
+  assert.equal(memory.scopeKey, 'github.com/example/remote-strip-repo');
+  assert.equal(postedBody.scopeKey, 'github.com/example/remote-strip-repo');
+  assert.equal(postedBody.repoPath, undefined);
+  assert.equal(postedBody.cwd, undefined);
+});
+
 test('remote storage mode rejects unauthorized writes', async () => {
   const dataDir = await makeTempDir();
   const remote = await startContextForgeServer({
