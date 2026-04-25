@@ -85,6 +85,16 @@ async function writeSyntheticCodexRollout(filePath, sessionId = 'codex-rollout-s
   await fs.writeFile(filePath, `${records.map((record) => JSON.stringify(record)).join('\n')}\n`);
 }
 
+async function writeSyntheticSessionsTree(rootDir) {
+  const first = path.join(rootDir, '2026', '04', '25', 'rollout-first.jsonl');
+  const second = path.join(rootDir, '2026', '04', '25', 'rollout-second.jsonl');
+  await fs.mkdir(path.dirname(first), { recursive: true });
+  await writeSyntheticCodexRollout(first, 'codex-session-first');
+  await writeSyntheticCodexRollout(second, 'codex-session-second');
+  await fs.appendFile(second, '{"timestamp":"2026-04-25T00:00:06.000Z","type":"response_item"');
+  return { first, second };
+}
+
 test('dbInfo initializes a fresh SQLite store', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
@@ -639,6 +649,115 @@ test('CLI ingest works through remote storage mode', async () => {
   } finally {
     await remote.close();
   }
+});
+
+test('CLI ingests multiple Codex session rollout files safely', async () => {
+  const dataDir = await makeTempDir();
+  const sessionsDir = await makeTempDir();
+  await writeSyntheticSessionsTree(sessionsDir);
+  const env = {
+    ...process.env,
+    CONTEXTFORGE_DATA_DIR: dataDir,
+  };
+
+  const first = await execFileAsync(
+    'node',
+    [
+      'src/cli.js',
+      'ingestCodexSessions',
+      '--sessionsDir',
+      sessionsDir,
+      '--scope',
+      'repo',
+      '--scopeKey',
+      'codex-multi-session-repo',
+      '--distill',
+      'never',
+    ],
+    { env },
+  );
+  const firstResult = JSON.parse(first.stdout);
+  assert.equal(firstResult.filesScanned, 2);
+  assert.equal(firstResult.parsedEvents, 8);
+  assert.equal(firstResult.appendedEvents, 8);
+  assert.equal(firstResult.skippedEvents, 0);
+  assert.deepEqual(
+    firstResult.fileResults.map((result) => result.sessionId).sort(),
+    ['codex-session-first', 'codex-session-second'],
+  );
+  assert.equal(firstResult.fileResults.some((result) => result.warnings.length > 0), true);
+
+  const second = await execFileAsync(
+    'node',
+    [
+      'src/cli.js',
+      'ingestCodexSessions',
+      '--sessionsDir',
+      sessionsDir,
+      '--scope',
+      'repo',
+      '--scopeKey',
+      'codex-multi-session-repo',
+      '--distill',
+      'never',
+    ],
+    { env },
+  );
+  const secondResult = JSON.parse(second.stdout);
+  assert.equal(secondResult.filesScanned, 2);
+  assert.equal(secondResult.appendedEvents, 0);
+  assert.equal(secondResult.skippedEvents, 8);
+
+  const app = createContextForge({ env, cwd: process.cwd() });
+  const firstEvents = app.listRawEvents({
+    scope: 'repo',
+    scopeKey: 'codex-multi-session-repo',
+    sessionId: 'codex-session-first',
+  });
+  const secondEvents = app.listRawEvents({
+    scope: 'repo',
+    scopeKey: 'codex-multi-session-repo',
+    sessionId: 'codex-session-second',
+  });
+  assert.equal(firstEvents.length, 4);
+  assert.equal(secondEvents.length, 4);
+});
+
+test('CLI Codex sessions scan is not capped by search limit defaults', async () => {
+  const dataDir = await makeTempDir();
+  const sessionsDir = await makeTempDir();
+  const rolloutDir = path.join(sessionsDir, '2026', '04', '25');
+  await fs.mkdir(rolloutDir, { recursive: true });
+  for (let index = 0; index < 11; index += 1) {
+    await writeSyntheticCodexRollout(
+      path.join(rolloutDir, `rollout-${String(index).padStart(2, '0')}.jsonl`),
+      `codex-session-${index}`,
+    );
+  }
+  const env = {
+    ...process.env,
+    CONTEXTFORGE_DATA_DIR: dataDir,
+  };
+
+  const result = await execFileAsync(
+    'node',
+    [
+      'src/cli.js',
+      'ingestCodexSessions',
+      '--sessionsDir',
+      sessionsDir,
+      '--scope',
+      'repo',
+      '--scopeKey',
+      'codex-uncapped-session-repo',
+      '--distill',
+      'never',
+    ],
+    { env },
+  );
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.filesScanned, 11);
+  assert.equal(parsed.appendedEvents, 44);
 });
 
 test('search can combine repo and shared scopes while excluding local by default', async () => {

@@ -1,4 +1,6 @@
 import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 const DEFAULT_MAX_CONTENT_CHARS = 8000;
 
@@ -98,11 +100,27 @@ export async function parseCodexRolloutFile(filePath, options = {}) {
     lineNumber: 0,
   };
   const events = [];
+  const warnings = [];
+  const lines = text.split(/\r?\n/);
 
-  for (const line of text.split(/\r?\n/)) {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
     context.lineNumber += 1;
     if (!line.trim()) continue;
-    const record = JSON.parse(line);
+    let record;
+    try {
+      record = JSON.parse(line);
+    } catch (error) {
+      if (index === lines.length - 1 || index === lines.length - 2) {
+        warnings.push({
+          type: 'partial_json_line',
+          lineNumber: context.lineNumber,
+          message: error.message,
+        });
+        continue;
+      }
+      throw error;
+    }
     const event = normalizeCodexRolloutRecord(record, context, options);
     if (event) {
       events.push(event);
@@ -114,6 +132,7 @@ export async function parseCodexRolloutFile(filePath, options = {}) {
     conversationId: options.conversationId || context.conversationId || context.sessionId,
     cwd: context.cwd,
     events,
+    warnings,
   };
 }
 
@@ -188,7 +207,72 @@ export async function ingestCodexRolloutFile(app, options = {}) {
     parsedEvents: parsed.events.length,
     appendedEvents: appended.length,
     skippedEvents: skipped,
+    warnings: parsed.warnings,
     status,
     checkpoint,
+  };
+}
+
+async function walkFiles(rootDir) {
+  let entries;
+  try {
+    entries = await fs.readdir(rootDir, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return [];
+    }
+    throw error;
+  }
+  const files = [];
+  for (const entry of entries) {
+    const entryPath = path.join(rootDir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...(await walkFiles(entryPath)));
+    } else if (entry.isFile()) {
+      files.push(entryPath);
+    }
+  }
+  return files;
+}
+
+function defaultSessionsDir() {
+  return path.join(os.homedir(), '.codex', 'sessions');
+}
+
+export async function discoverCodexRolloutFiles(options = {}) {
+  const sessionsDir = path.resolve(options.sessionsDir || defaultSessionsDir());
+  const files = (await walkFiles(sessionsDir)).filter(
+    (file) => path.basename(file).startsWith('rollout-') && file.endsWith('.jsonl'),
+  );
+  const stats = await Promise.all(
+    files.map(async (file) => ({
+      file,
+      stat: await fs.stat(file),
+    })),
+  );
+  const sinceMs = options.sinceMinutes == null ? null : Date.now() - Number(options.sinceMinutes) * 60 * 1000;
+  return stats
+    .filter((item) => sinceMs == null || item.stat.mtimeMs >= sinceMs)
+    .sort((a, b) => a.stat.mtimeMs - b.stat.mtimeMs || a.file.localeCompare(b.file))
+    .slice(0, options.scanLimit == null ? undefined : Number(options.scanLimit))
+    .map((item) => item.file);
+}
+
+export async function ingestCodexSessions(app, options = {}) {
+  const files = options.file ? [options.file] : await discoverCodexRolloutFiles(options);
+  const results = [];
+  for (const file of files) {
+    results.push(await ingestCodexRolloutFile(app, { ...options, file }));
+  }
+
+  return {
+    source: 'codex_sessions',
+    sessionsDir: path.resolve(options.sessionsDir || defaultSessionsDir()),
+    filesScanned: files.length,
+    parsedEvents: results.reduce((total, result) => total + result.parsedEvents, 0),
+    appendedEvents: results.reduce((total, result) => total + result.appendedEvents, 0),
+    skippedEvents: results.reduce((total, result) => total + result.skippedEvents, 0),
+    checkpointsCreated: results.filter((result) => result.checkpoint).length,
+    fileResults: results,
   };
 }

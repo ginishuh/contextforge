@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createContextForge } from './core.js';
-import { ingestCodexRolloutFile } from './ingest/codex.js';
+import { ingestCodexRolloutFile, ingestCodexSessions } from './ingest/codex.js';
 import { startContextForgeServer } from './server.js';
 
 function parseArgs(argv) {
@@ -79,8 +79,11 @@ function toCoreOptions(options) {
     minIntervalMs: options.minIntervalMs == null ? undefined : Number(options.minIntervalMs),
     charThreshold: options.charThreshold == null ? undefined : Number(options.charThreshold),
     file: options.file,
+    sessionsDir: options.sessionsDir,
     distill: options.distill,
     maxContentChars: options.maxContentChars == null ? undefined : Number(options.maxContentChars),
+    sinceMinutes: options.sinceMinutes == null ? undefined : Number(options.sinceMinutes),
+    scanLimit: options.scanLimit == null ? undefined : Number(options.scanLimit),
   };
 }
 
@@ -108,6 +111,7 @@ async function main() {
     distillCheckpoint: (app, coreOptions) => app.distillCheckpoint(coreOptions),
     listDistillRuns: (app, coreOptions) => app.listDistillRuns(coreOptions),
     ingestCodexRollout: (app, coreOptions) => ingestCodexRolloutFile(app, coreOptions),
+    ingestCodexSessions: (app, coreOptions) => ingestCodexSessions(app, coreOptions),
   };
 
   if (!command || command === 'help' || command === '--help') {
