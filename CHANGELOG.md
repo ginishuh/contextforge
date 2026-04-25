@@ -11,6 +11,12 @@
   with per-iteration JSON logs and bounded `--iterations` smoke checks.
 - Codex ingest now namespaces session ids as `codex:<native-session-id>` and
   records standard agent/runtime provenance metadata for future multi-TUI use.
+- Added Claude Code JSONL ingestion with `claude_code:<native-session-id>`
+  session namespacing and the same raw evidence/checkpoint provenance model.
+- Added `promoteMemoryCandidate` so reviewed checkpoint candidates can be
+  promoted from CLI without copying candidate fields manually.
+- Added a systemd user service installer for long-running Codex watch ingest
+  against a remote ContextForge server.
 - The remote server now exposes a Streamable HTTP MCP endpoint at `/mcp`, so
   agents on multiple machines can connect directly to the same canonical memory
   store without launching a local stdio MCP bridge.

@@ -86,6 +86,62 @@ async function writeSyntheticCodexRollout(filePath, sessionId = 'codex-rollout-s
   await fs.writeFile(filePath, `${records.map((record) => JSON.stringify(record)).join('\n')}\n`);
 }
 
+async function writeSyntheticClaudeCodeTranscript(filePath, sessionId = 'claude-code-session') {
+  const records = [
+    {
+      type: 'summary',
+      sessionId,
+      timestamp: '2026-04-25T00:00:00.000Z',
+      content: 'Summaries should not be captured as raw dialogue.',
+    },
+    {
+      type: 'user',
+      sessionId,
+      uuid: 'claude-user-1',
+      cwd: path.dirname(filePath),
+      timestamp: '2026-04-25T00:00:01.000Z',
+      message: {
+        role: 'user',
+        content: 'Continue the ContextForge Claude Code ingest work.',
+      },
+    },
+    {
+      type: 'assistant',
+      sessionId,
+      uuid: 'claude-assistant-tool',
+      cwd: path.dirname(filePath),
+      timestamp: '2026-04-25T00:00:02.000Z',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'toolu_1', name: 'Read', input: { file_path: 'README.md' } }],
+      },
+    },
+    {
+      type: 'user',
+      sessionId,
+      uuid: 'claude-tool-result',
+      cwd: path.dirname(filePath),
+      timestamp: '2026-04-25T00:00:03.000Z',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'README contents.' }],
+      },
+    },
+    {
+      type: 'assistant',
+      sessionId,
+      uuid: 'claude-assistant-1',
+      cwd: path.dirname(filePath),
+      timestamp: '2026-04-25T00:00:04.000Z',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'I added Claude Code transcript ingestion.' }],
+      },
+    },
+  ];
+  await fs.writeFile(filePath, `${records.map((record) => JSON.stringify(record)).join('\n')}\n`);
+}
+
 async function appendSyntheticCodexAssistantMessage(filePath, text) {
   const record = {
     timestamp: '2026-04-25T00:00:06.000Z',
@@ -333,6 +389,31 @@ test('memory candidates require explicit promotion and can be corrected or deact
   assert.equal(candidates[0].index, 0);
   assert.equal(candidates[0].candidate.key, 'candidate-rule');
 
+  const promotedFromCandidate = app.promoteMemoryCandidate({
+    scope: 'repo',
+    scopeKey: 'repo-promote',
+    checkpointId: checkpoint.id,
+    sourceCandidateIndex: 0,
+    key: 'candidate-rule-via-helper',
+    reason: 'Reviewed via helper.',
+  });
+  assert.equal(promotedFromCandidate.key, 'candidate-rule-via-helper');
+  assert.equal(promotedFromCandidate.content, candidates[0].candidate.content);
+
+  const helperEvents = app.listMemoryEvents({
+    scope: 'repo',
+    scopeKey: 'repo-promote',
+    key: 'candidate-rule-via-helper',
+  });
+  assert.equal(helperEvents[0].metadata.sourceCheckpointId, checkpoint.id);
+  assert.equal(helperEvents[0].metadata.sourceSessionId, 'candidate-session');
+  app.deactivateMemory({
+    scope: 'repo',
+    scopeKey: 'repo-promote',
+    key: 'candidate-rule-via-helper',
+    reason: 'Keep the helper assertion isolated from search assertions.',
+  });
+
   const promoted = app.promoteMemory({
     scope: 'repo',
     scopeKey: 'repo-promote',
@@ -380,7 +461,7 @@ test('memory candidates require explicit promotion and can be corrected or deact
   const searchBeforeDeactivate = app.search({
     scope: 'repo',
     scopeKey: 'repo-promote',
-    query: 'agent review',
+    query: 'human agent review',
   });
   assert.equal(searchBeforeDeactivate.length, 1);
   assert.equal(searchBeforeDeactivate[0].memory.key, 'candidate-rule');
@@ -834,6 +915,85 @@ test('CLI Codex sessions scan is not capped by search limit defaults', async () 
   const parsed = JSON.parse(result.stdout);
   assert.equal(parsed.filesScanned, 11);
   assert.equal(parsed.appendedEvents, 44);
+});
+
+test('CLI ingests Claude Code JSONL transcripts with agent provenance', async () => {
+  const dataDir = await makeTempDir();
+  const projectsDir = await makeTempDir();
+  const file = path.join(projectsDir, 'project-a', 'claude-session.jsonl');
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await writeSyntheticClaudeCodeTranscript(file, 'claude-native-session');
+  await fs.appendFile(file, '{"type":"assistant","sessionId":"claude-native-session"');
+  const env = {
+    ...process.env,
+    CONTEXTFORGE_DATA_DIR: dataDir,
+  };
+
+  const first = await execFileAsync(
+    'node',
+    [
+      'src/cli.js',
+      'ingestClaudeCodeSessions',
+      '--projectsDir',
+      projectsDir,
+      '--scope',
+      'repo',
+      '--scopeKey',
+      'claude-code-repo',
+      '--distill',
+      'never',
+    ],
+    { env },
+  );
+  const firstResult = JSON.parse(first.stdout);
+  assert.equal(firstResult.filesScanned, 1);
+  assert.equal(firstResult.parsedEvents, 4);
+  assert.equal(firstResult.appendedEvents, 4);
+  assert.equal(firstResult.fileResults[0].sessionId, 'claude_code:claude-native-session');
+  assert.equal(firstResult.fileResults[0].warnings.length, 1);
+
+  const second = await execFileAsync(
+    'node',
+    [
+      'src/cli.js',
+      'ingestClaudeCodeSessions',
+      '--projectsDir',
+      projectsDir,
+      '--scope',
+      'repo',
+      '--scopeKey',
+      'claude-code-repo',
+      '--distill',
+      'never',
+    ],
+    { env },
+  );
+  const secondResult = JSON.parse(second.stdout);
+  assert.equal(secondResult.appendedEvents, 0);
+  assert.equal(secondResult.skippedEvents, 4);
+
+  const rawEvents = await execFileAsync(
+    'node',
+    [
+      'src/cli.js',
+      'listRawEvents',
+      '--scope',
+      'repo',
+      '--scopeKey',
+      'claude-code-repo',
+      '--sessionId',
+      'claude_code:claude-native-session',
+    ],
+    { env },
+  );
+  const events = JSON.parse(rawEvents.stdout);
+  assert.deepEqual(
+    events.map((event) => event.role),
+    ['user', 'tool_call', 'tool_result', 'assistant'],
+  );
+  assert.ok(events.every((event) => event.metadata.sourceAgent === 'claude_code'));
+  assert.ok(events.every((event) => event.metadata.sourceAdapter === 'claude_code_jsonl'));
+  assert.ok(events.every((event) => event.metadata.nativeSessionId === 'claude-native-session'));
 });
 
 test('search can combine repo and shared scopes while excluding local by default', async () => {

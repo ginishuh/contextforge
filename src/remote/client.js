@@ -7,6 +7,7 @@ const REMOTE_METHODS = [
   'sessionStatus',
   'remember',
   'promoteMemory',
+  'promoteMemoryCandidate',
   'correctMemory',
   'deactivateMemory',
   'listMemoryEvents',

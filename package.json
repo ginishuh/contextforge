@@ -10,6 +10,7 @@
   },
   "files": [
     "src",
+    "scripts",
     "examples",
     "README.md",
     "LICENSE"
