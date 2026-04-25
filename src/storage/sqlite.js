@@ -3,7 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 
-const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 4;
 
 function nowIso() {
   return new Date().toISOString();

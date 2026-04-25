@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 import crypto from 'node:crypto';
 import http from 'node:http';
+import { pathToFileURL } from 'node:url';
 import { createContextForge } from './core.js';
 import { REMOTE_METHODS } from './remote/client.js';
 
 const METHOD_SET = new Set(REMOTE_METHODS);
-const MAX_BODY_BYTES = 1024 * 1024;
+const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
 
 function sendJson(response, statusCode, body) {
   response.writeHead(statusCode, {
@@ -14,21 +15,38 @@ function sendJson(response, statusCode, body) {
   response.end(`${JSON.stringify(body, null, 2)}\n`);
 }
 
-function readJsonBody(request) {
+function parseMaxBodyBytes(env) {
+  const value = env.CONTEXTFORGE_REMOTE_MAX_BODY_BYTES;
+  if (value == null || value === '') {
+    return DEFAULT_MAX_BODY_BYTES;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error('CONTEXTFORGE_REMOTE_MAX_BODY_BYTES must be a positive integer.');
+  }
+  return parsed;
+}
+
+function readJsonBody(request, { maxBodyBytes = DEFAULT_MAX_BODY_BYTES } = {}) {
   return new Promise((resolve, reject) => {
     let size = 0;
     let body = '';
+    let tooLarge = false;
     request.on('data', (chunk) => {
       size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
+      if (size > maxBodyBytes) {
+        if (tooLarge) return;
+        tooLarge = true;
         reject(new Error('Request body is too large.'));
-        request.destroy();
         return;
       }
       body += chunk.toString();
     });
     request.on('error', reject);
     request.on('end', () => {
+      if (tooLarge) {
+        return;
+      }
       if (!body.trim()) {
         resolve({});
         return;
@@ -73,6 +91,7 @@ function serverStorageEnv(env) {
 export function createContextForgeServer({ app, env = process.env } = {}) {
   const serverApp = app || createContextForge({ env: serverStorageEnv(env), reuseStore: true });
   const authToken = env.CONTEXTFORGE_REMOTE_TOKEN || null;
+  const maxBodyBytes = parseMaxBodyBytes(env);
 
   const server = http.createServer(async (request, response) => {
     const requestUrl = new URL(request.url, 'http://localhost');
@@ -99,7 +118,7 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
     }
 
     try {
-      const options = await readJsonBody(request);
+      const options = await readJsonBody(request, { maxBodyBytes });
       const result = await serverApp[method](options);
       sendJson(response, 200, { result });
     } catch (error) {
@@ -161,7 +180,7 @@ async function main() {
   console.log(JSON.stringify({ listening: instance.url }, null, 2));
 }
 
-if (process.argv[1] && import.meta.url === new URL(process.argv[1], 'file:').href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((error) => {
     console.error(error.message);
     process.exitCode = 1;

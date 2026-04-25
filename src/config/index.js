@@ -106,6 +106,16 @@ function pathScopeKey(cwd) {
   return `path:${digest}:${path.basename(resolved) || 'root'}`;
 }
 
+function defaultScopeKeyFor(scope, cwd, sharedScopeKey) {
+  if (scope === 'repo') {
+    return inferRepoScopeKey(cwd);
+  }
+  if (scope === 'shared') {
+    return sharedScopeKey;
+  }
+  return pathScopeKey(cwd);
+}
+
 function inferRepoScopeKey(cwd) {
   const gitRoot = findGitRoot(cwd);
   if (!gitRoot) {
@@ -134,8 +144,8 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
   const dataDir = env.CONTEXTFORGE_DATA_DIR
     ? path.resolve(cwd, env.CONTEXTFORGE_DATA_DIR)
     : storageMode === 'local'
-      ? path.join(env.HOME || os.homedir(), '.contextforge')
-    : path.join(cwd, '.contextforge');
+        ? path.join(env.HOME || os.homedir(), '.contextforge')
+        : path.join(cwd, '.contextforge');
 
   const defaultScope = env.CONTEXTFORGE_DEFAULT_SCOPE || 'repo';
   if (!VALID_SCOPES.has(defaultScope)) {
@@ -146,14 +156,16 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
     'CONTEXTFORGE_CODEX_EXEC_MAX_INPUT_CHARS',
     12000,
   );
+  const defaultSharedScopeKey = env.CONTEXTFORGE_SHARED_SCOPE_KEY || 'global';
+  const defaultScopeKey =
+    env.CONTEXTFORGE_DEFAULT_SCOPE_KEY || defaultScopeKeyFor(defaultScope, cwd, defaultSharedScopeKey);
 
   return {
     storageMode,
     dataDir,
     defaultScope,
-    defaultScopeKey:
-      env.CONTEXTFORGE_DEFAULT_SCOPE_KEY || (defaultScope === 'repo' ? inferRepoScopeKey(cwd) : null),
-    defaultSharedScopeKey: env.CONTEXTFORGE_SHARED_SCOPE_KEY || 'global',
+    defaultScopeKey,
+    defaultSharedScopeKey,
     distillProvider: env.CONTEXTFORGE_DISTILL_PROVIDER || 'mock',
     remote: {
       url: env.CONTEXTFORGE_REMOTE_URL || null,

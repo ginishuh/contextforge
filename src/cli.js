@@ -35,6 +35,14 @@ function parseArgs(argv) {
 
 function toCoreOptions(options) {
   const tags = options.tag || options.tags;
+  let metadata = {};
+  if (options.metadata) {
+    try {
+      metadata = JSON.parse(options.metadata);
+    } catch (error) {
+      throw new Error(`Invalid --metadata JSON: ${error.message}`);
+    }
+  }
   return {
     scope: options.scope,
     scopeKey: options.scopeKey,
@@ -51,7 +59,7 @@ function toCoreOptions(options) {
     conversationId: options.conversationId,
     role: options.role,
     provider: options.provider,
-    metadata: options.metadata ? JSON.parse(options.metadata) : {},
+    metadata,
     sourceCheckpointId: options.sourceCheckpointId,
     sourceSessionId: options.sourceSessionId,
     sourceRawEventIds: options.sourceRawEventIds
@@ -76,26 +84,27 @@ function printJson(value) {
 
 async function main() {
   const { command, options } = parseArgs(process.argv);
+  const commands = {
+    dbInfo: (app) => app.dbInfo(),
+    doctorCodexExec: (app, coreOptions) => app.checkCodexExec(coreOptions),
+    beginSession: (app, coreOptions) => app.beginSession(coreOptions),
+    sessionStatus: (app, coreOptions) => app.sessionStatus(coreOptions),
+    remember: (app, coreOptions) => app.remember(coreOptions),
+    promoteMemory: (app, coreOptions) => app.promoteMemory(coreOptions),
+    correctMemory: (app, coreOptions) => app.correctMemory(coreOptions),
+    deactivateMemory: (app, coreOptions) => app.deactivateMemory(coreOptions),
+    listMemoryEvents: (app, coreOptions) => app.listMemoryEvents(coreOptions),
+    listMemoryCandidates: (app, coreOptions) => app.listMemoryCandidates(coreOptions),
+    search: (app, coreOptions) => app.search(coreOptions),
+    getMemory: (app, coreOptions) => app.getMemory(coreOptions),
+    appendRaw: (app, coreOptions) => app.appendRaw(coreOptions),
+    distillCheckpoint: (app, coreOptions) => app.distillCheckpoint(coreOptions),
+    listDistillRuns: (app, coreOptions) => app.listDistillRuns(coreOptions),
+  };
+
   if (!command || command === 'help' || command === '--help') {
     printJson({
-      commands: [
-        'dbInfo',
-        'doctorCodexExec',
-        'beginSession',
-        'sessionStatus',
-        'remember',
-        'promoteMemory',
-        'correctMemory',
-        'deactivateMemory',
-        'listMemoryEvents',
-        'listMemoryCandidates',
-        'search',
-        'getMemory',
-        'appendRaw',
-        'distillCheckpoint',
-        'listDistillRuns',
-        'serve',
-      ],
+      commands: [...Object.keys(commands), 'serve'],
     });
     return;
   }
@@ -110,40 +119,11 @@ async function main() {
 
   const app = createContextForge();
   const coreOptions = toCoreOptions(options);
-
-  if (command === 'dbInfo') {
-    printJson(await app.dbInfo());
-  } else if (command === 'doctorCodexExec') {
-    printJson(await app.checkCodexExec(coreOptions));
-  } else if (command === 'beginSession') {
-    printJson(await app.beginSession(coreOptions));
-  } else if (command === 'sessionStatus') {
-    printJson(await app.sessionStatus(coreOptions));
-  } else if (command === 'remember') {
-    printJson(await app.remember(coreOptions));
-  } else if (command === 'promoteMemory') {
-    printJson(await app.promoteMemory(coreOptions));
-  } else if (command === 'correctMemory') {
-    printJson(await app.correctMemory(coreOptions));
-  } else if (command === 'deactivateMemory') {
-    printJson(await app.deactivateMemory(coreOptions));
-  } else if (command === 'listMemoryEvents') {
-    printJson(await app.listMemoryEvents(coreOptions));
-  } else if (command === 'listMemoryCandidates') {
-    printJson(await app.listMemoryCandidates(coreOptions));
-  } else if (command === 'search') {
-    printJson(await app.search(coreOptions));
-  } else if (command === 'getMemory') {
-    printJson(await app.getMemory(coreOptions));
-  } else if (command === 'appendRaw') {
-    printJson(await app.appendRaw(coreOptions));
-  } else if (command === 'distillCheckpoint') {
-    printJson(await app.distillCheckpoint(coreOptions));
-  } else if (command === 'listDistillRuns') {
-    printJson(await app.listDistillRuns(coreOptions));
-  } else {
+  const handler = commands[command];
+  if (!handler) {
     throw new Error(`Unknown command: ${command}`);
   }
+  printJson(await handler(app, coreOptions));
 }
 
 main().catch((error) => {
