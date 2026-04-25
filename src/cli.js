@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createContextForge } from './core.js';
-import { ingestCodexRolloutFile, ingestCodexSessions } from './ingest/codex.js';
+import { ingestCodexRolloutFile, ingestCodexSessions, watchCodexSessions } from './ingest/codex.js';
 import { startContextForgeServer } from './server.js';
 
 function parseArgs(argv) {
@@ -84,6 +84,9 @@ function toCoreOptions(options) {
     maxContentChars: options.maxContentChars == null ? undefined : Number(options.maxContentChars),
     sinceMinutes: options.sinceMinutes == null ? undefined : Number(options.sinceMinutes),
     scanLimit: options.scanLimit == null ? undefined : Number(options.scanLimit),
+    watch: options.watch === true || options.watch === 'true',
+    intervalMs: options.intervalMs == null ? undefined : Number(options.intervalMs),
+    iterations: options.iterations == null ? undefined : Number(options.iterations),
   };
 }
 
@@ -111,7 +114,15 @@ async function main() {
     distillCheckpoint: (app, coreOptions) => app.distillCheckpoint(coreOptions),
     listDistillRuns: (app, coreOptions) => app.listDistillRuns(coreOptions),
     ingestCodexRollout: (app, coreOptions) => ingestCodexRolloutFile(app, coreOptions),
-    ingestCodexSessions: (app, coreOptions) => ingestCodexSessions(app, coreOptions),
+    ingestCodexSessions: (app, coreOptions) =>
+      coreOptions.watch
+        ? watchCodexSessions(app, {
+            ...coreOptions,
+            onResult: (result) => {
+              console.log(JSON.stringify(result));
+            },
+          })
+        : ingestCodexSessions(app, coreOptions),
   };
 
   if (!command || command === 'help' || command === '--help') {
