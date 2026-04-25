@@ -64,6 +64,9 @@ function toCoreOptions(options) {
     checkpointId: options.checkpointId,
     reason: options.reason,
     live: options.live === true || options.live === 'true',
+    minEvents: options.minEvents == null ? undefined : Number(options.minEvents),
+    minIntervalMs: options.minIntervalMs == null ? undefined : Number(options.minIntervalMs),
+    charThreshold: options.charThreshold == null ? undefined : Number(options.charThreshold),
   };
 }
 
@@ -79,6 +82,7 @@ async function main() {
         'dbInfo',
         'doctorCodexExec',
         'beginSession',
+        'sessionStatus',
         'remember',
         'promoteMemory',
         'correctMemory',
@@ -113,6 +117,8 @@ async function main() {
     printJson(await app.checkCodexExec(coreOptions));
   } else if (command === 'beginSession') {
     printJson(await app.beginSession(coreOptions));
+  } else if (command === 'sessionStatus') {
+    printJson(await app.sessionStatus(coreOptions));
   } else if (command === 'remember') {
     printJson(await app.remember(coreOptions));
   } else if (command === 'promoteMemory') {

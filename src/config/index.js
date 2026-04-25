@@ -141,6 +141,11 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
   if (!VALID_SCOPES.has(defaultScope)) {
     throw new Error(`Invalid CONTEXTFORGE_DEFAULT_SCOPE: ${defaultScope}`);
   }
+  const codexExecMaxInputChars = parsePositiveInteger(
+    env.CONTEXTFORGE_CODEX_EXEC_MAX_INPUT_CHARS,
+    'CONTEXTFORGE_CODEX_EXEC_MAX_INPUT_CHARS',
+    12000,
+  );
 
   return {
     storageMode,
@@ -170,10 +175,19 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
         'CONTEXTFORGE_CODEX_EXEC_TIMEOUT_MS',
         120000,
       ),
-      maxInputChars: parsePositiveInteger(
-        env.CONTEXTFORGE_CODEX_EXEC_MAX_INPUT_CHARS,
-        'CONTEXTFORGE_CODEX_EXEC_MAX_INPUT_CHARS',
-        12000,
+      maxInputChars: codexExecMaxInputChars,
+    },
+    distillPolicy: {
+      minEvents: parsePositiveInteger(env.CONTEXTFORGE_DISTILL_MIN_EVENTS, 'CONTEXTFORGE_DISTILL_MIN_EVENTS', 5),
+      minIntervalMs: parsePositiveInteger(
+        env.CONTEXTFORGE_DISTILL_MIN_INTERVAL_MS,
+        'CONTEXTFORGE_DISTILL_MIN_INTERVAL_MS',
+        10 * 60 * 1000,
+      ),
+      charThreshold: parsePositiveInteger(
+        env.CONTEXTFORGE_DISTILL_CHAR_THRESHOLD,
+        'CONTEXTFORGE_DISTILL_CHAR_THRESHOLD',
+        Math.floor(codexExecMaxInputChars * 0.8),
       ),
     },
   };

@@ -52,6 +52,27 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
   );
 
   server.registerTool(
+    'session_status',
+    {
+      title: 'Session Status',
+      description: 'Inspect raw evidence and checkpoint thresholds for a session before deciding whether to distill.',
+      inputSchema: z.object({
+        ...scopedSchema,
+        sessionId: z.string(),
+        minEvents: z.number().int().positive().optional(),
+        minIntervalMs: z.number().int().positive().optional(),
+        charThreshold: z.number().int().positive().optional(),
+      }),
+      annotations: {
+        title: 'Session Status',
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.sessionStatus(args)),
+  );
+
+  server.registerTool(
     'search',
     {
       title: 'Search Memory',

@@ -450,6 +450,18 @@ test('appendRaw and mock distillCheckpoint preserve raw evidence', async () => {
     content: 'Next implement the provider contract and CLI command.',
   });
 
+  const statusBefore = app.sessionStatus({
+    scope: 'repo',
+    scopeKey: 'repo-a',
+    sessionId: session.sessionId,
+    minEvents: 2,
+  });
+  assert.equal(statusBefore.rawEventCount, 2);
+  assert.equal(statusBefore.eventsSinceLastCheckpoint, 2);
+  assert.equal(statusBefore.latestCheckpointId, null);
+  assert.equal(statusBefore.shouldDistill, true);
+  assert.ok(statusBefore.reasons.includes('initial_event_threshold'));
+
   const checkpoint = await app.distillCheckpoint({
     scope: 'repo',
     scopeKey: 'repo-a',
@@ -476,6 +488,16 @@ test('appendRaw and mock distillCheckpoint preserve raw evidence', async () => {
   assert.equal(runs.length, 1);
   assert.equal(runs[0].status, 'succeeded');
   assert.equal(runs[0].outputMetadata.checkpointId, checkpoint.id);
+
+  const statusAfter = app.sessionStatus({
+    scope: 'repo',
+    scopeKey: 'repo-a',
+    sessionId: session.sessionId,
+    minEvents: 1,
+  });
+  assert.equal(statusAfter.latestCheckpointId, checkpoint.id);
+  assert.equal(statusAfter.eventsSinceLastCheckpoint, 0);
+  assert.equal(statusAfter.shouldDistill, false);
 });
 
 test('distillCheckpoint rejects malformed provider output and preserves raw evidence', async () => {
@@ -827,6 +849,22 @@ test('CLI supports the v0 workflow with synthetic data', async () => {
   );
   assert.match(checkpoint.stdout, /"provider": "mock"/);
 
+  const status = await execFileAsync(
+    'node',
+    [
+      'src/cli.js',
+      'sessionStatus',
+      '--scope',
+      'repo',
+      '--scopeKey',
+      'cli-repo',
+      '--sessionId',
+      'cli-session',
+    ],
+    { env },
+  );
+  assert.match(status.stdout, /"latestCheckpointId":/);
+
   const runs = await execFileAsync(
     'node',
     [
@@ -874,6 +912,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'promote_memory',
       'remember',
       'search',
+      'session_status',
     ]);
 
     const rememberResult = await client.callTool({
@@ -897,6 +936,38 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       },
     });
     assert.equal(searchResult.structuredContent.result[0].memory.key, 'mcp-rule');
+
+    const sessionResult = await client.callTool({
+      name: 'begin_session',
+      arguments: {
+        scope: 'repo',
+        scopeKey: 'mcp-repo',
+        sessionId: 'mcp-session',
+      },
+    });
+    assert.equal(sessionResult.structuredContent.result.sessionId, 'mcp-session');
+
+    await client.callTool({
+      name: 'append_raw',
+      arguments: {
+        scope: 'repo',
+        scopeKey: 'mcp-repo',
+        sessionId: 'mcp-session',
+        role: 'user',
+        content: 'Decision: MCP agents should inspect session status before distilling.',
+      },
+    });
+
+    const statusResult = await client.callTool({
+      name: 'session_status',
+      arguments: {
+        scope: 'repo',
+        scopeKey: 'mcp-repo',
+        sessionId: 'mcp-session',
+        minEvents: 1,
+      },
+    });
+    assert.equal(statusResult.structuredContent.result.shouldDistill, true);
 
     const promotedResult = await client.callTool({
       name: 'promote_memory',
@@ -972,6 +1043,22 @@ test('remote storage mode delegates core calls and preserves scope semantics', a
     });
     assert.equal(repoResults.length, 1);
     assert.equal(repoResults[0].memory.scopeType, 'repo');
+
+    await app.appendRaw({
+      scope: 'repo',
+      scopeKey: 'repo-remote',
+      sessionId: 'remote-session',
+      role: 'user',
+      content: 'Remote clients can inspect whether a session should distill.',
+    });
+    const status = await app.sessionStatus({
+      scope: 'repo',
+      scopeKey: 'repo-remote',
+      sessionId: 'remote-session',
+      minEvents: 1,
+    });
+    assert.equal(status.shouldDistill, true);
+    assert.equal(status.rawEventCount, 1);
 
     const info = await app.dbInfo();
     assert.equal(info.tables.memories, 2);
