@@ -496,9 +496,9 @@ test('CLI supports promoteMemory', async () => {
   const env = { ...process.env, CONTEXTFORGE_DATA_DIR: dataDir };
 
   const promoted = await execFileAsync(
-    'node',
-    [
-      'src/cli.js',
+      'node',
+      [
+      path.resolve('src/cli.js'),
       'promoteMemory',
       '--scope',
       'repo',
@@ -557,9 +557,9 @@ test('CLI reports invalid metadata JSON clearly', async () => {
   await assert.rejects(
     () =>
       execFileAsync(
-        'node',
-        [
-          'src/cli.js',
+      'node',
+      [
+      path.resolve('src/cli.js'),
           'appendRaw',
           '--scope',
           'repo',
@@ -594,7 +594,7 @@ test('CLI ingests Codex rollout JSONL idempotently without capturing developer m
   const first = await execFileAsync(
     'node',
     [
-      'src/cli.js',
+      path.resolve('src/cli.js'),
       'ingestCodexRollout',
       '--file',
       file,
@@ -616,7 +616,7 @@ test('CLI ingests Codex rollout JSONL idempotently without capturing developer m
   const second = await execFileAsync(
     'node',
     [
-      'src/cli.js',
+      path.resolve('src/cli.js'),
       'ingestCodexRollout',
       '--file',
       file,
@@ -837,6 +837,48 @@ test('CLI ingests multiple Codex session rollout files safely', async () => {
   assert.equal(secondEvents.length, 4);
 });
 
+test('repoPath ingest skips Codex session files from other working directories', async () => {
+  const dataDir = await makeTempDir();
+  const sessionsDir = await makeTempDir();
+  const otherRepo = await makeTempDir();
+  const targetRepo = await makeGitRepo('https://github.com/example/filter-target.git');
+  const file = path.join(otherRepo, 'rollout-outside.jsonl');
+  await writeSyntheticCodexRollout(file, 'codex-outside-session');
+  const env = {
+    ...process.env,
+    CONTEXTFORGE_DATA_DIR: dataDir,
+  };
+
+  const result = await execFileAsync(
+    'node',
+    [
+      path.resolve('src/cli.js'),
+      'ingestCodexRollout',
+      '--file',
+      file,
+      '--scope',
+      'repo',
+      '--repoPath',
+      targetRepo,
+      '--distill',
+      'never',
+    ],
+    { cwd: sessionsDir, env },
+  );
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.skipped, true);
+  assert.equal(parsed.skippedReason, 'cwd_outside_repo_path');
+  assert.equal(parsed.appendedEvents, 0);
+
+  const app = createContextForge({ env, cwd: process.cwd() });
+  const events = app.listRawEvents({
+    scope: 'repo',
+    scopeKey: 'github.com/example/filter-target',
+    sessionId: 'codex:codex-outside-session',
+  });
+  assert.equal(events.length, 0);
+});
+
 test('Codex sessions watch loop picks up new events without duplicates', async () => {
   const dataDir = await makeTempDir();
   const sessionsDir = await makeTempDir();
@@ -994,6 +1036,40 @@ test('CLI ingests Claude Code JSONL transcripts with agent provenance', async ()
   assert.ok(events.every((event) => event.metadata.sourceAgent === 'claude_code'));
   assert.ok(events.every((event) => event.metadata.sourceAdapter === 'claude_code_jsonl'));
   assert.ok(events.every((event) => event.metadata.nativeSessionId === 'claude-native-session'));
+});
+
+test('repoPath ingest skips Claude Code transcripts from other working directories', async () => {
+  const dataDir = await makeTempDir();
+  const projectsDir = await makeTempDir();
+  const targetRepo = await makeGitRepo('https://github.com/example/claude-filter-target.git');
+  const otherDir = await makeTempDir();
+  const file = path.join(otherDir, 'claude-outside.jsonl');
+  await writeSyntheticClaudeCodeTranscript(file, 'claude-outside-session');
+  const env = {
+    ...process.env,
+    CONTEXTFORGE_DATA_DIR: dataDir,
+  };
+
+  const result = await execFileAsync(
+    'node',
+    [
+      path.resolve('src/cli.js'),
+      'ingestClaudeCodeFile',
+      '--file',
+      file,
+      '--scope',
+      'repo',
+      '--repoPath',
+      targetRepo,
+      '--distill',
+      'never',
+    ],
+    { cwd: projectsDir, env },
+  );
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.skipped, true);
+  assert.equal(parsed.skippedReason, 'cwd_outside_repo_path');
+  assert.equal(parsed.appendedEvents, 0);
 });
 
 test('search can combine repo and shared scopes while excluding local by default', async () => {
