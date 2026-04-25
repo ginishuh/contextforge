@@ -1965,6 +1965,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'list_memory_candidates',
       'list_memory_events',
       'promote_memory',
+      'promote_memory_candidate',
       'remember',
       'search',
       'session_status',
@@ -2051,6 +2052,10 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       },
     });
     assert.equal(promotedResult.structuredContent.result.key, 'promoted-mcp-rule');
+
+    const candidateTool = toolList.tools.find((tool) => tool.name === 'promote_memory_candidate');
+    assert.ok(candidateTool.inputSchema.properties.checkpointId);
+    assert.ok(candidateTool.inputSchema.properties.sourceCandidateIndex);
   } finally {
     await client.close();
   }
@@ -2058,10 +2063,35 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
 
 test('MCP streamable HTTP endpoint exposes core tools with bearer auth', async () => {
   const dataDir = await makeTempDir();
-  const remote = await startContextForgeServer({
-    port: 0,
+  const app = createContextForge({
     env: {
       CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'candidate_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      candidate_provider: async () => ({
+        summaryShort: 'HTTP MCP candidate checkpoint.',
+        summaryText: 'The checkpoint contains one reviewed memory candidate.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'http-mcp-candidate',
+            content: 'HTTP MCP can promote memory candidates by checkpoint id.',
+            reason: 'Synthetic HTTP MCP candidate.',
+          },
+        ],
+        sourceEventCount: 1,
+        metadata: { synthetic: true },
+      }),
+    },
+  });
+  const remote = await startContextForgeServer({
+    app,
+    port: 0,
+    env: {
       CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
     },
   });
@@ -2099,9 +2129,40 @@ test('MCP streamable HTTP endpoint exposes core tools with bearer auth', async (
       },
     });
     assert.equal(searched.structuredContent.result[0].memory.key, 'http-mcp-rule');
+
+    await client.callTool({
+      name: 'append_raw',
+      arguments: {
+        scope: 'repo',
+        scopeKey: 'http-mcp-repo',
+        sessionId: 'http-mcp-session',
+        role: 'assistant',
+        content: 'Candidate: HTTP MCP can promote memory candidates by checkpoint id.',
+      },
+    });
+    const checkpoint = await client.callTool({
+      name: 'distill_checkpoint',
+      arguments: {
+        scope: 'repo',
+        scopeKey: 'http-mcp-repo',
+        sessionId: 'http-mcp-session',
+      },
+    });
+    const promoted = await client.callTool({
+      name: 'promote_memory_candidate',
+      arguments: {
+        scope: 'repo',
+        scopeKey: 'http-mcp-repo',
+        checkpointId: checkpoint.structuredContent.result.id,
+        sourceCandidateIndex: 0,
+        reason: 'Reviewed over HTTP MCP.',
+      },
+    });
+    assert.equal(promoted.structuredContent.result.key, 'http-mcp-candidate');
   } finally {
     await client.close();
     await remote.close();
+    app.close();
   }
 });
 

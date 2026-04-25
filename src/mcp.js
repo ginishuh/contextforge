@@ -246,6 +246,34 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
   );
 
   server.registerTool(
+    'promote_memory_candidate',
+    {
+      title: 'Promote Memory Candidate',
+      description:
+        'Promote a reviewed checkpoint memory candidate into intentional durable memory without copying candidate fields manually.',
+      inputSchema: {
+        ...scopedSchema,
+        checkpointId: z.string(),
+        sourceCandidateIndex: z.number().int().optional(),
+        sessionId: z.string().optional(),
+        key: z.string().optional(),
+        content: z.string().optional(),
+        category: z.string().optional(),
+        tags: optionalTags,
+        importance: z.number().int().optional(),
+        sourceRawEventIds: z.array(z.string()).optional(),
+        reason: z.string().optional(),
+      },
+      annotations: {
+        title: 'Promote Memory Candidate',
+        readOnlyHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.promoteMemoryCandidate(args)),
+  );
+
+  server.registerTool(
     'correct_memory',
     {
       title: 'Correct Memory',
