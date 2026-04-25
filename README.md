@@ -85,7 +85,70 @@ git checkout it falls back to a deterministic `path:<hash>:<name>` key. Pass
 `--scopeKey` or set `CONTEXTFORGE_DEFAULT_SCOPE_KEY` when you want an explicit
 scope key.
 
-## Remote Mode
+## Usage Modes
+
+ContextForge supports two common deployment modes. Choose one first; mixing the
+setup commands is the most common source of confusion.
+
+- Use **local-only mode** for one machine with its own private memory.
+- Use **HTTP remote mode** when memory must follow the same repo across
+  different PCs or agent environments.
+
+### Local-Only Mode
+
+Use local-only mode when one machine owns its own memory and you do not need to
+share memory with other PCs.
+
+- Storage lives on the same machine as the agent.
+- No HTTP server or bearer token is required.
+- Local stdio MCP is enough.
+- This is simplest for single-machine development.
+
+Local project store:
+
+```bash
+CONTEXTFORGE_STORAGE_MODE=project-local \
+node src/cli.js dbInfo
+```
+
+Local user-wide store:
+
+```bash
+CONTEXTFORGE_STORAGE_MODE=local \
+node src/cli.js dbInfo
+```
+
+Register a local stdio MCP server:
+
+```bash
+codex mcp add contextforge \
+  -- node /path/to/contextforge/src/mcp.js
+```
+
+In local-only mode, do not set `CONTEXTFORGE_REMOTE_URL`. Each machine writes
+to its own SQLite database, so memories do not follow you across machines.
+
+### HTTP Remote Mode
+
+Use HTTP remote mode when multiple PCs, shells, or agent environments should
+share the same canonical memory.
+
+- One server owns the canonical SQLite database.
+- Other machines connect through `/mcp` or `/v0/*` over HTTPS.
+- Clients need `CONTEXTFORGE_REMOTE_URL` and `CONTEXTFORGE_REMOTE_TOKEN`.
+- Distillation runs on the server, so provider configuration belongs there.
+- This is the recommended mode for multi-machine workflows.
+
+For this repository's live-style setup, the client shape is:
+
+```bash
+CONTEXTFORGE_STORAGE_MODE=remote \
+CONTEXTFORGE_REMOTE_URL=https://memory.example.com \
+CONTEXTFORGE_REMOTE_TOKEN=change-me \
+node src/cli.js dbInfo
+```
+
+## HTTP Remote Server And API
 
 Run a ContextForge server on the machine that should own canonical memory:
 
@@ -126,7 +189,7 @@ Current v0 remote behavior is deliberately simple:
 Do not point git at live SQLite or raw runtime data. Use git only for source,
 docs, examples, migrations, and reviewed exports.
 
-### New Machine Setup
+### New Machine Setup For HTTP Remote Mode
 
 Use this path when another PC should share the same canonical memory server.
 The remote server should already be running and exposed through HTTPS.
