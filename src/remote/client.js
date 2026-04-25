@@ -2,6 +2,7 @@ const REMOTE_METHODS = [
   'dbInfo',
   'checkCodexExec',
   'beginSession',
+  'sessionStatus',
   'remember',
   'promoteMemory',
   'correctMemory',

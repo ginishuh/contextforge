@@ -14,6 +14,13 @@ function requireOption(value, name) {
   }
 }
 
+function positiveNumber(value, name) {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`${name} must be a positive number.`);
+  }
+  return value;
+}
+
 function withStore(config, fn) {
   const store = new ContextForgeStore({ dataDir: config.dataDir });
   try {
@@ -27,6 +34,62 @@ function withStore(config, fn) {
     store.close();
     throw error;
   }
+}
+
+function rawCharCount(events) {
+  return events.reduce((total, event) => total + String(event.content || '').length, 0);
+}
+
+function checkpointTimestamp(checkpoint) {
+  return checkpoint?.createdAt ? Date.parse(checkpoint.createdAt) : null;
+}
+
+function eventsAfterCheckpoint(events, checkpoint) {
+  const checkpointTime = checkpointTimestamp(checkpoint);
+  if (!checkpointTime) return events;
+  return events.filter((event) => Date.parse(event.createdAt) > checkpointTime);
+}
+
+function buildSessionStatus({ scope, sessionId, rawEvents, latestCheckpoint, policy, now = new Date() }) {
+  const eventsSinceLastCheckpoint = eventsAfterCheckpoint(rawEvents, latestCheckpoint);
+  const rawEventCount = rawEvents.length;
+  const rawCharTotal = rawCharCount(rawEvents);
+  const charsSinceLastCheckpoint = rawCharCount(eventsSinceLastCheckpoint);
+  const latestCheckpointTime = checkpointTimestamp(latestCheckpoint);
+  const elapsedMs = latestCheckpointTime ? Math.max(0, now.getTime() - latestCheckpointTime) : null;
+  const reasons = [];
+
+  if (rawEventCount === 0) {
+    reasons.push('no_raw_events');
+  }
+  if (!latestCheckpoint && rawEventCount >= policy.minEvents) {
+    reasons.push('initial_event_threshold');
+  }
+  if (!latestCheckpoint && rawCharTotal >= policy.charThreshold) {
+    reasons.push('initial_char_threshold');
+  }
+  if (latestCheckpoint && eventsSinceLastCheckpoint.length >= policy.minEvents && elapsedMs >= policy.minIntervalMs) {
+    reasons.push('events_and_interval_since_checkpoint');
+  }
+  if (latestCheckpoint && charsSinceLastCheckpoint >= policy.charThreshold) {
+    reasons.push('char_threshold_since_checkpoint');
+  }
+
+  return {
+    sessionId,
+    scopeType: scope.scopeType,
+    scopeKey: scope.scopeKey,
+    rawEventCount,
+    rawCharCount: rawCharTotal,
+    latestCheckpointId: latestCheckpoint?.id || null,
+    latestCheckpointAt: latestCheckpoint?.createdAt || null,
+    eventsSinceLastCheckpoint: eventsSinceLastCheckpoint.length,
+    charsSinceLastCheckpoint,
+    elapsedSinceLastCheckpointMs: elapsedMs,
+    thresholds: policy,
+    shouldDistill: reasons.some((reason) => reason !== 'no_raw_events'),
+    reasons,
+  };
 }
 
 export function createContextForge(options = {}) {
@@ -64,6 +127,34 @@ export function createContextForge(options = {}) {
         scopeKey: scope.scopeKey,
         createdAt: new Date().toISOString(),
       };
+    },
+
+    sessionStatus(options) {
+      const scope = normalizeScopeOptions(options, config);
+      requireOption(options.sessionId, 'sessionId');
+      const policy = {
+        minEvents: positiveNumber(
+          options.minEvents == null ? config.distillPolicy.minEvents : Number(options.minEvents),
+          'minEvents',
+        ),
+        minIntervalMs: positiveNumber(
+          options.minIntervalMs == null ? config.distillPolicy.minIntervalMs : Number(options.minIntervalMs),
+          'minIntervalMs',
+        ),
+        charThreshold: positiveNumber(
+          options.charThreshold == null ? config.distillPolicy.charThreshold : Number(options.charThreshold),
+          'charThreshold',
+        ),
+      };
+      return withStore(config, (store) =>
+        buildSessionStatus({
+          scope,
+          sessionId: options.sessionId,
+          rawEvents: store.listRawEvents({ ...scope, sessionId: options.sessionId }),
+          latestCheckpoint: store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId }),
+          policy,
+        }),
+      );
     },
 
     remember(options) {

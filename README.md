@@ -152,12 +152,25 @@ events are captured when callers use `appendRaw`, and checkpoints are produced
 only when a caller invokes `distillCheckpoint` or the MCP `distill_checkpoint`
 tool. This keeps cost and model usage explicit.
 
+Agents can call `sessionStatus` or the MCP `session_status` tool to inspect
+whether a session has enough new raw evidence to justify a checkpoint. The
+status response includes raw event counts, raw character counts, the latest
+checkpoint, events and characters since that checkpoint, configured thresholds,
+`shouldDistill`, and machine-readable reasons.
+
 Recommended cadence depends on the agent workflow:
 
 - Run distillation at session end when an agent finishes a coherent task.
 - Run it every 10 to 30 minutes for long-running interactive sessions.
 - Avoid distilling after every raw event unless the raw stream is very small.
 - Retry failed distill runs after fixing the provider; raw evidence is retained.
+
+Default distill recommendation thresholds are:
+
+- `CONTEXTFORGE_DISTILL_MIN_EVENTS`: `5`
+- `CONTEXTFORGE_DISTILL_MIN_INTERVAL_MS`: `600000`
+- `CONTEXTFORGE_DISTILL_CHAR_THRESHOLD`: 80% of
+  `CONTEXTFORGE_CODEX_EXEC_MAX_INPUT_CHARS`, which defaults to `9600`
 
 Use an external scheduler if you want unattended checkpoints. For example, a
 systemd timer or cron job can call:
@@ -242,6 +255,15 @@ node src/cli.js appendRaw \
   --content "Decision: keep v0 retrieval lexical and explainable."
 ```
 
+Inspect whether the session is ready for distillation:
+
+```bash
+node src/cli.js sessionStatus \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --sessionId demo-session
+```
+
 Distill a checkpoint with the mock provider:
 
 ```bash
@@ -323,6 +345,7 @@ contextforge-mcp
 The MCP server exposes a narrow tool surface over the same core API:
 
 - `begin_session`
+- `session_status`
 - `search`
 - `get_memory`
 - `remember`
