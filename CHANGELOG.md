@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.0 - 2026-04-25
 
 - Added `ingestCodexRollout`, which ingests Codex TUI rollout JSONL artifacts
   into raw evidence without spending model tokens on capture, deduplicates
