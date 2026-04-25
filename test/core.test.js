@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { createContextForge } from '../src/core.js';
 import { validateDistillOutput } from '../src/distill/validate.js';
 import { searchMemories } from '../src/retrieval/search.js';
@@ -1264,6 +1265,75 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.equal(promotedResult.structuredContent.result.key, 'promoted-mcp-rule');
   } finally {
     await client.close();
+  }
+});
+
+test('MCP streamable HTTP endpoint exposes core tools with bearer auth', async () => {
+  const dataDir = await makeTempDir();
+  const remote = await startContextForgeServer({
+    port: 0,
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+    },
+  });
+  const client = new Client({ name: 'contextforge-http-test-client', version: '0.0.0' }, { capabilities: {} });
+  const transport = new StreamableHTTPClientTransport(new URL(`${remote.url}/mcp`), {
+    requestInit: {
+      headers: {
+        authorization: 'Bearer test-token',
+      },
+    },
+  });
+
+  try {
+    await client.connect(transport);
+    const toolList = await client.listTools();
+    assert.ok(toolList.tools.some((tool) => tool.name === 'remember'));
+
+    const remembered = await client.callTool({
+      name: 'remember',
+      arguments: {
+        scope: 'repo',
+        scopeKey: 'http-mcp-repo',
+        key: 'http-mcp-rule',
+        content: 'HTTP MCP should share canonical remote memory.',
+      },
+    });
+    assert.equal(remembered.structuredContent.result.scopeKey, 'http-mcp-repo');
+
+    const searched = await client.callTool({
+      name: 'search',
+      arguments: {
+        scope: 'repo',
+        scopeKey: 'http-mcp-repo',
+        query: 'canonical remote',
+      },
+    });
+    assert.equal(searched.structuredContent.result[0].memory.key, 'http-mcp-rule');
+  } finally {
+    await client.close();
+    await remote.close();
+  }
+});
+
+test('MCP streamable HTTP endpoint rejects missing bearer auth', async () => {
+  const dataDir = await makeTempDir();
+  const remote = await startContextForgeServer({
+    port: 0,
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+    },
+  });
+  const client = new Client({ name: 'contextforge-http-unauthorized-client', version: '0.0.0' }, { capabilities: {} });
+  const transport = new StreamableHTTPClientTransport(new URL(`${remote.url}/mcp`));
+
+  try {
+    await assert.rejects(() => client.connect(transport), /Unauthorized|Streamable HTTP error|401/);
+  } finally {
+    await client.close().catch(() => {});
+    await remote.close();
   }
 });
 
