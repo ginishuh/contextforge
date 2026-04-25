@@ -195,8 +195,8 @@ Use this path on the VPS or always-on machine that should own the canonical
 ContextForge database. Client machines should use the later "New Machine Setup"
 section instead.
 
-1. Install Node.js 20 or newer, git, and a reverse proxy such as nginx or
-Caddy.
+1. Install Node.js 20 or newer and git. Install a reverse proxy such as nginx
+or Caddy if this server will be exposed on the public internet.
 
 2. Create a dedicated runtime user and directories:
 
@@ -275,7 +275,10 @@ systemctl status contextforge-remote.service
 curl -fsS http://127.0.0.1:8765/healthz
 ```
 
-6. Put HTTPS in front of the local server. A minimal nginx location is:
+6. Choose how clients reach the server.
+
+For a public internet endpoint, put HTTPS in front of the local server. A
+minimal nginx location is:
 
 ```nginx
 server {
@@ -303,13 +306,37 @@ sudo systemctl reload nginx
 curl -fsS https://memory.example.com/healthz
 ```
 
+For a private network, VPN, Tailscale, or firewall-restricted host, clients can
+connect directly to an IP address and port. Bind the server to a reachable
+interface:
+
+```bash
+CONTEXTFORGE_REMOTE_HOST=0.0.0.0
+CONTEXTFORGE_REMOTE_PORT=8765
+```
+
+Then verify from another machine:
+
+```bash
+curl -fsS http://203.0.113.10:8765/healthz
+CONTEXTFORGE_STORAGE_MODE=remote \
+CONTEXTFORGE_REMOTE_URL=http://203.0.113.10:8765 \
+CONTEXTFORGE_REMOTE_TOKEN=change-me \
+node src/cli.js dbInfo
+```
+
+Do not expose a direct HTTP port to the open internet unless another network
+layer already provides encryption and access control. The bearer token protects
+the ContextForge API, but it is not a replacement for TLS on untrusted networks.
+
 After the VPS is healthy, configure each laptop, desktop, or agent host with
-the same HTTPS URL and bearer token using the next section.
+the same URL and bearer token using the next section.
 
 ### New Machine Setup For HTTP Remote Mode
 
 Use this path when another PC should share the same canonical memory server.
-The remote server should already be running and exposed through HTTPS.
+The remote server should already be running and reachable through HTTPS or a
+trusted direct IP endpoint.
 
 1. Install ContextForge:
 
