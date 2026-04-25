@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- The remote server now exposes a Streamable HTTP MCP endpoint at `/mcp`, so
+  agents on multiple machines can connect directly to the same canonical memory
+  store without launching a local stdio MCP bridge.
 - Scoped CLI and MCP calls can now pass `repoPath` or `cwd` so repo memory is
   resolved for a target checkout even when the agent process starts elsewhere.
 - Remote clients strip `repoPath` and `cwd` after resolving scope keys so local

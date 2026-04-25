@@ -337,6 +337,21 @@ Inactive memories are retained for provenance but excluded from search results.
 
 ## MCP Server
 
+ContextForge supports both remote Streamable HTTP MCP and local stdio MCP.
+Use HTTP MCP when multiple machines or agent environments should share the
+same canonical memory. Use stdio MCP for local-only or development setups.
+
+Run the remote server, then register its MCP endpoint:
+
+```bash
+contextforge-server
+codex mcp add contextforge \
+  --url https://memory.example.com/mcp \
+  --bearer-token-env-var CONTEXTFORGE_REMOTE_TOKEN
+```
+
+The HTTP MCP endpoint uses the same bearer token as the remote `/v0/*` API.
+
 Run ContextForge as a local stdio MCP server:
 
 ```bash
@@ -381,8 +396,9 @@ Example MCP client configuration:
 }
 ```
 
-Codex can register ContextForge as a stdio MCP server while still using the
-remote canonical store:
+Codex can also register ContextForge as a stdio MCP server while still using
+the remote canonical store. This is useful when an environment cannot reach the
+HTTP MCP endpoint but can run the local ContextForge package:
 
 ```bash
 codex mcp add contextforge \

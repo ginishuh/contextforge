@@ -2,7 +2,9 @@
 import crypto from 'node:crypto';
 import http from 'node:http';
 import { pathToFileURL } from 'node:url';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createContextForge } from './core.js';
+import { createContextForgeMcpServer } from './mcp.js';
 import { REMOTE_METHODS } from './remote/client.js';
 
 const METHOD_SET = new Set(REMOTE_METHODS);
@@ -106,6 +108,37 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
 
     if (request.method === 'GET' && requestUrl.pathname === '/healthz') {
       sendJson(response, 200, { ok: true });
+      return;
+    }
+
+    if (requestUrl.pathname === '/mcp') {
+      if (!isAuthorized(request, authToken)) {
+        sendJson(response, 401, { error: { message: 'Unauthorized.' } });
+        return;
+      }
+      const mcpServer = createContextForgeMcpServer({ app: serverApp });
+      try {
+        const transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: undefined,
+        });
+        await mcpServer.connect(transport);
+        await transport.handleRequest(request, response);
+        response.on('close', () => {
+          transport.close();
+          mcpServer.close();
+        });
+      } catch (error) {
+        if (!response.headersSent) {
+          sendJson(response, 500, {
+            jsonrpc: '2.0',
+            error: {
+              code: -32603,
+              message: error.message,
+            },
+            id: null,
+          });
+        }
+      }
       return;
     }
 
