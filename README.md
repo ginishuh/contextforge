@@ -508,6 +508,7 @@ The MCP server exposes a narrow tool surface over the same core API:
 - `append_raw`
 - `distill_checkpoint`
 - `promote_memory`
+- `promote_memory_candidate`
 - `correct_memory`
 - `deactivate_memory`
 
@@ -554,9 +555,11 @@ only when they know the durable key they need, append raw evidence for later
 distillation, and call `remember` when the user or agent intentionally decides
 that an important fact, preference, decision, or runbook note should become
 durable memory. Use `promote_memory` only after a checkpoint candidate or
-decision has been reviewed. Use `correct_memory` to preserve the previous value
-while changing a durable key, and `deactivate_memory` to remove stale memories
-from retrieval without deleting their history.
+decision has been reviewed, or `promote_memory_candidate` when promoting a
+reviewed candidate directly by checkpoint id and candidate index. Use
+`correct_memory` to preserve the previous value while changing a durable key,
+and `deactivate_memory` to remove stale memories from retrieval without
+deleting their history.
 
 ## codex_exec Provider
 

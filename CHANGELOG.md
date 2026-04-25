@@ -22,6 +22,8 @@
   scopes.
 - Checkpoint distillation now uses bounded recent raw-event windows with
   configurable max event/character limits and records source window metadata.
+- MCP now exposes `promote_memory_candidate` so reviewed checkpoint candidates
+  can be promoted without manually copying candidate fields.
 - The remote server now exposes a Streamable HTTP MCP endpoint at `/mcp`, so
   agents on multiple machines can connect directly to the same canonical memory
   store without launching a local stdio MCP bridge.
