@@ -583,6 +583,7 @@ test('codex_exec provider distills synthetic raw events through a runner', async
       CONTEXTFORGE_DISTILL_PROVIDER: 'codex_exec',
       CONTEXTFORGE_CODEX_EXEC_COMMAND: 'codex-fake',
       CONTEXTFORGE_CODEX_EXEC_MODEL: 'gpt-test',
+      CONTEXTFORGE_CODEX_EXEC_REASONING_EFFORT: 'low',
       CONTEXTFORGE_CODEX_EXEC_TIMEOUT_MS: '1234',
       CONTEXTFORGE_CODEX_EXEC_MAX_INPUT_CHARS: '5000',
     },
@@ -623,6 +624,7 @@ test('codex_exec provider distills synthetic raw events through a runner', async
   assert.equal(checkpoint.metadata.providerMetadata.synthetic, true);
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.command, 'codex-fake');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.model, 'gpt-test');
+  assert.equal(checkpoint.metadata.providerMetadata.codexExec.reasoningEffort, 'low');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.timeoutMs, 1234);
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v1');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.outputSchemaVersion, 'contextforge.checkpoint.v1');
@@ -630,6 +632,8 @@ test('codex_exec provider distills synthetic raw events through a runner', async
   assert.deepEqual(invocation.args.slice(0, 2), ['exec', '--skip-git-repo-check']);
   assert.ok(invocation.args.includes('--output-schema'));
   assert.ok(invocation.args.includes('--output-last-message'));
+  assert.ok(invocation.args.includes('-c'));
+  assert.ok(invocation.args.includes('model_reasoning_effort="low"'));
   assert.equal(invocation.timeoutMs, 1234);
 
   const runs = app.listDistillRuns({
@@ -651,6 +655,7 @@ test('codex_exec doctor reports dry and live smoke readiness through a runner', 
       CONTEXTFORGE_DATA_DIR: dataDir,
       CONTEXTFORGE_CODEX_EXEC_COMMAND: 'codex-fake',
       CONTEXTFORGE_CODEX_EXEC_MODEL: 'gpt-test',
+      CONTEXTFORGE_CODEX_EXEC_REASONING_EFFORT: 'low',
       CONTEXTFORGE_CODEX_EXEC_TIMEOUT_MS: '1234',
     },
     cwd: process.cwd(),
@@ -676,6 +681,7 @@ test('codex_exec doctor reports dry and live smoke readiness through a runner', 
   assert.equal(dry.live, false);
   assert.equal(dry.command, 'codex-fake');
   assert.equal(dry.model, 'gpt-test');
+  assert.equal(dry.reasoningEffort, 'low');
   assert.equal(invocations.length, 1);
 
   const live = await app.checkCodexExec({ live: true });
@@ -684,6 +690,7 @@ test('codex_exec doctor reports dry and live smoke readiness through a runner', 
   assert.equal(live.smoke.output.provider, 'codex_exec');
   assert.ok(invocations[1].args.includes('--version'));
   assert.ok(invocations[2].args.includes('--output-schema'));
+  assert.ok(invocations[2].args.includes('model_reasoning_effort="low"'));
   assert.equal(invocations[2].timeoutMs, 1234);
 });
 

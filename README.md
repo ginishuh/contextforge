@@ -340,6 +340,9 @@ Optional environment variables:
 - `CONTEXTFORGE_CODEX_EXEC_COMMAND`: Codex executable name or path. Default:
   `codex`.
 - `CONTEXTFORGE_CODEX_EXEC_MODEL`: model passed to `codex exec --model`.
+- `CONTEXTFORGE_CODEX_EXEC_REASONING_EFFORT`: optional reasoning effort passed
+  through `codex exec -c model_reasoning_effort="..."`. Use `low` for routine
+  checkpoint distillation unless your prompt needs deeper synthesis.
 - `CONTEXTFORGE_CODEX_EXEC_SANDBOX`: sandbox passed to `codex exec --sandbox`.
   Default: `read-only`.
 - `CONTEXTFORGE_CODEX_EXEC_TIMEOUT_MS`: provider timeout. Default: `120000`.

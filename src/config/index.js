@@ -162,6 +162,7 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
     codexExec: {
       command: env.CONTEXTFORGE_CODEX_EXEC_COMMAND || 'codex',
       model: env.CONTEXTFORGE_CODEX_EXEC_MODEL || null,
+      reasoningEffort: env.CONTEXTFORGE_CODEX_EXEC_REASONING_EFFORT || null,
       sandbox: env.CONTEXTFORGE_CODEX_EXEC_SANDBOX || 'read-only',
       cwd: env.CONTEXTFORGE_CODEX_EXEC_CWD ? path.resolve(cwd, env.CONTEXTFORGE_CODEX_EXEC_CWD) : cwd,
       timeoutMs: parsePositiveInteger(
