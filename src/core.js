@@ -50,8 +50,48 @@ function eventsAfterCheckpoint(events, checkpoint) {
   return events.filter((event) => Date.parse(event.createdAt) > checkpointTime);
 }
 
+function selectDistillWindow(rawEvents, latestCheckpoint, policy) {
+  const candidateEvents = eventsAfterCheckpoint(rawEvents, latestCheckpoint);
+  const selected = [];
+  let selectedChars = 0;
+  const maxEvents = policy.maxEvents;
+  const maxChars = policy.maxChars;
+
+  for (let index = candidateEvents.length - 1; index >= 0; index -= 1) {
+    if (selected.length >= maxEvents) break;
+    const event = candidateEvents[index];
+    const eventChars = String(event.content || '').length;
+    if (selected.length > 0 && selectedChars + eventChars > maxChars) {
+      break;
+    }
+    selected.unshift(event);
+    selectedChars += eventChars;
+    if (selectedChars >= maxChars) {
+      break;
+    }
+  }
+
+  return {
+    events: selected,
+    metadata: {
+      mode: latestCheckpoint ? 'since_latest_checkpoint_recent_window' : 'initial_recent_window',
+      totalRawEventCount: rawEvents.length,
+      candidateEventCount: candidateEvents.length,
+      candidateCharCount: rawCharCount(candidateEvents),
+      selectedEventCount: selected.length,
+      selectedCharCount: selectedChars,
+      maxEvents,
+      maxChars,
+      truncated: selected.length < candidateEvents.length,
+      firstRawEventId: selected[0]?.id || null,
+      lastRawEventId: selected.at(-1)?.id || null,
+    },
+  };
+}
+
 function buildSessionStatus({ scope, sessionId, rawEvents, latestCheckpoint, policy, now = new Date() }) {
   const eventsSinceLastCheckpoint = eventsAfterCheckpoint(rawEvents, latestCheckpoint);
+  const distillWindow = selectDistillWindow(rawEvents, latestCheckpoint, policy);
   const rawEventCount = rawEvents.length;
   const rawCharTotal = rawCharCount(rawEvents);
   const charsSinceLastCheckpoint = rawCharCount(eventsSinceLastCheckpoint);
@@ -87,6 +127,7 @@ function buildSessionStatus({ scope, sessionId, rawEvents, latestCheckpoint, pol
     charsSinceLastCheckpoint,
     elapsedSinceLastCheckpointMs: elapsedMs,
     thresholds: policy,
+    distillWindow: distillWindow.metadata,
     shouldDistill: reasons.some((reason) => reason !== 'no_raw_events'),
     reasons,
   };
@@ -173,6 +214,14 @@ export function createContextForge(options = {}) {
         charThreshold: positiveNumber(
           options.charThreshold == null ? config.distillPolicy.charThreshold : Number(options.charThreshold),
           'charThreshold',
+        ),
+        maxEvents: positiveNumber(
+          options.maxEvents == null ? config.distillPolicy.maxEvents : Number(options.maxEvents),
+          'maxEvents',
+        ),
+        maxChars: positiveNumber(
+          options.maxChars == null ? config.distillPolicy.maxChars : Number(options.maxChars),
+          'maxChars',
         ),
       };
       return useStore((store) =>
@@ -411,7 +460,19 @@ export function createContextForge(options = {}) {
       return useStore(async (store) => {
         const rawEvents = store.listRawEvents({ ...scope, sessionId: options.sessionId });
         const previousCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId });
-        const sourceProvenance = sourceProvenanceFromEvents(rawEvents);
+        const policy = {
+          maxEvents: positiveNumber(
+            options.maxEvents == null ? config.distillPolicy.maxEvents : Number(options.maxEvents),
+            'maxEvents',
+          ),
+          maxChars: positiveNumber(
+            options.maxChars == null ? config.distillPolicy.maxChars : Number(options.maxChars),
+            'maxChars',
+          ),
+        };
+        const distillWindow = selectDistillWindow(rawEvents, previousCheckpoint, policy);
+        const selectedRawEvents = distillWindow.events;
+        const sourceProvenance = sourceProvenanceFromEvents(selectedRawEvents);
         const conversationId =
           options.conversationId || rawEvents.find((event) => event.conversationId)?.conversationId || null;
         const requestedOutputSchema = {
@@ -430,13 +491,14 @@ export function createContextForge(options = {}) {
           sessionId: options.sessionId,
           conversationId,
           provider: provider.name,
-          sourceEventCount: rawEvents.length,
+          sourceEventCount: selectedRawEvents.length,
           inputMetadata: {
-            rawEventIds: rawEvents.map((event) => event.id),
+            rawEventIds: selectedRawEvents.map((event) => event.id),
             previousCheckpointId: previousCheckpoint?.id || null,
             requestedOutputSchema,
             providerMetadata,
             sourceProvenance,
+            sourceEventWindow: distillWindow.metadata,
           },
         });
 
@@ -448,7 +510,7 @@ export function createContextForge(options = {}) {
               sessionId: options.sessionId,
               conversationId,
             },
-            rawEvents,
+            rawEvents: selectedRawEvents,
             previousCheckpoint,
             requestedOutputSchema,
           });
@@ -489,13 +551,15 @@ export function createContextForge(options = {}) {
           decisions: output.decisions,
           todos: output.todos,
           openQuestions: output.openQuestions,
-          sourceEventCount: output.sourceEventCount ?? rawEvents.length,
+          sourceEventCount: output.sourceEventCount ?? selectedRawEvents.length,
           provider: output.provider || provider.name,
           distillRunId: distillRun.id,
           metadata: {
             providerMetadata: output.metadata,
             memoryCandidates: output.memoryCandidates,
             sourceProvenance,
+            sourceRawEventIds: selectedRawEvents.map((event) => event.id),
+            sourceEventWindow: distillWindow.metadata,
           },
         });
 

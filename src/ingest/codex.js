@@ -257,6 +257,8 @@ export async function ingestCodexRolloutFile(app, options = {}) {
     minEvents: options.minEvents,
     minIntervalMs: options.minIntervalMs,
     charThreshold: options.charThreshold,
+    maxEvents: options.maxEvents,
+    maxChars: options.maxChars,
   };
   const status = await app.sessionStatus(statusOptions);
   let checkpoint = null;
@@ -271,9 +273,11 @@ export async function ingestCodexRolloutFile(app, options = {}) {
         checkpoint = await app.distillCheckpoint({
           ...scopeOptions,
           sessionId: parsed.sessionId,
-          conversationId: parsed.conversationId,
-          provider: options.provider,
-        });
+        conversationId: parsed.conversationId,
+        provider: options.provider,
+        maxEvents: options.maxEvents,
+        maxChars: options.maxChars,
+      });
       } catch (error) {
         checkpointError = {
           message: error.message,
