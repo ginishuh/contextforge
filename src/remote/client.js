@@ -8,6 +8,7 @@ const REMOTE_METHODS = [
   'remember',
   'promoteMemory',
   'promoteMemoryCandidate',
+  'rejectMemoryCandidate',
   'correctMemory',
   'deactivateMemory',
   'listMemoryEvents',

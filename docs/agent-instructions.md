@@ -209,8 +209,9 @@ Prefer distilling at meaningful boundaries:
 - `distill_checkpoint`: create a recent-continuity checkpoint.
 - `list_memory_candidates`: inspect checkpoint-generated durable-memory
   candidates.
-- `promote_memory_candidate`: promote a reviewed candidate by checkpoint and
-  index.
+- `promote_memory_candidate`: promote a reviewed candidate by candidate id.
+- `reject_memory_candidate`: reject a reviewed candidate that should not become
+  durable memory.
 - `promote_memory`: promote a reviewed fact with explicit provenance.
 - `list_memory_events`: inspect memory provenance.
 - `prune_raw_events`: manually prune raw evidence older than the configured TTL.

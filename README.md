@@ -852,16 +852,18 @@ node src/cli.js promoteMemory \
 ```
 
 If the checkpoint already contains a reviewed memory candidate, promote it by
-checkpoint id and candidate index without copying the candidate fields by hand:
+candidate id without copying the candidate fields by hand:
 
 ```bash
 node src/cli.js promoteMemoryCandidate \
   --scope repo \
   --scopeKey github.com/example/contextforge \
-  --checkpointId checkpoint-id \
-  --sourceCandidateIndex 0 \
+  --candidateId candidate-id \
   --reason "Reviewed and accepted by the maintainer."
 ```
+
+The older `--checkpointId checkpoint-id --sourceCandidateIndex 0` form still
+works for compatibility.
 
 Promotion is intentional: checkpoints can suggest memory candidates, but durable
 memory is written only when a caller promotes a reviewed fact or decision.
@@ -872,7 +874,15 @@ memory changes remain auditable:
 node src/cli.js listMemoryCandidates \
   --scope repo \
   --scopeKey github.com/example/contextforge \
-  --sessionId demo-session
+  --sessionId demo-session \
+  --status pending \
+  --limit 20
+
+node src/cli.js rejectMemoryCandidate \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --candidateId candidate-id \
+  --reason "Too temporary for durable memory."
 
 node src/cli.js correctMemory \
   --scope repo \
@@ -938,6 +948,7 @@ The MCP server exposes a narrow tool surface over the same core API:
 - `distill_checkpoint`
 - `promote_memory`
 - `promote_memory_candidate`
+- `reject_memory_candidate`
 - `correct_memory`
 - `deactivate_memory`
 

@@ -85,6 +85,7 @@ function toCoreOptions(options) {
           .filter(Boolean)
       : [],
     sourceCandidateIndex: options.sourceCandidateIndex == null ? undefined : Number(options.sourceCandidateIndex),
+    candidateId: options.candidateId,
     checkpointId: options.checkpointId,
     status: options.status,
     reason: options.reason,
@@ -124,6 +125,7 @@ async function main() {
     remember: (app, coreOptions) => app.remember(coreOptions),
     promoteMemory: (app, coreOptions) => app.promoteMemory(coreOptions),
     promoteMemoryCandidate: (app, coreOptions) => app.promoteMemoryCandidate(coreOptions),
+    rejectMemoryCandidate: (app, coreOptions) => app.rejectMemoryCandidate(coreOptions),
     correctMemory: (app, coreOptions) => app.correctMemory(coreOptions),
     deactivateMemory: (app, coreOptions) => app.deactivateMemory(coreOptions),
     listMemoryEvents: (app, coreOptions) => app.listMemoryEvents(coreOptions),

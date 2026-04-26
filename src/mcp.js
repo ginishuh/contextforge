@@ -30,7 +30,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     },
     {
       instructions:
-        'Use ContextForge for scoped memory retrieval on demand. At the start of non-trivial project work, run a small bootstrap: search repo memory for the task, and search shared memory only when cross-repo or user-wide policy may matter. If working on a repository while the MCP process cwd is elsewhere, pass repoPath or cwd so repo scope resolves to that checkout; repoPath takes precedence when both are provided. Treat scopeKey as the canonical repo memory key; pass an explicit normalized GitHub key when local paths differ across machines or the checkout cannot infer the right remote. Use remember for reviewed durable facts the user or assistant intentionally wants saved. After distill_checkpoint, check memoryCandidateCount; if it is greater than zero, call list_memory_candidates and promote only reviewed durable facts with promote_memory_candidate. When session_status reports latestCheckpointMemoryCandidateCount, use list_memory_candidates before deciding what should become durable memory. Keep local scope opt-in.',
+        'Use ContextForge for scoped memory retrieval on demand. At the start of non-trivial project work, run a small bootstrap: search repo memory for the task, and search shared memory only when cross-repo or user-wide policy may matter. If working on a repository while the MCP process cwd is elsewhere, pass repoPath or cwd so repo scope resolves to that checkout; repoPath takes precedence when both are provided. Treat scopeKey as the canonical repo memory key; pass an explicit normalized GitHub key when local paths differ across machines or the checkout cannot infer the right remote. Use remember for reviewed durable facts the user or assistant intentionally wants saved. After distill_checkpoint, check memoryCandidateCount; if it is greater than zero, call list_memory_candidates and promote only reviewed durable facts with promote_memory_candidate or reject unsuitable candidates with reject_memory_candidate. When session_status reports latestCheckpointMemoryCandidateCount, use list_memory_candidates before deciding what should become durable memory. Keep local scope opt-in.',
     },
   );
 
@@ -227,6 +227,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
         sessionId: z.string().optional(),
         checkpointId: z.string().optional(),
         status: z.enum(['pending', 'promoted', 'rejected', 'stale', 'snoozed']).optional(),
+        limit: z.number().int().positive().optional(),
       },
       annotations: {
         title: 'List Memory Candidates',
@@ -273,7 +274,8 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
         'Promote a reviewed checkpoint memory candidate into intentional durable memory without copying candidate fields manually.',
       inputSchema: {
         ...scopedSchema,
-        checkpointId: z.string(),
+        candidateId: z.string().optional(),
+        checkpointId: z.string().optional(),
         sourceCandidateIndex: z.number().int().optional(),
         sessionId: z.string().optional(),
         key: z.string().optional(),
@@ -291,6 +293,25 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
       },
     },
     async (args) => jsonResult(await app.promoteMemoryCandidate(args)),
+  );
+
+  server.registerTool(
+    'reject_memory_candidate',
+    {
+      title: 'Reject Memory Candidate',
+      description: 'Reject a reviewed checkpoint memory candidate without promoting it into durable memory.',
+      inputSchema: {
+        ...scopedSchema,
+        candidateId: z.string(),
+        reason: z.string(),
+      },
+      annotations: {
+        title: 'Reject Memory Candidate',
+        readOnlyHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.rejectMemoryCandidate(args)),
   );
 
   server.registerTool(

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 function nowIso() {
   return new Date().toISOString();
@@ -139,6 +139,8 @@ function hydrateMemoryCandidate(row) {
       checkpointCreatedAt: row.checkpoint_created_at,
     },
     reviewedAt: row.reviewed_at,
+    reviewReason: row.review_reason,
+    reviewMetadata: parseJson(row.review_metadata_json, {}),
     promotedMemoryId: row.promoted_memory_id,
     createdAt: row.created_at,
   };
@@ -282,6 +284,8 @@ export class ContextForgeStore {
         status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'promoted', 'rejected', 'stale', 'snoozed')),
         created_at TEXT NOT NULL,
         reviewed_at TEXT,
+        review_reason TEXT,
+        review_metadata_json TEXT NOT NULL DEFAULT '{}',
         promoted_memory_id TEXT,
         UNIQUE (checkpoint_id, candidate_index),
         FOREIGN KEY (checkpoint_id) REFERENCES checkpoints(id) ON DELETE CASCADE,
@@ -317,6 +321,8 @@ export class ContextForgeStore {
     this.ensureColumn('memories', 'status', "TEXT NOT NULL DEFAULT 'active'");
     this.ensureColumn('memories', 'supersedes_memory_id', 'TEXT');
     this.ensureColumn('memories', 'deactivated_at', 'TEXT');
+    this.ensureColumn('memory_candidate_index', 'review_reason', 'TEXT');
+    this.ensureColumn('memory_candidate_index', 'review_metadata_json', "TEXT NOT NULL DEFAULT '{}'");
     this.backfillMemoryCandidateIndex();
     this.ensureMemoryFts();
 
@@ -770,6 +776,74 @@ export class ContextForgeStore {
       `)
       .all(...values)
       .map(hydrateMemoryCandidate);
+  }
+
+  getMemoryCandidate({ scopeType, scopeKey, candidateId }) {
+    const row = this.db
+      .prepare(`
+        SELECT
+          memory_candidate_index.*,
+          checkpoints.provider,
+          checkpoints.distill_run_id,
+          checkpoints.source_event_count,
+          checkpoints.created_at AS checkpoint_created_at
+        FROM memory_candidate_index
+        JOIN checkpoints ON checkpoints.id = memory_candidate_index.checkpoint_id
+        WHERE memory_candidate_index.scope_type = ?
+          AND memory_candidate_index.scope_key = ?
+          AND memory_candidate_index.id = ?
+      `)
+      .get(scopeType, scopeKey, candidateId);
+    return hydrateMemoryCandidate(row);
+  }
+
+  getMemoryCandidateByCheckpointIndex({ scopeType, scopeKey, checkpointId, candidateIndex }) {
+    const row = this.db
+      .prepare(`
+        SELECT
+          memory_candidate_index.*,
+          checkpoints.provider,
+          checkpoints.distill_run_id,
+          checkpoints.source_event_count,
+          checkpoints.created_at AS checkpoint_created_at
+        FROM memory_candidate_index
+        JOIN checkpoints ON checkpoints.id = memory_candidate_index.checkpoint_id
+        WHERE memory_candidate_index.scope_type = ?
+          AND memory_candidate_index.scope_key = ?
+          AND memory_candidate_index.checkpoint_id = ?
+          AND memory_candidate_index.candidate_index = ?
+      `)
+      .get(scopeType, scopeKey, checkpointId, candidateIndex);
+    return hydrateMemoryCandidate(row);
+  }
+
+  markMemoryCandidateReviewed({
+    scopeType,
+    scopeKey,
+    candidateId,
+    status,
+    reason = null,
+    promotedMemoryId = null,
+    metadata = {},
+  }) {
+    const reviewedAt = nowIso();
+    const result = this.db
+      .prepare(`
+        UPDATE memory_candidate_index
+        SET status = ?,
+            reviewed_at = ?,
+            review_reason = ?,
+            review_metadata_json = ?,
+            promoted_memory_id = ?
+        WHERE scope_type = ?
+          AND scope_key = ?
+          AND id = ?
+      `)
+      .run(status, reviewedAt, reason, json(metadata, {}), promotedMemoryId, scopeType, scopeKey, candidateId);
+    if (result.changes === 0) {
+      throw new Error(`Memory candidate not found: ${candidateId}`);
+    }
+    return this.getMemoryCandidate({ scopeType, scopeKey, candidateId });
   }
 
   insertCheckpoint({

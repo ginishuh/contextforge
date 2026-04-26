@@ -409,6 +409,8 @@ test('memory candidates require explicit promotion and can be corrected or deact
   assert.equal(candidateRule.candidate.reason, '');
   assert.deepEqual(candidateRule.candidate.tags, ['promotion']);
   assert.equal(candidateRule.source.provider, 'candidate_provider');
+  const candidateRunbook = candidates.find((candidate) => candidate.candidate.key === 'candidate-runbook');
+  assert.ok(candidateRunbook.id);
 
   const pendingCandidates = app.listMemoryCandidates({
     scope: 'repo',
@@ -428,6 +430,60 @@ test('memory candidates require explicit promotion and can be corrected or deact
   const candidateInfo = app.dbInfo();
   assert.equal(candidateInfo.tables.memoryCandidates, 2);
 
+  const promotedFromCandidate = app.promoteMemoryCandidate({
+    scope: 'repo',
+    scopeKey: 'repo-promote',
+    candidateId: candidateRule.id,
+    key: 'candidate-rule-via-helper',
+    reason: 'Reviewed via helper.',
+  });
+  assert.equal(promotedFromCandidate.key, 'candidate-rule-via-helper');
+  assert.equal(promotedFromCandidate.content, candidateRule.candidate.content);
+
+  const helperEvents = app.listMemoryEvents({
+    scope: 'repo',
+    scopeKey: 'repo-promote',
+    key: 'candidate-rule-via-helper',
+  });
+  assert.equal(helperEvents[0].metadata.sourceCheckpointId, checkpoint.id);
+  assert.equal(helperEvents[0].metadata.sourceSessionId, 'candidate-session');
+  assert.equal(helperEvents[0].metadata.sourceCandidateId, candidateRule.id);
+
+  const promotedCandidate = app.listMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'repo-promote',
+    status: 'promoted',
+  });
+  assert.equal(promotedCandidate.length, 1);
+  assert.equal(promotedCandidate[0].id, candidateRule.id);
+  assert.equal(promotedCandidate[0].promotedMemoryId, promotedFromCandidate.id);
+  assert.equal(promotedCandidate[0].reviewReason, 'Reviewed via helper.');
+  assert.ok(promotedCandidate[0].reviewedAt);
+
+  const rejectedCandidate = app.rejectMemoryCandidate({
+    scope: 'repo',
+    scopeKey: 'repo-promote',
+    candidateId: candidateRunbook.id,
+    reason: 'Too procedural for durable memory.',
+  });
+  assert.equal(rejectedCandidate.status, 'rejected');
+  assert.equal(rejectedCandidate.reviewReason, 'Too procedural for durable memory.');
+  assert.equal(rejectedCandidate.reviewMetadata.sourceCandidateIndex, 1);
+
+  const pendingAfterReview = app.listMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'repo-promote',
+    status: 'pending',
+  });
+  assert.equal(pendingAfterReview.length, 0);
+
+  app.deactivateMemory({
+    scope: 'repo',
+    scopeKey: 'repo-promote',
+    key: 'candidate-rule-via-helper',
+    reason: 'Keep the helper assertion isolated from search assertions.',
+  });
+
   const db = new Database(path.join(dataDir, 'contextforge.db'));
   try {
     db.prepare('DELETE FROM memory_candidate_index').run();
@@ -443,31 +499,6 @@ test('memory candidates require explicit promotion and can be corrected or deact
     }).length,
     2,
   );
-
-  const promotedFromCandidate = app.promoteMemoryCandidate({
-    scope: 'repo',
-    scopeKey: 'repo-promote',
-    checkpointId: checkpoint.id,
-    sourceCandidateIndex: 0,
-    key: 'candidate-rule-via-helper',
-    reason: 'Reviewed via helper.',
-  });
-  assert.equal(promotedFromCandidate.key, 'candidate-rule-via-helper');
-  assert.equal(promotedFromCandidate.content, candidateRule.candidate.content);
-
-  const helperEvents = app.listMemoryEvents({
-    scope: 'repo',
-    scopeKey: 'repo-promote',
-    key: 'candidate-rule-via-helper',
-  });
-  assert.equal(helperEvents[0].metadata.sourceCheckpointId, checkpoint.id);
-  assert.equal(helperEvents[0].metadata.sourceSessionId, 'candidate-session');
-  app.deactivateMemory({
-    scope: 'repo',
-    scopeKey: 'repo-promote',
-    key: 'candidate-rule-via-helper',
-    reason: 'Keep the helper assertion isolated from search assertions.',
-  });
 
   const promoted = app.promoteMemory({
     scope: 'repo',
@@ -578,6 +609,112 @@ test('CLI supports promoteMemory', async () => {
     { env },
   );
   assert.match(fetched.stdout, /Promoted memories are durable/);
+});
+
+test('CLI supports candidate id promotion and rejection', async () => {
+  const dataDir = await makeTempDir();
+  const env = { ...process.env, CONTEXTFORGE_DATA_DIR: dataDir };
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'candidate_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      candidate_provider: async () => ({
+        summaryShort: 'CLI candidate checkpoint.',
+        summaryText: 'The checkpoint proposes CLI candidates.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'cli-candidate-promote',
+            content: 'CLI can promote a memory candidate by id.',
+          },
+          {
+            key: 'cli-candidate-reject',
+            content: 'CLI can reject a memory candidate by id.',
+          },
+        ],
+        sourceEventCount: 1,
+        metadata: { synthetic: true },
+      }),
+    },
+  });
+
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'cli-review',
+    sessionId: 'cli-review-session',
+    role: 'assistant',
+    content: 'Candidate review queue CLI smoke.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'cli-review',
+    sessionId: 'cli-review-session',
+  });
+  const cliCandidates = app.listMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'cli-review',
+    status: 'pending',
+  });
+  const promoteCandidate = cliCandidates.find((candidate) => candidate.candidate.key === 'cli-candidate-promote');
+  const rejectCandidate = cliCandidates.find((candidate) => candidate.candidate.key === 'cli-candidate-reject');
+
+  const promoted = await execFileAsync(
+    'node',
+    [
+      path.resolve('src/cli.js'),
+      'promoteMemoryCandidate',
+      '--scope',
+      'repo',
+      '--scopeKey',
+      'cli-review',
+      '--candidateId',
+      promoteCandidate.id,
+      '--reason',
+      'Reviewed from CLI.',
+    ],
+    { env },
+  );
+  assert.match(promoted.stdout, /"key": "cli-candidate-promote"/);
+
+  const rejected = await execFileAsync(
+    'node',
+    [
+      path.resolve('src/cli.js'),
+      'rejectMemoryCandidate',
+      '--scope',
+      'repo',
+      '--scopeKey',
+      'cli-review',
+      '--candidateId',
+      rejectCandidate.id,
+      '--reason',
+      'Rejected from CLI.',
+    ],
+    { env },
+  );
+  assert.match(rejected.stdout, /"status": "rejected"/);
+  assert.match(rejected.stdout, /Rejected from CLI/);
+
+  const listed = await execFileAsync(
+    'node',
+    [
+      path.resolve('src/cli.js'),
+      'listMemoryCandidates',
+      '--scope',
+      'repo',
+      '--scopeKey',
+      'cli-review',
+      '--status',
+      'promoted',
+    ],
+    { env },
+  );
+  assert.match(listed.stdout, /"promotedMemoryId":/);
 });
 
 test('CLI accepts repoPath for repo-scoped memory', async () => {
@@ -2651,6 +2788,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'promote_memory',
       'promote_memory_candidate',
       'prune_raw_events',
+      'reject_memory_candidate',
       'remember',
       'search',
       'session_status',
@@ -2739,8 +2877,10 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.equal(promotedResult.structuredContent.result.key, 'promoted-mcp-rule');
 
     const candidateTool = toolList.tools.find((tool) => tool.name === 'promote_memory_candidate');
+    assert.ok(candidateTool.inputSchema.properties.candidateId);
     assert.ok(candidateTool.inputSchema.properties.checkpointId);
     assert.ok(candidateTool.inputSchema.properties.sourceCandidateIndex);
+    assert.ok(toolList.tools.some((tool) => tool.name === 'reject_memory_candidate'));
   } finally {
     await client.close();
   }

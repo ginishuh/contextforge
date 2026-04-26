@@ -394,28 +394,54 @@ export function createContextForge(options = {}) {
 
     promoteMemoryCandidate(options) {
       const scope = normalizeScopeOptions(options, config);
-      requireOption(options.checkpointId, 'checkpointId');
-      const candidateIndex = options.sourceCandidateIndex == null ? 0 : options.sourceCandidateIndex;
       return useStore((store) => {
-        const checkpoint = store
-          .listCheckpoints({
+        let indexedCandidate = null;
+        let checkpoint = null;
+        let candidate = null;
+        let candidateIndex = options.sourceCandidateIndex == null ? 0 : options.sourceCandidateIndex;
+
+        if (options.candidateId) {
+          indexedCandidate = store.getMemoryCandidate({
             ...scope,
-            sessionId: options.sessionId || null,
-          })
-          .find((item) => item.id === options.checkpointId);
-        if (!checkpoint) {
-          throw new Error(`Checkpoint not found: ${options.checkpointId}`);
+            candidateId: options.candidateId,
+          });
+          if (!indexedCandidate) {
+            throw new Error(`Memory candidate not found: ${options.candidateId}`);
+          }
+          candidate = indexedCandidate.candidate;
+          candidateIndex = indexedCandidate.index;
+          checkpoint = {
+            id: indexedCandidate.checkpointId,
+            sessionId: indexedCandidate.sessionId,
+          };
+        } else {
+          requireOption(options.checkpointId, 'checkpointId');
+          checkpoint = store
+            .listCheckpoints({
+              ...scope,
+              sessionId: options.sessionId || null,
+            })
+            .find((item) => item.id === options.checkpointId);
+          if (!checkpoint) {
+            throw new Error(`Checkpoint not found: ${options.checkpointId}`);
+          }
+          const candidates = checkpoint.metadata?.memoryCandidates || [];
+          candidate = candidates[candidateIndex];
+          if (!candidate) {
+            throw new Error(`Memory candidate not found at index ${candidateIndex}.`);
+          }
+          indexedCandidate = store.getMemoryCandidateByCheckpointIndex({
+            ...scope,
+            checkpointId: checkpoint.id,
+            candidateIndex,
+          });
         }
-        const candidates = checkpoint.metadata?.memoryCandidates || [];
-        const candidate = candidates[candidateIndex];
-        if (!candidate) {
-          throw new Error(`Memory candidate not found at index ${candidateIndex}.`);
-        }
+
         const key = options.key || candidate.key;
         requireOption(key, 'key');
         const content = options.content || candidate.content;
         requireOption(content, 'content');
-        return store.rememberMemory({
+        const memory = store.rememberMemory({
           ...scope,
           key,
           content,
@@ -427,8 +453,49 @@ export function createContextForge(options = {}) {
             sourceCheckpointId: checkpoint.id,
             sourceSessionId: checkpoint.sessionId,
             sourceCandidateIndex: candidateIndex,
+            sourceCandidateId: indexedCandidate?.id || null,
             sourceRawEventIds: options.sourceRawEventIds || [],
             reason: options.reason || null,
+          },
+        });
+        if (indexedCandidate) {
+          store.markMemoryCandidateReviewed({
+            ...scope,
+            candidateId: indexedCandidate.id,
+            status: 'promoted',
+            reason: options.reason || null,
+            promotedMemoryId: memory.id,
+            metadata: {
+              memoryKey: memory.key,
+              memoryId: memory.id,
+            },
+          });
+        }
+        return memory;
+      });
+    },
+
+    rejectMemoryCandidate(options) {
+      const scope = normalizeScopeOptions(options, config);
+      requireOption(options.candidateId, 'candidateId');
+      requireOption(options.reason, 'reason');
+      return useStore((store) => {
+        const candidate = store.getMemoryCandidate({
+          ...scope,
+          candidateId: options.candidateId,
+        });
+        if (!candidate) {
+          throw new Error(`Memory candidate not found: ${options.candidateId}`);
+        }
+        return store.markMemoryCandidateReviewed({
+          ...scope,
+          candidateId: options.candidateId,
+          status: 'rejected',
+          reason: options.reason,
+          metadata: {
+            checkpointId: candidate.checkpointId,
+            sessionId: candidate.sessionId,
+            sourceCandidateIndex: candidate.index,
           },
         });
       });

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Added candidate-id review workflows: `promoteMemoryCandidate --candidateId`
+  marks candidates as promoted with review metadata, and `rejectMemoryCandidate`
+  marks reviewed candidates as rejected without creating durable memory.
+- Exposed candidate rejection through the CLI, remote API, and MCP
+  `reject_memory_candidate` tool.
+
 ## 0.1.3 - 2026-04-26
 
 - Made MCP agent guidance more discoverable by documenting startup bootstrap
