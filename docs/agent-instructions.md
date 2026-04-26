@@ -147,6 +147,12 @@ After `distill_checkpoint`, call `list_memory_candidates` for the same
 - the agent is preparing a handoff
 - repeated future work would benefit from a durable note
 
+The MCP result makes candidate discovery explicit. If `distill_checkpoint`
+returns `memoryCandidateCount > 0`, call `list_memory_candidates` before ending
+the task or deciding what to promote. If `session_status` reports
+`latestCheckpointMemoryCandidateCount > 0`, use the latest checkpoint id or the
+session id to review those candidates.
+
 Promote with `promote_memory_candidate` only after review. A good candidate is:
 
 - stable beyond the current checkpoint

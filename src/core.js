@@ -108,6 +108,9 @@ function buildSessionStatus({ scope, sessionId, rawEvents, latestCheckpoint, pol
   const charsSinceLastCheckpoint = rawCharCount(eventsSinceLastCheckpoint);
   const latestCheckpointTime = checkpointTimestamp(latestCheckpoint);
   const elapsedMs = latestCheckpointTime ? Math.max(0, now.getTime() - latestCheckpointTime) : null;
+  const latestCheckpointMemoryCandidateCount = Array.isArray(latestCheckpoint?.metadata?.memoryCandidates)
+    ? latestCheckpoint.metadata.memoryCandidates.length
+    : 0;
   const reasons = [];
 
   if (rawEventCount === 0) {
@@ -138,6 +141,11 @@ function buildSessionStatus({ scope, sessionId, rawEvents, latestCheckpoint, pol
     rawCharCount: rawCharTotal,
     latestCheckpointId: latestCheckpoint?.id || null,
     latestCheckpointAt: latestCheckpoint?.createdAt || null,
+    latestCheckpointMemoryCandidateCount,
+    memoryCandidateHint:
+      latestCheckpointMemoryCandidateCount > 0
+        ? 'Call list_memory_candidates with this sessionId or latestCheckpointId before promoting durable memory.'
+        : null,
     eventsSinceLastCheckpoint: eventsSinceLastCheckpoint.length,
     charsSinceLastCheckpoint,
     elapsedSinceLastCheckpointMs: elapsedMs,
@@ -636,7 +644,10 @@ export function createContextForge(options = {}) {
           },
         });
 
-        return checkpoint;
+        return {
+          ...checkpoint,
+          memoryCandidateCount: output.memoryCandidates.length,
+        };
       });
     },
 

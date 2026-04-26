@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.3 - 2026-04-26
+
+- Made MCP agent guidance more discoverable by documenting startup bootstrap
+  behavior and keeping repository `AGENTS.md` files small.
+- Updated MCP server instructions to tell agents to inspect checkpoint memory
+  candidates after distillation or when session status reports pending
+  candidates.
+- Added `memoryCandidateCount` to `distillCheckpoint` results and
+  `latestCheckpointMemoryCandidateCount` plus a candidate hint to
+  `sessionStatus`, so agents can discover candidate memories without guessing.
+
 ## 0.1.2 - 2026-04-26
 
 - Added server/local raw evidence TTL pruning with `CONTEXTFORGE_RAW_TTL_DAYS`,

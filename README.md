@@ -991,7 +991,9 @@ decision has been reviewed, or `promote_memory_candidate` when promoting a
 reviewed candidate directly by checkpoint id and candidate index. Use
 `correct_memory` to preserve the previous value while changing a durable key,
 and `deactivate_memory` to remove stale memories from retrieval without
-deleting their history.
+deleting their history. `distill_checkpoint` returns `memoryCandidateCount`,
+and `session_status` reports `latestCheckpointMemoryCandidateCount`; agents
+should call `list_memory_candidates` when either count is greater than zero.
 
 For agent prompt or `AGENTS.md` guidance, see
 [ContextForge Agent Instructions](docs/agent-instructions.md). That guide

@@ -370,6 +370,16 @@ test('memory candidates require explicit promotion and can be corrected or deact
     scopeKey: 'repo-promote',
     sessionId: 'candidate-session',
   });
+  assert.equal(checkpoint.memoryCandidateCount, 1);
+
+  const status = app.sessionStatus({
+    scope: 'repo',
+    scopeKey: 'repo-promote',
+    sessionId: 'candidate-session',
+  });
+  assert.equal(status.latestCheckpointId, checkpoint.id);
+  assert.equal(status.latestCheckpointMemoryCandidateCount, 1);
+  assert.match(status.memoryCandidateHint, /list_memory_candidates/);
 
   assert.equal(
     app.getMemory({
@@ -1833,6 +1843,7 @@ test('appendRaw and mock distillCheckpoint preserve raw evidence', async () => {
   assert.deepEqual(checkpoint.metadata.providerMetadata, { roles: 'user, assistant' });
   assert.equal(checkpoint.decisions.length, 1);
   assert.equal(checkpoint.todos.length, 1);
+  assert.equal(checkpoint.memoryCandidateCount, 0);
 
   const info = app.dbInfo();
   assert.equal(info.tables.rawEvents, 2);
@@ -1858,6 +1869,8 @@ test('appendRaw and mock distillCheckpoint preserve raw evidence', async () => {
   assert.equal(statusAfter.latestCheckpointId, checkpoint.id);
   assert.equal(statusAfter.eventsSinceLastCheckpoint, 0);
   assert.equal(statusAfter.distillWindow.selectedEventCount, 0);
+  assert.equal(statusAfter.latestCheckpointMemoryCandidateCount, 0);
+  assert.equal(statusAfter.memoryCandidateHint, null);
   assert.equal(statusAfter.shouldDistill, false);
 });
 
