@@ -12,6 +12,14 @@
 - Added lightweight candidate promotion warnings for duplicate keys, duplicate
   content, risky recommendation/sensitivity signals, and low confidence or
   stability. Callers must pass `allowWarnings` to promote through warnings.
+- Added candidate review state guards so already promoted or rejected candidates
+  cannot be changed again unless callers pass `allowStatusOverride`.
+- Made memory-candidate index backfill run once per database instead of on every
+  store open.
+- Exposed `maxEvents` and `maxChars` on MCP `session_status` and
+  `distill_checkpoint`, matching the CLI/core bounded-window controls.
+- Preserved remote error names and warning details across the remote client
+  boundary.
 
 ## 0.1.3 - 2026-04-26
 

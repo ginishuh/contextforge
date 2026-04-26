@@ -490,6 +490,16 @@ test('memory candidates require explicit promotion and can be corrected or deact
   assert.equal(promotedCandidate[0].promotedMemoryId, promotedFromCandidate.id);
   assert.equal(promotedCandidate[0].reviewReason, 'Reviewed via helper.');
   assert.ok(promotedCandidate[0].reviewedAt);
+  assert.throws(
+    () =>
+      app.rejectMemoryCandidate({
+        scope: 'repo',
+        scopeKey: 'repo-promote',
+        candidateId: candidateRule.id,
+        reason: 'Should not reject after promotion.',
+      }),
+    /expected pending/,
+  );
 
   const rejectedCandidate = app.rejectMemoryCandidate({
     scope: 'repo',
@@ -500,6 +510,15 @@ test('memory candidates require explicit promotion and can be corrected or deact
   assert.equal(rejectedCandidate.status, 'rejected');
   assert.equal(rejectedCandidate.reviewReason, 'Too procedural for durable memory.');
   assert.equal(rejectedCandidate.reviewMetadata.sourceCandidateIndex, 1);
+  assert.throws(
+    () =>
+      app.promoteMemoryCandidate({
+        scope: 'repo',
+        scopeKey: 'repo-promote',
+        candidateId: candidateRunbook.id,
+      }),
+    /expected pending/,
+  );
 
   const pendingAfterReview = app.listMemoryCandidates({
     scope: 'repo',
@@ -518,6 +537,7 @@ test('memory candidates require explicit promotion and can be corrected or deact
   const db = new Database(path.join(dataDir, 'contextforge.db'));
   try {
     db.prepare('DELETE FROM memory_candidate_index').run();
+    db.prepare("DELETE FROM schema_meta WHERE key = 'memory_candidate_index_backfill_completed_at'").run();
   } finally {
     db.close();
   }
@@ -2954,6 +2974,12 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     const rememberTool = toolList.tools.find((tool) => tool.name === 'remember');
     assert.ok(rememberTool.inputSchema.properties.repoPath);
     assert.ok(rememberTool.inputSchema.properties.cwd);
+    const sessionStatusTool = toolList.tools.find((tool) => tool.name === 'session_status');
+    assert.ok(sessionStatusTool.inputSchema.properties.maxEvents);
+    assert.ok(sessionStatusTool.inputSchema.properties.maxChars);
+    const distillTool = toolList.tools.find((tool) => tool.name === 'distill_checkpoint');
+    assert.ok(distillTool.inputSchema.properties.maxEvents);
+    assert.ok(distillTool.inputSchema.properties.maxChars);
 
     const rememberResult = await client.callTool({
       name: 'remember',
@@ -3331,6 +3357,43 @@ test('remote storage mode strips local path hints after resolving scope', async 
   assert.equal(postedBody.scopeKey, 'github.com/example/remote-strip-repo');
   assert.equal(postedBody.repoPath, undefined);
   assert.equal(postedBody.cwd, undefined);
+});
+
+test('remote storage mode preserves structured error names and warnings', async () => {
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_STORAGE_MODE: 'remote',
+      CONTEXTFORGE_REMOTE_URL: 'https://memory.example.test',
+      CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+    },
+    cwd: process.cwd(),
+    fetchImpl: async () => ({
+      ok: false,
+      status: 500,
+      text: async () =>
+        JSON.stringify({
+          error: {
+            name: 'MemoryCandidatePromotionWarningError',
+            message: 'Memory candidate promotion has 1 warning(s).',
+            warnings: [{ code: 'duplicate_key' }],
+          },
+        }),
+    }),
+  });
+
+  await assert.rejects(
+    () =>
+      app.promoteMemoryCandidate({
+        scope: 'repo',
+        scopeKey: 'remote-warning-repo',
+        candidateId: 'candidate-id',
+      }),
+    (error) => {
+      assert.equal(error.name, 'MemoryCandidatePromotionWarningError');
+      assert.equal(error.warnings[0].code, 'duplicate_key');
+      return true;
+    },
+  );
 });
 
 test('remote storage mode rejects unauthorized writes', async () => {

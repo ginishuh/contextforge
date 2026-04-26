@@ -347,7 +347,7 @@ export class ContextForgeStore {
     this.ensureColumn('memory_candidate_index', 'sensitivity', 'TEXT');
     this.ensureColumn('memory_candidate_index', 'promotion_recommendation', 'TEXT');
     this.ensureColumn('memory_candidate_index', 'source_event_ids_json', "TEXT NOT NULL DEFAULT '[]'");
-    this.backfillMemoryCandidateIndex();
+    this.backfillMemoryCandidateIndexOnce();
     this.ensureMemoryFts();
 
     this.db
@@ -391,6 +391,23 @@ export class ContextForgeStore {
       }
     });
     transaction(checkpoints);
+  }
+
+  backfillMemoryCandidateIndexOnce() {
+    const completed = this.db
+      .prepare("SELECT value FROM schema_meta WHERE key = 'memory_candidate_index_backfill_completed_at'")
+      .get();
+    if (completed?.value) {
+      return;
+    }
+    this.backfillMemoryCandidateIndex();
+    this.db
+      .prepare(`
+        INSERT INTO schema_meta (key, value)
+        VALUES ('memory_candidate_index_backfill_completed_at', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+      `)
+      .run(nowIso());
   }
 
   indexMemoryCandidatesForCheckpoint(checkpoint) {
@@ -889,7 +906,18 @@ export class ContextForgeStore {
     reason = null,
     promotedMemoryId = null,
     metadata = {},
+    expectedStatus = 'pending',
+    allowStatusOverride = false,
   }) {
+    const existing = this.getMemoryCandidate({ scopeType, scopeKey, candidateId });
+    if (!existing) {
+      throw new Error(`Memory candidate not found: ${candidateId}`);
+    }
+    if (!allowStatusOverride && existing.status !== expectedStatus) {
+      throw new Error(
+        `Memory candidate ${candidateId} is ${existing.status}; expected ${expectedStatus}. Pass allowStatusOverride to change it anyway.`,
+      );
+    }
     const reviewedAt = nowIso();
     const result = this.db
       .prepare(`

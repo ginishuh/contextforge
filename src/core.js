@@ -519,6 +519,11 @@ export function createContextForge(options = {}) {
           });
         }
 
+        if (indexedCandidate && indexedCandidate.status !== 'pending' && !truthyOption(options.allowStatusOverride)) {
+          throw new Error(
+            `Memory candidate ${indexedCandidate.id} is ${indexedCandidate.status}; expected pending. Pass allowStatusOverride to change it anyway.`,
+          );
+        }
         const key = options.key || candidate.key;
         requireOption(key, 'key');
         const content = options.content || candidate.content;
@@ -558,6 +563,7 @@ export function createContextForge(options = {}) {
             status: 'promoted',
             reason: options.reason || null,
             promotedMemoryId: memory.id,
+            allowStatusOverride: truthyOption(options.allowStatusOverride),
             metadata: {
               memoryKey: memory.key,
               memoryId: memory.id,
@@ -581,11 +587,17 @@ export function createContextForge(options = {}) {
         if (!candidate) {
           throw new Error(`Memory candidate not found: ${options.candidateId}`);
         }
+        if (candidate.status !== 'pending' && !truthyOption(options.allowStatusOverride)) {
+          throw new Error(
+            `Memory candidate ${candidate.id} is ${candidate.status}; expected pending. Pass allowStatusOverride to change it anyway.`,
+          );
+        }
         return store.markMemoryCandidateReviewed({
           ...scope,
           candidateId: options.candidateId,
           status: 'rejected',
           reason: options.reason,
+          allowStatusOverride: truthyOption(options.allowStatusOverride),
           metadata: {
             checkpointId: candidate.checkpointId,
             sessionId: candidate.sessionId,

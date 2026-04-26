@@ -92,6 +92,7 @@ function toCoreOptions(options) {
     promotionRecommendation: options.promotionRecommendation,
     sort: options.sort,
     allowWarnings: options.allowWarnings === true || options.allowWarnings === 'true',
+    allowStatusOverride: options.allowStatusOverride === true || options.allowStatusOverride === 'true',
     reason: options.reason,
     live: options.live === true || options.live === 'true',
     minEvents: options.minEvents == null ? undefined : Number(options.minEvents),

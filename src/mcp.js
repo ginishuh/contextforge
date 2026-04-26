@@ -66,6 +66,8 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
         minIntervalMs: z.number().int().positive().optional(),
         charMinIntervalMs: z.number().int().positive().optional(),
         charThreshold: z.number().int().positive().optional(),
+        maxEvents: z.number().int().positive().optional(),
+        maxChars: z.number().int().positive().optional(),
       },
       annotations: {
         title: 'Session Status',
@@ -189,6 +191,8 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
         sessionId: z.string(),
         conversationId: z.string().optional(),
         provider: z.string().optional(),
+        maxEvents: z.number().int().positive().optional(),
+        maxChars: z.number().int().positive().optional(),
       },
       annotations: {
         title: 'Distill Checkpoint',
@@ -288,6 +292,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
         importance: z.number().int().optional(),
         sourceRawEventIds: z.array(z.string()).optional(),
         allowWarnings: z.boolean().optional(),
+        allowStatusOverride: z.boolean().optional(),
         reason: z.string().optional(),
       },
       annotations: {

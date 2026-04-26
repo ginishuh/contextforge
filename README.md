@@ -869,7 +869,9 @@ Candidate promotion performs lightweight review checks before writing durable
 memory. It blocks obvious duplicate keys, identical content under another key,
 high-sensitivity candidates, low confidence/stability signals, and candidates
 whose recommendation is `ignore` or `reject`. After manual review, pass
-`--allowWarnings true` to promote anyway.
+`--allowWarnings true` to promote anyway. Already promoted or rejected
+candidates are protected from accidental re-review; pass
+`--allowStatusOverride true` only for explicit repair work.
 
 Promotion is intentional: checkpoints can suggest memory candidates, but durable
 memory is written only when a caller promotes a reviewed fact or decision.
