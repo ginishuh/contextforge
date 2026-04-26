@@ -3,7 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 function nowIso() {
   return new Date().toISOString();
@@ -111,12 +111,57 @@ function hydrateMemoryEvent(row) {
   };
 }
 
+function hydrateMemoryCandidate(row) {
+  if (!row) return null;
+  const tags = parseJson(row.tags_json, []);
+  return {
+    type: 'memory_candidate',
+    id: row.id,
+    checkpointId: row.checkpoint_id,
+    sessionId: row.session_id,
+    conversationId: row.conversation_id,
+    scopeType: row.scope_type,
+    scopeKey: row.scope_key,
+    index: row.candidate_index,
+    status: row.status,
+    candidate: {
+      key: row.candidate_key,
+      content: row.candidate_content,
+      reason: row.candidate_reason,
+      category: row.category,
+      tags: Array.isArray(tags) ? tags : [],
+      importance: row.importance,
+    },
+    source: {
+      provider: row.provider,
+      distillRunId: row.distill_run_id,
+      sourceEventCount: row.source_event_count,
+      checkpointCreatedAt: row.checkpoint_created_at,
+    },
+    reviewedAt: row.reviewed_at,
+    promotedMemoryId: row.promoted_memory_id,
+    createdAt: row.created_at,
+  };
+}
+
 function ftsValue(value) {
   return String(value || '').replace(/\0/g, ' ');
 }
 
 function normalizeTags(tags) {
   return Array.isArray(tags) ? tags.map((tag) => String(tag)) : [];
+}
+
+function normalizeCandidate(candidate) {
+  const value = candidate && typeof candidate === 'object' && !Array.isArray(candidate) ? candidate : {};
+  return {
+    key: String(value.key || ''),
+    content: String(value.content || ''),
+    reason: String(value.reason || ''),
+    category: value.category ? String(value.category) : 'note',
+    tags: normalizeTags(value.tags),
+    importance: Number.isFinite(Number(value.importance)) ? Number(value.importance) : 0,
+  };
 }
 
 export class ContextForgeStore {
@@ -220,6 +265,29 @@ export class ContextForgeStore {
         FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE
       );
 
+      CREATE TABLE IF NOT EXISTS memory_candidate_index (
+        id TEXT PRIMARY KEY,
+        checkpoint_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        conversation_id TEXT,
+        scope_type TEXT NOT NULL CHECK (scope_type IN ('shared', 'repo', 'local')),
+        scope_key TEXT NOT NULL,
+        candidate_index INTEGER NOT NULL,
+        candidate_key TEXT NOT NULL,
+        candidate_content TEXT NOT NULL,
+        candidate_reason TEXT NOT NULL DEFAULT '',
+        category TEXT NOT NULL DEFAULT 'note',
+        tags_json TEXT NOT NULL DEFAULT '[]',
+        importance INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'promoted', 'rejected', 'stale', 'snoozed')),
+        created_at TEXT NOT NULL,
+        reviewed_at TEXT,
+        promoted_memory_id TEXT,
+        UNIQUE (checkpoint_id, candidate_index),
+        FOREIGN KEY (checkpoint_id) REFERENCES checkpoints(id) ON DELETE CASCADE,
+        FOREIGN KEY (promoted_memory_id) REFERENCES memories(id) ON DELETE SET NULL
+      );
+
       CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
         memory_id UNINDEXED,
         scope_type UNINDEXED,
@@ -238,6 +306,10 @@ export class ContextForgeStore {
         ON checkpoints(scope_type, scope_key, session_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_distill_runs_session
         ON distill_runs(scope_type, scope_key, session_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_memory_candidate_scope_status
+        ON memory_candidate_index(scope_type, scope_key, status, created_at);
+      CREATE INDEX IF NOT EXISTS idx_memory_candidate_checkpoint
+        ON memory_candidate_index(checkpoint_id, candidate_index);
     `);
 
     this.ensureColumn('checkpoints', 'distill_run_id', 'TEXT');
@@ -245,6 +317,7 @@ export class ContextForgeStore {
     this.ensureColumn('memories', 'status', "TEXT NOT NULL DEFAULT 'active'");
     this.ensureColumn('memories', 'supersedes_memory_id', 'TEXT');
     this.ensureColumn('memories', 'deactivated_at', 'TEXT');
+    this.backfillMemoryCandidateIndex();
     this.ensureMemoryFts();
 
     this.db
@@ -270,8 +343,68 @@ export class ContextForgeStore {
         checkpoints: count('checkpoints'),
         distillRuns: count('distill_runs'),
         memoryEvents: count('memory_events'),
+        memoryCandidates: count('memory_candidate_index'),
       },
     };
+  }
+
+  backfillMemoryCandidateIndex() {
+    const checkpoints = this.db
+      .prepare(`
+        SELECT * FROM checkpoints
+        WHERE json_array_length(json_extract(metadata_json, '$.memoryCandidates')) > 0
+      `)
+      .all();
+    const transaction = this.db.transaction((rows) => {
+      for (const row of rows) {
+        this.indexMemoryCandidatesForCheckpoint(hydrateCheckpoint(row));
+      }
+    });
+    transaction(checkpoints);
+  }
+
+  indexMemoryCandidatesForCheckpoint(checkpoint) {
+    const candidates = Array.isArray(checkpoint?.metadata?.memoryCandidates)
+      ? checkpoint.metadata.memoryCandidates
+      : [];
+    if (candidates.length === 0) {
+      return [];
+    }
+
+    const insert = this.db.prepare(`
+      INSERT INTO memory_candidate_index (
+        id, checkpoint_id, session_id, conversation_id, scope_type, scope_key,
+        candidate_index, candidate_key, candidate_content, candidate_reason,
+        category, tags_json, importance, status, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+      ON CONFLICT(checkpoint_id, candidate_index) DO NOTHING
+    `);
+
+    for (const [index, rawCandidate] of candidates.entries()) {
+      const candidate = normalizeCandidate(rawCandidate);
+      insert.run(
+        randomUUID(),
+        checkpoint.id,
+        checkpoint.sessionId,
+        checkpoint.conversationId,
+        checkpoint.scopeType,
+        checkpoint.scopeKey,
+        index,
+        candidate.key,
+        candidate.content,
+        candidate.reason,
+        candidate.category,
+        json(candidate.tags, []),
+        candidate.importance,
+        checkpoint.createdAt,
+      );
+    }
+    return this.listMemoryCandidates({
+      scopeType: checkpoint.scopeType,
+      scopeKey: checkpoint.scopeKey,
+      checkpointId: checkpoint.id,
+    });
   }
 
   pruneRawEventsOlderThan(cutoffIso) {
@@ -600,6 +733,45 @@ export class ContextForgeStore {
     return rows.map(hydrateCheckpoint);
   }
 
+  listMemoryCandidates({ scopeType, scopeKey, sessionId = null, checkpointId = null, status = null, limit = null }) {
+    const conditions = ['memory_candidate_index.scope_type = ?', 'memory_candidate_index.scope_key = ?'];
+    const values = [scopeType, scopeKey];
+    if (sessionId) {
+      conditions.push('memory_candidate_index.session_id = ?');
+      values.push(sessionId);
+    }
+    if (checkpointId) {
+      conditions.push('memory_candidate_index.checkpoint_id = ?');
+      values.push(checkpointId);
+    }
+    if (status) {
+      conditions.push('memory_candidate_index.status = ?');
+      values.push(status);
+    }
+    const parsedLimit = limit == null ? null : Number(limit);
+    const limitClause = Number.isInteger(parsedLimit) && parsedLimit > 0 ? 'LIMIT ?' : '';
+    if (limitClause) {
+      values.push(parsedLimit);
+    }
+
+    return this.db
+      .prepare(`
+        SELECT
+          memory_candidate_index.*,
+          checkpoints.provider,
+          checkpoints.distill_run_id,
+          checkpoints.source_event_count,
+          checkpoints.created_at AS checkpoint_created_at
+        FROM memory_candidate_index
+        JOIN checkpoints ON checkpoints.id = memory_candidate_index.checkpoint_id
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY memory_candidate_index.created_at DESC, memory_candidate_index.id DESC
+        ${limitClause}
+      `)
+      .all(...values)
+      .map(hydrateMemoryCandidate);
+  }
+
   insertCheckpoint({
     scopeType,
     scopeKey,
@@ -643,7 +815,9 @@ export class ContextForgeStore {
         json(metadata, {}),
         nowIso(),
       );
-    return hydrateCheckpoint(row);
+    const checkpoint = hydrateCheckpoint(row);
+    this.indexMemoryCandidatesForCheckpoint(checkpoint);
+    return checkpoint;
   }
 
   startDistillRun({

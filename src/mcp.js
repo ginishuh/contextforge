@@ -226,6 +226,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
         ...scopedSchema,
         sessionId: z.string().optional(),
         checkpointId: z.string().optional(),
+        status: z.enum(['pending', 'promoted', 'rejected', 'stale', 'snoozed']).optional(),
       },
       annotations: {
         title: 'List Memory Candidates',

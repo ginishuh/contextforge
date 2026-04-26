@@ -350,6 +350,11 @@ test('memory candidates require explicit promotion and can be corrected or deact
             category: 'policy',
             tags: ['promotion'],
           },
+          {
+            key: 'candidate-runbook',
+            content: 'Review checkpoint candidates before promotion.',
+            reason: 'Documents review queue behavior.',
+          },
         ],
         sourceEventCount: 1,
         metadata: { synthetic: true },
@@ -370,7 +375,7 @@ test('memory candidates require explicit promotion and can be corrected or deact
     scopeKey: 'repo-promote',
     sessionId: 'candidate-session',
   });
-  assert.equal(checkpoint.memoryCandidateCount, 1);
+  assert.equal(checkpoint.memoryCandidateCount, 2);
 
   const status = app.sessionStatus({
     scope: 'repo',
@@ -378,7 +383,7 @@ test('memory candidates require explicit promotion and can be corrected or deact
     sessionId: 'candidate-session',
   });
   assert.equal(status.latestCheckpointId, checkpoint.id);
-  assert.equal(status.latestCheckpointMemoryCandidateCount, 1);
+  assert.equal(status.latestCheckpointMemoryCandidateCount, 2);
   assert.match(status.memoryCandidateHint, /list_memory_candidates/);
 
   assert.equal(
@@ -395,10 +400,49 @@ test('memory candidates require explicit promotion and can be corrected or deact
     scopeKey: 'repo-promote',
     sessionId: 'candidate-session',
   });
-  assert.equal(candidates.length, 1);
-  assert.equal(candidates[0].checkpointId, checkpoint.id);
-  assert.equal(candidates[0].index, 0);
-  assert.equal(candidates[0].candidate.key, 'candidate-rule');
+  assert.equal(candidates.length, 2);
+  const candidateRule = candidates.find((candidate) => candidate.candidate.key === 'candidate-rule');
+  assert.ok(candidateRule.id);
+  assert.equal(candidateRule.status, 'pending');
+  assert.equal(candidateRule.checkpointId, checkpoint.id);
+  assert.equal(candidateRule.index, 0);
+  assert.equal(candidateRule.candidate.reason, '');
+  assert.deepEqual(candidateRule.candidate.tags, ['promotion']);
+  assert.equal(candidateRule.source.provider, 'candidate_provider');
+
+  const pendingCandidates = app.listMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'repo-promote',
+    status: 'pending',
+  });
+  assert.equal(pendingCandidates.length, 2);
+
+  const limitedCandidates = app.listMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'repo-promote',
+    status: 'pending',
+    limit: 1,
+  });
+  assert.equal(limitedCandidates.length, 1);
+
+  const candidateInfo = app.dbInfo();
+  assert.equal(candidateInfo.tables.memoryCandidates, 2);
+
+  const db = new Database(path.join(dataDir, 'contextforge.db'));
+  try {
+    db.prepare('DELETE FROM memory_candidate_index').run();
+  } finally {
+    db.close();
+  }
+  const appAfterBackfill = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+  assert.equal(
+    appAfterBackfill.listMemoryCandidates({
+      scope: 'repo',
+      scopeKey: 'repo-promote',
+      sessionId: 'candidate-session',
+    }).length,
+    2,
+  );
 
   const promotedFromCandidate = app.promoteMemoryCandidate({
     scope: 'repo',
@@ -409,7 +453,7 @@ test('memory candidates require explicit promotion and can be corrected or deact
     reason: 'Reviewed via helper.',
   });
   assert.equal(promotedFromCandidate.key, 'candidate-rule-via-helper');
-  assert.equal(promotedFromCandidate.content, candidates[0].candidate.content);
+  assert.equal(promotedFromCandidate.content, candidateRule.candidate.content);
 
   const helperEvents = app.listMemoryEvents({
     scope: 'repo',
@@ -428,13 +472,13 @@ test('memory candidates require explicit promotion and can be corrected or deact
   const promoted = app.promoteMemory({
     scope: 'repo',
     scopeKey: 'repo-promote',
-    key: candidates[0].candidate.key,
-    content: candidates[0].candidate.content,
-    category: candidates[0].candidate.category,
-    tags: candidates[0].candidate.tags,
-    sourceCheckpointId: candidates[0].checkpointId,
-    sourceSessionId: candidates[0].sessionId,
-    sourceCandidateIndex: candidates[0].index,
+    key: candidateRule.candidate.key,
+    content: candidateRule.candidate.content,
+    category: candidateRule.candidate.category,
+    tags: candidateRule.candidate.tags,
+    sourceCheckpointId: candidateRule.checkpointId,
+    sourceSessionId: candidateRule.sessionId,
+    sourceCandidateIndex: candidateRule.index,
     reason: 'Reviewed synthetic candidate.',
   });
   assert.equal(promoted.status, 'active');

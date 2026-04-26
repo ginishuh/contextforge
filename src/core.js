@@ -382,31 +382,13 @@ export function createContextForge(options = {}) {
     listMemoryCandidates(options) {
       const scope = normalizeScopeOptions(options, config);
       return useStore((store) =>
-        store
-          .listCheckpoints({
-            ...scope,
-            sessionId: options.sessionId || null,
-          })
-          .filter((checkpoint) => !options.checkpointId || checkpoint.id === options.checkpointId)
-          .flatMap((checkpoint) => {
-            const candidates = checkpoint.metadata?.memoryCandidates || [];
-            return candidates.map((candidate, index) => ({
-              type: 'memory_candidate',
-              checkpointId: checkpoint.id,
-              sessionId: checkpoint.sessionId,
-              conversationId: checkpoint.conversationId,
-              scopeType: checkpoint.scopeType,
-              scopeKey: checkpoint.scopeKey,
-              index,
-              candidate,
-              source: {
-                provider: checkpoint.provider,
-                distillRunId: checkpoint.distillRunId,
-                sourceEventCount: checkpoint.sourceEventCount,
-                checkpointCreatedAt: checkpoint.createdAt,
-              },
-            }));
-          }),
+        store.listMemoryCandidates({
+          ...scope,
+          sessionId: options.sessionId || null,
+          checkpointId: options.checkpointId || null,
+          status: options.status || null,
+          limit: options.limit == null ? null : Number(options.limit),
+        }),
       );
     },
 

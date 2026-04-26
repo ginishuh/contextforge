@@ -86,6 +86,7 @@ function toCoreOptions(options) {
       : [],
     sourceCandidateIndex: options.sourceCandidateIndex == null ? undefined : Number(options.sourceCandidateIndex),
     checkpointId: options.checkpointId,
+    status: options.status,
     reason: options.reason,
     live: options.live === true || options.live === 'true',
     minEvents: options.minEvents == null ? undefined : Number(options.minEvents),
