@@ -167,6 +167,7 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
         error: {
           message: error.message,
           name: error.name,
+          warnings: error.warnings,
         },
       });
     }

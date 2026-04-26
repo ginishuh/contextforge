@@ -231,7 +231,13 @@ should bump the provider prompt version.
 Checkpoint memory candidates are review inputs, not canonical facts. A caller
 can list candidates from checkpoint metadata and then promote a reviewed item
 into durable memory. Promotion records source checkpoint, session, raw event, and
-candidate metadata when supplied.
+candidate metadata when supplied. Candidate v2 metadata may include type,
+confidence, stability, sensitivity, recommendation, and source event ids for
+review ordering; these fields do not trigger automatic promotion. Promotion
+should warn or require explicit override when an active durable memory already
+uses the same key, the same content exists under another key, or the candidate
+signals high sensitivity, low stability/confidence, or a non-promote
+recommendation.
 
 Durable memory should be corrected or deactivated rather than deleted. A
 correction updates the durable key while preserving previous content in the

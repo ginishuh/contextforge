@@ -227,6 +227,9 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
         sessionId: z.string().optional(),
         checkpointId: z.string().optional(),
         status: z.enum(['pending', 'promoted', 'rejected', 'stale', 'snoozed']).optional(),
+        candidateType: z.string().optional(),
+        promotionRecommendation: z.string().optional(),
+        sort: z.enum(['created', 'recommendation']).optional(),
         limit: z.number().int().positive().optional(),
       },
       annotations: {
@@ -284,6 +287,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
         tags: optionalTags,
         importance: z.number().int().optional(),
         sourceRawEventIds: z.array(z.string()).optional(),
+        allowWarnings: z.boolean().optional(),
         reason: z.string().optional(),
       },
       annotations: {

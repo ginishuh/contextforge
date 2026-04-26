@@ -349,11 +349,23 @@ test('memory candidates require explicit promotion and can be corrected or deact
             content: 'Promote reviewed checkpoint candidates explicitly.',
             category: 'policy',
             tags: ['promotion'],
+            importance: 7,
+            candidateType: 'project_policy',
+            confidence: 0.91,
+            stability: 0.88,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+            sourceEventIds: ['raw-candidate-1'],
           },
           {
             key: 'candidate-runbook',
             content: 'Review checkpoint candidates before promotion.',
             reason: 'Documents review queue behavior.',
+            candidateType: 'runbook',
+            confidence: 0.7,
+            stability: 0.6,
+            sensitivity: 'low',
+            promotionRecommendation: 'review',
           },
         ],
         sourceEventCount: 1,
@@ -408,6 +420,13 @@ test('memory candidates require explicit promotion and can be corrected or deact
   assert.equal(candidateRule.index, 0);
   assert.equal(candidateRule.candidate.reason, '');
   assert.deepEqual(candidateRule.candidate.tags, ['promotion']);
+  assert.equal(candidateRule.candidate.importance, 7);
+  assert.equal(candidateRule.candidate.candidateType, 'project_policy');
+  assert.equal(candidateRule.candidate.confidence, 0.91);
+  assert.equal(candidateRule.candidate.stability, 0.88);
+  assert.equal(candidateRule.candidate.sensitivity, 'low');
+  assert.equal(candidateRule.candidate.promotionRecommendation, 'promote');
+  assert.deepEqual(candidateRule.candidate.sourceEventIds, ['raw-candidate-1']);
   assert.equal(candidateRule.source.provider, 'candidate_provider');
   const candidateRunbook = candidates.find((candidate) => candidate.candidate.key === 'candidate-runbook');
   assert.ok(candidateRunbook.id);
@@ -418,6 +437,17 @@ test('memory candidates require explicit promotion and can be corrected or deact
     status: 'pending',
   });
   assert.equal(pendingCandidates.length, 2);
+
+  const promotedRecommendationCandidates = app.listMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'repo-promote',
+    status: 'pending',
+    candidateType: 'project_policy',
+    promotionRecommendation: 'promote',
+    sort: 'recommendation',
+  });
+  assert.equal(promotedRecommendationCandidates.length, 1);
+  assert.equal(promotedRecommendationCandidates[0].id, candidateRule.id);
 
   const limitedCandidates = app.listMemoryCandidates({
     scope: 'repo',
@@ -448,6 +478,7 @@ test('memory candidates require explicit promotion and can be corrected or deact
   assert.equal(helperEvents[0].metadata.sourceCheckpointId, checkpoint.id);
   assert.equal(helperEvents[0].metadata.sourceSessionId, 'candidate-session');
   assert.equal(helperEvents[0].metadata.sourceCandidateId, candidateRule.id);
+  assert.deepEqual(helperEvents[0].metadata.candidateSourceEventIds, ['raw-candidate-1']);
 
   const promotedCandidate = app.listMemoryCandidates({
     scope: 'repo',
@@ -715,6 +746,133 @@ test('CLI supports candidate id promotion and rejection', async () => {
     { env },
   );
   assert.match(listed.stdout, /"promotedMemoryId":/);
+});
+
+test('candidate promotion warnings require explicit override', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'warning_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      warning_provider: async () => ({
+        summaryShort: 'Warning checkpoint.',
+        summaryText: 'The checkpoint proposes risky candidates.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'existing-rule',
+            content: 'Different content for the same key.',
+            reason: 'Tests key conflict detection.',
+            candidateType: 'project_policy',
+            confidence: 0.4,
+            stability: 0.4,
+            sensitivity: 'high',
+            promotionRecommendation: 'reject',
+          },
+          {
+            key: 'duplicate-content-rule',
+            content: 'Existing durable memory content.',
+            reason: 'Tests exact content duplicate detection.',
+            promotionRecommendation: 'promote',
+          },
+        ],
+        sourceEventCount: 1,
+        metadata: { synthetic: true },
+      }),
+    },
+  });
+
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'warning-repo',
+    key: 'existing-rule',
+    content: 'Original durable memory content.',
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'warning-repo',
+    key: 'existing-content-rule',
+    content: 'Existing durable memory content.',
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'warning-repo',
+    sessionId: 'warning-session',
+    role: 'assistant',
+    content: 'Candidate: risky promotion.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'warning-repo',
+    sessionId: 'warning-session',
+  });
+  const warningCandidates = app.listMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'warning-repo',
+    status: 'pending',
+    sort: 'recommendation',
+  });
+  const conflictCandidate = warningCandidates.find((candidate) => candidate.candidate.key === 'existing-rule');
+  const duplicateContentCandidate = warningCandidates.find(
+    (candidate) => candidate.candidate.key === 'duplicate-content-rule',
+  );
+
+  assert.throws(
+    () =>
+      app.promoteMemoryCandidate({
+        scope: 'repo',
+        scopeKey: 'warning-repo',
+        candidateId: conflictCandidate.id,
+      }),
+    /allowWarnings/,
+  );
+
+  try {
+    app.promoteMemoryCandidate({
+      scope: 'repo',
+      scopeKey: 'warning-repo',
+      candidateId: conflictCandidate.id,
+    });
+    assert.fail('Expected warning error.');
+  } catch (error) {
+    assert.equal(error.name, 'MemoryCandidatePromotionWarningError');
+    assert.deepEqual(
+      error.warnings.map((warning) => warning.code),
+      ['existing_key_conflict', 'high_sensitivity', 'recommendation_not_promote', 'low_confidence', 'low_stability'],
+    );
+  }
+
+  assert.throws(
+    () =>
+      app.promoteMemoryCandidate({
+        scope: 'repo',
+        scopeKey: 'warning-repo',
+        candidateId: duplicateContentCandidate.id,
+      }),
+    /allowWarnings/,
+  );
+
+  const promoted = app.promoteMemoryCandidate({
+    scope: 'repo',
+    scopeKey: 'warning-repo',
+    candidateId: conflictCandidate.id,
+    allowWarnings: true,
+    reason: 'Reviewed warnings and accepted.',
+  });
+  assert.equal(promoted.key, 'existing-rule');
+
+  const events = app.listMemoryEvents({
+    scope: 'repo',
+    scopeKey: 'warning-repo',
+    key: 'existing-rule',
+  });
+  assert.equal(events.at(-1).eventType, 'promote');
+  assert.ok(events.at(-1).metadata.promotionWarnings.length >= 1);
 });
 
 test('CLI accepts repoPath for repo-scoped memory', async () => {
@@ -2432,7 +2590,7 @@ test('codex_exec provider distills synthetic raw events through a runner', async
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.reasoningEffort, 'low');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.timeoutMs, 1234);
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v1');
-  assert.equal(checkpoint.metadata.providerMetadata.codexExec.outputSchemaVersion, 'contextforge.checkpoint.v1');
+  assert.equal(checkpoint.metadata.providerMetadata.codexExec.outputSchemaVersion, 'contextforge.checkpoint.v2');
   assert.match(invocation.prompt, /Return exactly one JSON object/);
   assert.deepEqual(invocation.args.slice(0, 2), ['exec', '--skip-git-repo-check']);
   assert.ok(invocation.args.includes('--output-schema'));
@@ -2448,7 +2606,7 @@ test('codex_exec provider distills synthetic raw events through a runner', async
   });
   assert.equal(runs[0].status, 'succeeded');
   assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v1');
-  assert.equal(runs[0].inputMetadata.providerMetadata.outputSchemaVersion, 'contextforge.checkpoint.v1');
+  assert.equal(runs[0].inputMetadata.providerMetadata.outputSchemaVersion, 'contextforge.checkpoint.v2');
   assert.equal(runs[0].outputMetadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v1');
 });
 

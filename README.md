@@ -865,6 +865,12 @@ node src/cli.js promoteMemoryCandidate \
 The older `--checkpointId checkpoint-id --sourceCandidateIndex 0` form still
 works for compatibility.
 
+Candidate promotion performs lightweight review checks before writing durable
+memory. It blocks obvious duplicate keys, identical content under another key,
+high-sensitivity candidates, low confidence/stability signals, and candidates
+whose recommendation is `ignore` or `reject`. After manual review, pass
+`--allowWarnings true` to promote anyway.
+
 Promotion is intentional: checkpoints can suggest memory candidates, but durable
 memory is written only when a caller promotes a reviewed fact or decision.
 Candidate review, correction, and deactivation use separate commands so durable
@@ -876,6 +882,9 @@ node src/cli.js listMemoryCandidates \
   --scopeKey github.com/example/contextforge \
   --sessionId demo-session \
   --status pending \
+  --candidateType project_policy \
+  --promotionRecommendation promote \
+  --sort recommendation \
   --limit 20
 
 node src/cli.js rejectMemoryCandidate \
@@ -999,7 +1008,7 @@ distillation, and call `remember` when the user or agent intentionally decides
 that an important fact, preference, decision, or runbook note should become
 durable memory. Use `promote_memory` only after a checkpoint candidate or
 decision has been reviewed, or `promote_memory_candidate` when promoting a
-reviewed candidate directly by checkpoint id and candidate index. Use
+reviewed candidate directly by candidate id. Use
 `correct_memory` to preserve the previous value while changing a durable key,
 and `deactivate_memory` to remove stale memories from retrieval without
 deleting their history. `distill_checkpoint` returns `memoryCandidateCount`,

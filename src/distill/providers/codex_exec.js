@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 export const CODEX_EXEC_PROMPT_VERSION = 'codex_exec.prompt.v1';
-export const CODEX_EXEC_OUTPUT_SCHEMA_VERSION = 'contextforge.checkpoint.v1';
+export const CODEX_EXEC_OUTPUT_SCHEMA_VERSION = 'contextforge.checkpoint.v2';
 
 const OUTPUT_SCHEMA = {
   $id: CODEX_EXEC_OUTPUT_SCHEMA_VERSION,
@@ -37,6 +37,15 @@ const OUTPUT_SCHEMA = {
           key: { type: 'string' },
           content: { type: 'string' },
           reason: { type: 'string' },
+          category: { type: 'string' },
+          tags: { type: 'array', items: { type: 'string' } },
+          importance: { type: 'integer' },
+          candidateType: { type: 'string' },
+          confidence: { type: 'number', minimum: 0, maximum: 1 },
+          stability: { type: 'number', minimum: 0, maximum: 1 },
+          sensitivity: { type: 'string', enum: ['low', 'medium', 'high', 'restricted'] },
+          promotionRecommendation: { type: 'string', enum: ['promote', 'review', 'ignore', 'reject'] },
+          sourceEventIds: { type: 'array', items: { type: 'string' } },
         },
       },
     },
@@ -129,6 +138,8 @@ export function buildCodexExecPrompt(input, options = {}) {
       'Do not include Markdown, code fences, commentary, or private assumptions.',
       'Preserve uncertainty in openQuestions instead of inventing facts.',
       'Use only the raw events and previous checkpoint supplied in this request.',
+      'For memoryCandidates, include v2 review fields when useful: candidateType, confidence, stability, sensitivity, promotionRecommendation, and sourceEventIds.',
+      'Set promotionRecommendation to promote only for stable, reviewed-looking durable facts; otherwise prefer review, ignore, or reject.',
     ],
     session: input.session,
     requestedOutputSchema: input.requestedOutputSchema,

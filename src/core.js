@@ -40,6 +40,85 @@ function rawCharCount(events) {
   return events.reduce((total, event) => total + String(event.content || '').length, 0);
 }
 
+function normalizeContentForRisk(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function truthyOption(value) {
+  return value === true || value === 'true' || value === '1' || value === 1;
+}
+
+function candidatePromotionWarnings(store, scope, { key, content, candidate }) {
+  const warnings = [];
+  const existingByKey = store.getMemory({ ...scope, key });
+  if (existingByKey?.status === 'active') {
+    warnings.push({
+      code: existingByKey.content === content ? 'duplicate_key' : 'existing_key_conflict',
+      message:
+        existingByKey.content === content
+          ? `An active durable memory already exists with key "${key}".`
+          : `An active durable memory already exists with key "${key}" and different content.`,
+      memoryKey: existingByKey.key,
+      memoryId: existingByKey.id,
+    });
+  }
+
+  const normalizedContent = normalizeContentForRisk(content);
+  if (normalizedContent) {
+    for (const memory of store.listMemories(scope)) {
+      if (memory.key === key) continue;
+      if (normalizeContentForRisk(memory.content) === normalizedContent) {
+        warnings.push({
+          code: 'duplicate_content',
+          message: `An active durable memory already has identical content under key "${memory.key}".`,
+          memoryKey: memory.key,
+          memoryId: memory.id,
+        });
+      }
+    }
+  }
+
+  if (['high', 'restricted'].includes(String(candidate.sensitivity || '').toLowerCase())) {
+    warnings.push({
+      code: 'high_sensitivity',
+      message: `Candidate sensitivity is "${candidate.sensitivity}".`,
+      sensitivity: candidate.sensitivity,
+    });
+  }
+  if (['reject', 'ignore'].includes(String(candidate.promotionRecommendation || '').toLowerCase())) {
+    warnings.push({
+      code: 'recommendation_not_promote',
+      message: `Candidate recommendation is "${candidate.promotionRecommendation}".`,
+      promotionRecommendation: candidate.promotionRecommendation,
+    });
+  }
+  if (candidate.confidence != null && Number(candidate.confidence) < 0.5) {
+    warnings.push({
+      code: 'low_confidence',
+      message: `Candidate confidence is ${candidate.confidence}.`,
+      confidence: candidate.confidence,
+    });
+  }
+  if (candidate.stability != null && Number(candidate.stability) < 0.5) {
+    warnings.push({
+      code: 'low_stability',
+      message: `Candidate stability is ${candidate.stability}.`,
+      stability: candidate.stability,
+    });
+  }
+  if (['temporary', 'transient', 'stale'].includes(String(candidate.candidateType || '').toLowerCase())) {
+    warnings.push({
+      code: 'temporary_candidate',
+      message: `Candidate type is "${candidate.candidateType}".`,
+      candidateType: candidate.candidateType,
+    });
+  }
+  return warnings;
+}
+
 function checkpointTimestamp(checkpoint) {
   return checkpoint?.createdAt ? Date.parse(checkpoint.createdAt) : null;
 }
@@ -387,6 +466,9 @@ export function createContextForge(options = {}) {
           sessionId: options.sessionId || null,
           checkpointId: options.checkpointId || null,
           status: options.status || null,
+          candidateType: options.candidateType || null,
+          promotionRecommendation: options.promotionRecommendation || null,
+          sort: options.sort || null,
           limit: options.limit == null ? null : Number(options.limit),
         }),
       );
@@ -441,6 +523,15 @@ export function createContextForge(options = {}) {
         requireOption(key, 'key');
         const content = options.content || candidate.content;
         requireOption(content, 'content');
+        const warnings = candidatePromotionWarnings(store, scope, { key, content, candidate });
+        if (warnings.length > 0 && !truthyOption(options.allowWarnings)) {
+          const error = new Error(
+            `Memory candidate promotion has ${warnings.length} warning(s). Pass allowWarnings to promote anyway.`,
+          );
+          error.name = 'MemoryCandidatePromotionWarningError';
+          error.warnings = warnings;
+          throw error;
+        }
         const memory = store.rememberMemory({
           ...scope,
           key,
@@ -455,6 +546,8 @@ export function createContextForge(options = {}) {
             sourceCandidateIndex: candidateIndex,
             sourceCandidateId: indexedCandidate?.id || null,
             sourceRawEventIds: options.sourceRawEventIds || [],
+            candidateSourceEventIds: candidate.sourceEventIds || [],
+            promotionWarnings: warnings,
             reason: options.reason || null,
           },
         });
@@ -468,6 +561,7 @@ export function createContextForge(options = {}) {
             metadata: {
               memoryKey: memory.key,
               memoryId: memory.id,
+              promotionWarnings: warnings,
             },
           });
         }

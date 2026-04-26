@@ -7,6 +7,11 @@
   marks reviewed candidates as rejected without creating durable memory.
 - Exposed candidate rejection through the CLI, remote API, and MCP
   `reject_memory_candidate` tool.
+- Added v2 memory-candidate review fields for type, confidence, stability,
+  sensitivity, recommendation, and source event ids.
+- Added lightweight candidate promotion warnings for duplicate keys, duplicate
+  content, risky recommendation/sensitivity signals, and low confidence or
+  stability. Callers must pass `allowWarnings` to promote through warnings.
 
 ## 0.1.3 - 2026-04-26
 

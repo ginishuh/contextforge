@@ -3,7 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 function nowIso() {
   return new Date().toISOString();
@@ -131,6 +131,12 @@ function hydrateMemoryCandidate(row) {
       category: row.category,
       tags: Array.isArray(tags) ? tags : [],
       importance: row.importance,
+      candidateType: row.candidate_type,
+      confidence: row.confidence,
+      stability: row.stability,
+      sensitivity: row.sensitivity,
+      promotionRecommendation: row.promotion_recommendation,
+      sourceEventIds: parseJson(row.source_event_ids_json, []),
     },
     source: {
       provider: row.provider,
@@ -163,6 +169,12 @@ function normalizeCandidate(candidate) {
     category: value.category ? String(value.category) : 'note',
     tags: normalizeTags(value.tags),
     importance: Number.isFinite(Number(value.importance)) ? Number(value.importance) : 0,
+    candidateType: value.candidateType ? String(value.candidateType) : null,
+    confidence: Number.isFinite(Number(value.confidence)) ? Number(value.confidence) : null,
+    stability: Number.isFinite(Number(value.stability)) ? Number(value.stability) : null,
+    sensitivity: value.sensitivity ? String(value.sensitivity) : null,
+    promotionRecommendation: value.promotionRecommendation ? String(value.promotionRecommendation) : null,
+    sourceEventIds: Array.isArray(value.sourceEventIds) ? value.sourceEventIds.map((item) => String(item)) : [],
   };
 }
 
@@ -281,6 +293,12 @@ export class ContextForgeStore {
         category TEXT NOT NULL DEFAULT 'note',
         tags_json TEXT NOT NULL DEFAULT '[]',
         importance INTEGER NOT NULL DEFAULT 0,
+        candidate_type TEXT,
+        confidence REAL,
+        stability REAL,
+        sensitivity TEXT,
+        promotion_recommendation TEXT,
+        source_event_ids_json TEXT NOT NULL DEFAULT '[]',
         status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'promoted', 'rejected', 'stale', 'snoozed')),
         created_at TEXT NOT NULL,
         reviewed_at TEXT,
@@ -323,6 +341,12 @@ export class ContextForgeStore {
     this.ensureColumn('memories', 'deactivated_at', 'TEXT');
     this.ensureColumn('memory_candidate_index', 'review_reason', 'TEXT');
     this.ensureColumn('memory_candidate_index', 'review_metadata_json', "TEXT NOT NULL DEFAULT '{}'");
+    this.ensureColumn('memory_candidate_index', 'candidate_type', 'TEXT');
+    this.ensureColumn('memory_candidate_index', 'confidence', 'REAL');
+    this.ensureColumn('memory_candidate_index', 'stability', 'REAL');
+    this.ensureColumn('memory_candidate_index', 'sensitivity', 'TEXT');
+    this.ensureColumn('memory_candidate_index', 'promotion_recommendation', 'TEXT');
+    this.ensureColumn('memory_candidate_index', 'source_event_ids_json', "TEXT NOT NULL DEFAULT '[]'");
     this.backfillMemoryCandidateIndex();
     this.ensureMemoryFts();
 
@@ -381,9 +405,10 @@ export class ContextForgeStore {
       INSERT INTO memory_candidate_index (
         id, checkpoint_id, session_id, conversation_id, scope_type, scope_key,
         candidate_index, candidate_key, candidate_content, candidate_reason,
-        category, tags_json, importance, status, created_at
+        category, tags_json, importance, candidate_type, confidence, stability,
+        sensitivity, promotion_recommendation, source_event_ids_json, status, created_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
       ON CONFLICT(checkpoint_id, candidate_index) DO NOTHING
     `);
 
@@ -403,6 +428,12 @@ export class ContextForgeStore {
         candidate.category,
         json(candidate.tags, []),
         candidate.importance,
+        candidate.candidateType,
+        candidate.confidence,
+        candidate.stability,
+        candidate.sensitivity,
+        candidate.promotionRecommendation,
+        json(candidate.sourceEventIds, []),
         checkpoint.createdAt,
       );
     }
@@ -739,7 +770,17 @@ export class ContextForgeStore {
     return rows.map(hydrateCheckpoint);
   }
 
-  listMemoryCandidates({ scopeType, scopeKey, sessionId = null, checkpointId = null, status = null, limit = null }) {
+  listMemoryCandidates({
+    scopeType,
+    scopeKey,
+    sessionId = null,
+    checkpointId = null,
+    status = null,
+    candidateType = null,
+    promotionRecommendation = null,
+    sort = null,
+    limit = null,
+  }) {
     const conditions = ['memory_candidate_index.scope_type = ?', 'memory_candidate_index.scope_key = ?'];
     const values = [scopeType, scopeKey];
     if (sessionId) {
@@ -754,11 +795,34 @@ export class ContextForgeStore {
       conditions.push('memory_candidate_index.status = ?');
       values.push(status);
     }
+    if (candidateType) {
+      conditions.push('memory_candidate_index.candidate_type = ?');
+      values.push(candidateType);
+    }
+    if (promotionRecommendation) {
+      conditions.push('memory_candidate_index.promotion_recommendation = ?');
+      values.push(promotionRecommendation);
+    }
     const parsedLimit = limit == null ? null : Number(limit);
     const limitClause = Number.isInteger(parsedLimit) && parsedLimit > 0 ? 'LIMIT ?' : '';
     if (limitClause) {
       values.push(parsedLimit);
     }
+    const orderBy =
+      sort === 'recommendation'
+        ? `CASE memory_candidate_index.promotion_recommendation
+            WHEN 'promote' THEN 0
+            WHEN 'review' THEN 1
+            WHEN 'ignore' THEN 2
+            WHEN 'reject' THEN 3
+            ELSE 4
+          END ASC,
+          memory_candidate_index.importance DESC,
+          memory_candidate_index.confidence DESC,
+          memory_candidate_index.stability DESC,
+          memory_candidate_index.created_at DESC,
+          memory_candidate_index.id DESC`
+        : 'memory_candidate_index.created_at DESC, memory_candidate_index.id DESC';
 
     return this.db
       .prepare(`
@@ -771,7 +835,7 @@ export class ContextForgeStore {
         FROM memory_candidate_index
         JOIN checkpoints ON checkpoints.id = memory_candidate_index.checkpoint_id
         WHERE ${conditions.join(' AND ')}
-        ORDER BY memory_candidate_index.created_at DESC, memory_candidate_index.id DESC
+        ORDER BY ${orderBy}
         ${limitClause}
       `)
       .all(...values)

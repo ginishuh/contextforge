@@ -161,6 +161,12 @@ Promote with `promote_memory_candidate` only after review. A good candidate is:
 - free of secrets and private runtime data
 - not duplicated by an existing durable memory
 
+Candidate records may include review signals such as `candidateType`,
+`confidence`, `stability`, `sensitivity`, `promotionRecommendation`, and
+`sourceEventIds`. Use those fields to prioritize review. Treat `ignore`,
+`reject`, low-confidence, low-stability, and high-sensitivity candidates as
+reasons to skip or reject unless the user explicitly asks to keep them.
+
 If a candidate key looks wrong, too broad, or belongs to the wrong repo, do not
 promote it as-is. Use `remember` with a corrected key/content or leave it as a
 checkpoint candidate.
