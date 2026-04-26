@@ -11,6 +11,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import Database from 'better-sqlite3';
 import { createContextForge } from '../src/core.js';
 import { validateDistillOutput } from '../src/distill/validate.js';
+import { createInterruptibleSleep } from '../src/ingest/common.js';
 import { ingestCodexRolloutFile, watchCodexSessions } from '../src/ingest/codex.js';
 import { searchMemories } from '../src/retrieval/search.js';
 import { startContextForgeServer } from '../src/server.js';
@@ -21,6 +22,17 @@ const execFileAsync = promisify(execFile);
 async function makeTempDir() {
   return fs.mkdtemp(path.join(os.tmpdir(), 'contextforge-test-'));
 }
+
+test('interruptible ingest sleep wakes when stopped', async () => {
+  const sleeper = createInterruptibleSleep();
+  let resolved = false;
+  const wait = sleeper.sleep(10000).then(() => {
+    resolved = true;
+  });
+  sleeper.stop();
+  await wait;
+  assert.equal(resolved, true);
+});
 
 async function makeGitRepo(remoteUrl = 'git@github.com:example/contextforge.git') {
   const cwd = await makeTempDir();

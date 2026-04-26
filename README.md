@@ -268,7 +268,9 @@ CONTEXTFORGE_CODEX_EXEC_REASONING_EFFORT=low
 ```
 
 Use a long random token and store the same value on client machines as
-`CONTEXTFORGE_REMOTE_TOKEN`. Do not put this file in git.
+`CONTEXTFORGE_REMOTE_TOKEN`. Treat this token as an administrator credential:
+it can call every remote API method, including pruning raw evidence and running
+provider health checks. Do not put this file in git.
 
 5. Install a systemd service:
 
@@ -354,7 +356,8 @@ node src/cli.js dbInfo
 
 Do not expose a direct HTTP port to the open internet unless another network
 layer already provides encryption and access control. The bearer token protects
-the ContextForge API, but it is not a replacement for TLS on untrusted networks.
+the ContextForge API, but it is not a replacement for TLS on untrusted networks
+or for operator-only handling of admin-capable credentials.
 
 After the VPS is healthy, configure each laptop, desktop, or agent host with
 the same URL and bearer token using the next section.

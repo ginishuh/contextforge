@@ -20,6 +20,10 @@
   `distill_checkpoint`, matching the CLI/core bounded-window controls.
 - Preserved remote error names and warning details across the remote client
   boundary.
+- Extracted shared ingest registry, routing, dedupe, discovery, and watch helpers
+  for Codex and Claude Code adapters.
+- Made ingest watch sleeps interruptible so SIGINT/SIGTERM can stop long-running
+  watchers without waiting for the full interval.
 
 ## 0.1.3 - 2026-04-26
 

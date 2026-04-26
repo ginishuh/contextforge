@@ -1,6 +1,17 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import {
+  createInterruptibleSleep,
+  discoverFiles,
+  ingestParsedSession,
+  isPathWithin,
+  loadRepoRegistry,
+  matchRepoForCwd,
+  shouldSkipOutsideRepo,
+  summarizeResults,
+  truncate,
+} from './common.js';
 
 const DEFAULT_MAX_CONTENT_CHARS = 8000;
 const DEFAULT_WATCH_INTERVAL_MS = 30000;
@@ -18,98 +29,6 @@ function stripCodexSessionPrefix(sessionId) {
 function codexSessionId(nativeSessionId) {
   const native = stripCodexSessionPrefix(nativeSessionId);
   return native ? `codex:${native}` : null;
-}
-
-function isPathWithin(parentPath, childPath) {
-  const parent = path.resolve(parentPath);
-  const child = path.resolve(childPath);
-  const relative = path.relative(parent, child);
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
-}
-
-function normalizeAdapterList(adapters) {
-  if (adapters == null) {
-    return null;
-  }
-  if (Array.isArray(adapters)) {
-    return adapters.map((adapter) => String(adapter));
-  }
-  return String(adapters)
-    .split(',')
-    .map((adapter) => adapter.trim())
-    .filter(Boolean);
-}
-
-async function loadRepoRegistry(options = {}) {
-  const registryPath = options.repoRegistry || options.registry || options.repoRegistryFile;
-  if (!registryPath) {
-    throw new Error('--repoRegistry is required for routed Codex ingest.');
-  }
-  const text = await fs.readFile(registryPath, 'utf8');
-  const parsed = JSON.parse(text);
-  const repos = Array.isArray(parsed) ? parsed : parsed.repos;
-  if (!Array.isArray(repos)) {
-    throw new Error('Repo registry must be a JSON array or an object with a repos array.');
-  }
-
-  return repos
-    .filter((repo) => repo && repo.enabled !== false)
-    .map((repo, index) => {
-      if (!repo.name) {
-        throw new Error(`Repo registry entry ${index} is missing name.`);
-      }
-      if (!repo.repoPath) {
-        throw new Error(`Repo registry entry ${repo.name} is missing repoPath.`);
-      }
-      if (!repo.scopeKey) {
-        throw new Error(`Repo registry entry ${repo.name} is missing scopeKey.`);
-      }
-      const adapters = normalizeAdapterList(repo.adapters);
-      return {
-        name: String(repo.name),
-        repoPath: path.resolve(repo.repoPath),
-        scopeKey: String(repo.scopeKey),
-        adapters,
-      };
-    })
-    .filter((repo) => !repo.adapters || repo.adapters.includes('codex'));
-}
-
-function matchRepoForCwd(cwd, repos) {
-  if (!cwd) {
-    return null;
-  }
-  const matches = repos.filter((repo) => isPathWithin(repo.repoPath, cwd));
-  matches.sort((a, b) => b.repoPath.length - a.repoPath.length || a.name.localeCompare(b.name));
-  return matches[0] || null;
-}
-
-function shouldSkipOutsideRepo(parsed, options = {}) {
-  return Boolean(options.repoPath && parsed.cwd && !isPathWithin(options.repoPath, parsed.cwd));
-}
-
-async function shouldSkipRecentFailedAutoDistill(app, scopeOptions, sessionId, status) {
-  const runs = await app.listDistillRuns({
-    ...scopeOptions,
-    sessionId,
-  });
-  const latest = runs[0];
-  if (!latest || latest.status !== 'failed') {
-    return false;
-  }
-  const failedAt = Date.parse(latest.completedAt || latest.createdAt);
-  if (!Number.isFinite(failedAt)) {
-    return false;
-  }
-  return Date.now() - failedAt < status.thresholds.minIntervalMs;
-}
-
-function truncate(value, maxChars = DEFAULT_MAX_CONTENT_CHARS) {
-  const text = String(value || '');
-  if (text.length <= maxChars) {
-    return { text, truncated: false };
-  }
-  return { text: `${text.slice(0, maxChars)}\n[truncated]`, truncated: true };
 }
 
 function textFromContent(content) {
@@ -175,7 +94,7 @@ export function normalizeCodexRolloutRecord(record, context, options = {}) {
     return null;
   }
 
-  const content = truncate(normalized.content, options.maxContentChars);
+      const content = truncate(normalized.content, options.maxContentChars || DEFAULT_MAX_CONTENT_CHARS);
   return {
     role: normalized.role,
     content: content.text,
@@ -246,92 +165,10 @@ export async function parseCodexRolloutFile(filePath, options = {}) {
   };
 }
 
-async function appendNewEvents(app, scopeOptions, parsed) {
-  const existing = await app.listRawEvents({
-    ...scopeOptions,
-    sessionId: parsed.sessionId,
-  });
-  const existingIds = new Set(existing.map((event) => event.metadata?.ingestId).filter(Boolean));
-  const appended = [];
-  let skipped = 0;
-
-  for (const event of parsed.events) {
-    if (existingIds.has(event.metadata.ingestId)) {
-      skipped += 1;
-      continue;
-    }
-    appended.push(
-      await app.appendRaw({
-        ...scopeOptions,
-        sessionId: parsed.sessionId,
-        conversationId: parsed.conversationId,
-        role: event.role,
-        content: event.content,
-        metadata: event.metadata,
-      }),
-    );
-  }
-
-  return { appended, skipped };
-}
-
 async function ingestParsedCodexRollout(app, parsed, options = {}) {
-  if (!parsed.sessionId) {
-    throw new Error('Codex rollout session id could not be determined.');
-  }
-  const scopeOptions = {
-    scope: options.scope,
-    scopeKey: options.scopeKey,
-    cwd: options.cwd || parsed.cwd,
-    repoPath: options.repoPath,
-  };
-  const { appended, skipped } = await appendNewEvents(app, scopeOptions, parsed);
-  const statusOptions = {
-    ...scopeOptions,
-    sessionId: parsed.sessionId,
-    minEvents: options.minEvents,
-    minIntervalMs: options.minIntervalMs,
-    charMinIntervalMs: options.charMinIntervalMs,
-    charThreshold: options.charThreshold,
-    maxEvents: options.maxEvents,
-    maxChars: options.maxChars,
-  };
-  const status = await app.sessionStatus(statusOptions);
-  let checkpoint = null;
-  let checkpointError = null;
-  let checkpointSkippedReason = null;
-  const distill = options.distill || 'never';
-  if (distill === 'always' || (distill === 'auto' && status.shouldDistill)) {
-    if (distill === 'auto' && (await shouldSkipRecentFailedAutoDistill(app, scopeOptions, parsed.sessionId, status))) {
-      checkpointSkippedReason = 'recent_failed_distill';
-    } else {
-      try {
-        checkpoint = await app.distillCheckpoint({
-          ...scopeOptions,
-          sessionId: parsed.sessionId,
-          conversationId: parsed.conversationId,
-          provider: options.provider,
-          maxEvents: options.maxEvents,
-          maxChars: options.maxChars,
-        });
-      } catch (error) {
-        checkpointError = {
-          message: error.message,
-          name: error.name,
-        };
-      }
-    }
-  }
-
-  return {
-    parsedEvents: parsed.events.length,
-    appendedEvents: appended.length,
-    skippedEvents: skipped,
-    status,
-    checkpoint,
-    checkpointError,
-    checkpointSkippedReason,
-  };
+  return ingestParsedSession(app, parsed, options, {
+    missingSessionMessage: 'Codex rollout session id could not be determined.',
+  });
 }
 
 export async function ingestCodexRolloutFile(app, options = {}) {
@@ -372,49 +209,17 @@ export async function ingestCodexRolloutFile(app, options = {}) {
   };
 }
 
-async function walkFiles(rootDir) {
-  let entries;
-  try {
-    entries = await fs.readdir(rootDir, { withFileTypes: true });
-  } catch (error) {
-    if (error.code === 'ENOENT') {
-      return [];
-    }
-    throw error;
-  }
-  const files = [];
-  for (const entry of entries) {
-    const entryPath = path.join(rootDir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...(await walkFiles(entryPath)));
-    } else if (entry.isFile()) {
-      files.push(entryPath);
-    }
-  }
-  return files;
-}
-
 function defaultSessionsDir() {
   return path.join(os.homedir(), '.codex', 'sessions');
 }
 
 export async function discoverCodexRolloutFiles(options = {}) {
   const sessionsDir = path.resolve(options.sessionsDir || defaultSessionsDir());
-  const files = (await walkFiles(sessionsDir)).filter(
+  return discoverFiles(
+    sessionsDir,
+    options,
     (file) => path.basename(file).startsWith('rollout-') && file.endsWith('.jsonl'),
   );
-  const stats = await Promise.all(
-    files.map(async (file) => ({
-      file,
-      stat: await fs.stat(file),
-    })),
-  );
-  const sinceMs = options.sinceMinutes == null ? null : Date.now() - Number(options.sinceMinutes) * 60 * 1000;
-  return stats
-    .filter((item) => sinceMs == null || item.stat.mtimeMs >= sinceMs)
-    .sort((a, b) => a.stat.mtimeMs - b.stat.mtimeMs || a.file.localeCompare(b.file))
-    .slice(0, options.scanLimit == null ? undefined : Number(options.scanLimit))
-    .map((item) => item.file);
 }
 
 export async function ingestCodexSessions(app, options = {}) {
@@ -437,7 +242,7 @@ export async function ingestCodexSessions(app, options = {}) {
 }
 
 export async function ingestCodexRoutedSessions(app, options = {}) {
-  const repos = await loadRepoRegistry(options);
+  const repos = await loadRepoRegistry(options, { adapter: 'codex', label: 'Codex' });
   const files = options.file ? [options.file] : await discoverCodexRolloutFiles(options);
   const results = [];
 
@@ -506,22 +311,6 @@ export async function ingestCodexRoutedSessions(app, options = {}) {
   };
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-function summarizeWatchResults(results) {
-  return {
-    filesScanned: results.reduce((total, result) => total + result.filesScanned, 0),
-    parsedEvents: results.reduce((total, result) => total + result.parsedEvents, 0),
-    appendedEvents: results.reduce((total, result) => total + result.appendedEvents, 0),
-    skippedEvents: results.reduce((total, result) => total + result.skippedEvents, 0),
-    checkpointsCreated: results.reduce((total, result) => total + result.checkpointsCreated, 0),
-  };
-}
-
 export async function watchCodexSessions(app, options = {}) {
   const intervalMs =
     options.intervalMs == null ? DEFAULT_WATCH_INTERVAL_MS : Math.max(0, Number(options.intervalMs));
@@ -530,9 +319,11 @@ export async function watchCodexSessions(app, options = {}) {
   const results = [];
   let iterations = 0;
   let stopped = false;
+  const sleeper = createInterruptibleSleep();
 
   const stop = () => {
     stopped = true;
+    sleeper.stop();
   };
 
   process.once('SIGINT', stop);
@@ -554,7 +345,7 @@ export async function watchCodexSessions(app, options = {}) {
         await options.onResult(iterationResult);
       }
       if (!stopped && (maxIterations == null || iterations < maxIterations)) {
-        await sleep(intervalMs);
+        await sleeper.sleep(intervalMs);
       }
     }
   } finally {
@@ -570,7 +361,7 @@ export async function watchCodexSessions(app, options = {}) {
     stopped,
     startedAt,
     completedAt: new Date().toISOString(),
-    totals: summarizeWatchResults(results),
+    totals: summarizeResults(results),
     results,
   };
 }
@@ -583,9 +374,11 @@ export async function watchCodexRoutedSessions(app, options = {}) {
   const results = [];
   let iterations = 0;
   let stopped = false;
+  const sleeper = createInterruptibleSleep();
 
   const stop = () => {
     stopped = true;
+    sleeper.stop();
   };
 
   process.once('SIGINT', stop);
@@ -607,7 +400,7 @@ export async function watchCodexRoutedSessions(app, options = {}) {
         await options.onResult(iterationResult);
       }
       if (!stopped && (maxIterations == null || iterations < maxIterations)) {
-        await sleep(intervalMs);
+        await sleeper.sleep(intervalMs);
       }
     }
   } finally {
@@ -623,7 +416,7 @@ export async function watchCodexRoutedSessions(app, options = {}) {
     stopped,
     startedAt,
     completedAt: new Date().toISOString(),
-    totals: summarizeWatchResults(results),
+    totals: summarizeResults(results),
     results,
   };
 }
