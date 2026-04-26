@@ -78,7 +78,7 @@ mkdir -p "$unit_dir"
 
 cat >"$unit_path" <<EOF
 [Unit]
-Description=ContextForge Codex multi-repo ingest router (${name})
+Description=ContextForge agent ingest router for codex (${name})
 After=network-online.target
 
 [Service]
@@ -95,7 +95,7 @@ RestartSec=10
 WantedBy=default.target
 EOF
 
-echo "Installed Codex router unit: ${unit_path}"
+echo "Installed codex agent router unit: ${unit_path}"
 echo "Repo registry: ${repo_registry}"
 echo "Enabled Codex repos: ${repo_count}"
 

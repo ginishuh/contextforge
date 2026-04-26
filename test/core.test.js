@@ -732,7 +732,7 @@ test('Codex router service installer creates an agent-level router unit', async 
     path.join(home, '.config', 'systemd', 'user', 'contextforge-codex-router-codex.service'),
     'utf8',
   );
-  assert.match(result.stdout, /Installed Codex router unit:/);
+  assert.match(result.stdout, /Installed codex agent router unit:/);
   assert.match(result.stdout, /Enabled Codex repos: 1/);
   assert.match(unit, /ingestCodexRoutedSessions/);
   assert.match(unit, new RegExp(`--repoRegistry ${registryPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
