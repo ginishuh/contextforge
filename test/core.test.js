@@ -594,6 +594,50 @@ test('Codex watch service installer pins explicit repo scope key', async () => {
   assert.match(unit, /--repoPath \/work\/repo --scopeKey github\.com\/example\/repo/);
 });
 
+test('Codex watch service installer reports and pins inferred repo scope key', async () => {
+  const home = await makeTempDir();
+  const repoPath = await makeGitRepo('https://github.com/example/inferred-watch-repo.git');
+  const fakeBin = path.join(home, 'bin');
+  const systemctlLog = path.join(home, 'systemctl.log');
+  await fs.mkdir(fakeBin, { recursive: true });
+  await fs.writeFile(
+    path.join(fakeBin, 'systemctl'),
+    `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> ${JSON.stringify(systemctlLog)}\n`,
+    { mode: 0o755 },
+  );
+
+  const result = await execFileAsync(
+    'bash',
+    [
+      'scripts/install-codex-watch-service.sh',
+      '--name',
+      'inferred-scope-test',
+      '--repo-path',
+      repoPath,
+      '--remote-url',
+      'https://memory.example.com',
+      '--token-env-file',
+      path.join(home, 'token.env'),
+      '--distill',
+      'false',
+    ],
+    {
+      env: {
+        ...process.env,
+        HOME: home,
+        PATH: `${fakeBin}:${process.env.PATH}`,
+      },
+    },
+  );
+
+  const unit = await fs.readFile(
+    path.join(home, '.config', 'systemd', 'user', 'contextforge-codex-watch-inferred-scope-test.service'),
+    'utf8',
+  );
+  assert.match(result.stdout, /Resolved repo scope key: github\.com\/example\/inferred-watch-repo/);
+  assert.match(unit, /--scopeKey github\.com\/example\/inferred-watch-repo/);
+});
+
 test('Codex watch service installer rejects non-canonical repo scope keys', async () => {
   const home = await makeTempDir();
 

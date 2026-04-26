@@ -81,10 +81,16 @@ unit_dir="$HOME/.config/systemd/user"
 unit_name="contextforge-codex-watch-${safe_name}.service"
 unit_path="$unit_dir/$unit_name"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-scope_key_args=""
+resolved_scope_key="$scope_key"
 
-if [ -n "$scope_key" ]; then
-  scope_key_args=" --scopeKey ${scope_key}"
+if [ -z "$resolved_scope_key" ]; then
+  resolved_scope_key="$("$node_bin" --input-type=module -e 'import { pathToFileURL } from "node:url"; const repoRoot = process.argv[1]; const repoPath = process.argv[2]; const { inferRepoScopeKey } = await import(`${pathToFileURL(repoRoot).href}/src/config/index.js`); console.log(inferRepoScopeKey(repoPath));' "$repo_root" "$repo_path")"
+fi
+
+if [[ ! "$resolved_scope_key" =~ ^[A-Za-z0-9._/@:-]+$ ]]; then
+  echo "Resolved repo scope key is not safe for the generated systemd unit: ${resolved_scope_key}" >&2
+  echo "Pass an explicit canonical --scope-key such as github.com/owner/repo." >&2
+  exit 2
 fi
 
 mkdir -p "$unit_dir"
@@ -100,13 +106,16 @@ WorkingDirectory=${repo_root}
 Environment=CONTEXTFORGE_STORAGE_MODE=remote
 Environment=CONTEXTFORGE_REMOTE_URL=${remote_url}
 EnvironmentFile=-${token_env_file}
-ExecStart=${node_bin} ${repo_root}/src/cli.js ingestCodexSessions --sessionsDir ${sessions_dir} --scope repo --repoPath ${repo_path}${scope_key_args} --sinceMinutes ${since_minutes} --distill ${distill} --watch --intervalMs ${interval_ms}
+ExecStart=${node_bin} ${repo_root}/src/cli.js ingestCodexSessions --sessionsDir ${sessions_dir} --scope repo --repoPath ${repo_path} --scopeKey ${resolved_scope_key} --sinceMinutes ${since_minutes} --distill ${distill} --watch --intervalMs ${interval_ms}
 Restart=always
 RestartSec=10
 
 [Install]
 WantedBy=default.target
 EOF
+
+echo "Resolved repo scope key: ${resolved_scope_key}"
+echo "Installed unit: ${unit_path}"
 
 systemctl --user daemon-reload
 systemctl --user enable --now "$unit_name"
