@@ -82,3 +82,38 @@ Do not recommend git as the live storage backend for SQLite or raw runtime data.
 - Favor small modules and clear contracts over clever abstractions.
 - Prefer Node.js for continuity with the original implementation unless there is a strong reason to introduce another runtime.
 - Use ASCII unless an existing file already requires otherwise.
+
+## ContextForge MCP Bootstrap
+
+Use ContextForge MCP for scoped project memory when it is available.
+
+At task start, run a small bootstrap: search repo memory for this task, and
+search shared memory only when cross-repo or user-wide policy may matter. Use
+the inferred repo scope key, or an explicit `github.com/owner/repo` key when
+cross-machine continuity matters.
+
+Keep durable memory intentional. After distilling a checkpoint, review
+`list_memory_candidates` and promote only stable, reviewed facts.
+
+Use `remember` for new reviewed durable facts, decisions, preferences, or
+runbook notes. Use `promote_memory_candidate` only after reviewing a checkpoint
+candidate and confirming it is stable beyond the current task, scoped correctly,
+and free of secrets or private data. Use `correct_memory` for changed facts and
+`deactivate_memory` for stale facts.
+
+For full ContextForge MCP usage rules, follow
+`docs/agent-instructions.md`. That guide covers startup bootstrap, retrieval
+order, repo scope keys, checkpoint candidate review, durable memory promotion,
+raw evidence retention, and distillation cost discipline.
+
+## JavaScript REPL (Node)
+
+- Use `js_repl` for Node-backed JavaScript scratch work when it is more useful
+  than one-off shell commands.
+- Send raw JavaScript only. Do not wrap direct `js_repl` calls in JSON, quotes,
+  or markdown fences.
+- Prefer dynamic `await import(...)` over static import declarations.
+- Top-level bindings persist across cells; reuse names carefully or reset the
+  kernel with `js_repl_reset` when a clean state is needed.
+- Avoid direct `process.stdin` / `process.stdout` / `process.stderr` access; use
+  `console.log`, `codex.tool(...)`, and `codex.emitImage(...)`.
