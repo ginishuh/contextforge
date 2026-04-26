@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.4 - 2026-04-26
 
 - Added candidate-id review workflows: `promoteMemoryCandidate --candidateId`
   marks candidates as promoted with review metadata, and `rejectMemoryCandidate`
