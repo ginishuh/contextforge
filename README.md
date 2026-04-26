@@ -2,9 +2,16 @@
 
 Self-hosted memory and distillation runtime for coding agents.
 
-ContextForge is designed for agents that need more than a flat memory file:
-canonical project memory, scoped retrieval, evidence-preserving raw logs, and
-LLM-backed distillation into checkpoints.
+This is not another memory file. ContextForge is a scoped memory runtime for
+coding agents.
+
+![ContextForge explainer comic](docs/assets/contextforge-explainer-comic-en.jpg)
+
+[Korean version of the explainer comic](docs/assets/contextforge-explainer-comic-ko.jpg)
+
+ContextForge is designed for agents that need canonical project memory, scoped
+retrieval, evidence-preserving raw logs, and LLM-backed distillation into
+checkpoints.
 
 ContextForge is a sidecar memory runtime. It complements existing agent memory
 systems by providing canonical project/repo memory, evidence retention, and
@@ -17,6 +24,23 @@ LLM-backed distillation.
 - Use retrieval on demand instead of dumping large memory files into context.
 - Treat distillation as a core capability with pluggable providers.
 - Work with coding agents such as Codex and Claude Code through adapters or MCP.
+
+## Recommended Architecture
+
+For real multi-agent or multi-machine work, run ContextForge as a remote
+sidecar server and let each agent retrieve scoped memory through MCP or the CLI.
+
+```text
+Codex / Claude Code / OpenClaw
+          |
+      MCP tools / CLI
+          |
+   ContextForge Server
+          |
+ repo memory / shared memory / local memory
+          |
+ SQLite + raw evidence + promoted durable facts
+```
 
 ## Storage Modes
 

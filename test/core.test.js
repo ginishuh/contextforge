@@ -594,6 +594,41 @@ test('Codex watch service installer pins explicit repo scope key', async () => {
   assert.match(unit, /--repoPath \/work\/repo --scopeKey github\.com\/example\/repo/);
 });
 
+test('Codex watch service installer rejects non-canonical repo scope keys', async () => {
+  const home = await makeTempDir();
+
+  await assert.rejects(
+    () =>
+      execFileAsync(
+        'bash',
+        [
+          'scripts/install-codex-watch-service.sh',
+          '--name',
+          'scope-test',
+          '--repo-path',
+          '/work/repo',
+          '--scope-key',
+          'github.com/example/my repo',
+          '--remote-url',
+          'https://memory.example.com',
+          '--token-env-file',
+          path.join(home, 'token.env'),
+        ],
+        {
+          env: {
+            ...process.env,
+            HOME: home,
+          },
+        },
+      ),
+    (error) => {
+      assert.equal(error.code, 2);
+      assert.match(error.stderr, /--scope-key must be a canonical key/);
+      return true;
+    },
+  );
+});
+
 test('CLI reports invalid metadata JSON clearly', async () => {
   const dataDir = await makeTempDir();
   const env = { ...process.env, CONTEXTFORGE_DATA_DIR: dataDir };

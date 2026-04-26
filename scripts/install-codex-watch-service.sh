@@ -71,6 +71,11 @@ if [ -z "$remote_url" ]; then
   exit 2
 fi
 
+if [ -n "$scope_key" ] && [[ ! "$scope_key" =~ ^[A-Za-z0-9._/@:-]+$ ]]; then
+  echo "--scope-key must be a canonical key containing only letters, numbers, '.', '_', '/', '@', ':', or '-'." >&2
+  exit 2
+fi
+
 safe_name="$(printf '%s' "$name" | tr -c 'A-Za-z0-9_.@-' '-')"
 unit_dir="$HOME/.config/systemd/user"
 unit_name="contextforge-codex-watch-${safe_name}.service"
