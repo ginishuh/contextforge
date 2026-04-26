@@ -86,7 +86,7 @@ async function writeSyntheticCodexRollout(filePath, sessionId = 'codex-rollout-s
   await fs.writeFile(filePath, `${records.map((record) => JSON.stringify(record)).join('\n')}\n`);
 }
 
-async function writeSyntheticClaudeCodeTranscript(filePath, sessionId = 'claude-code-session') {
+async function writeSyntheticClaudeCodeTranscript(filePath, sessionId = 'claude-code-session', cwd = path.dirname(filePath)) {
   const records = [
     {
       type: 'summary',
@@ -98,7 +98,7 @@ async function writeSyntheticClaudeCodeTranscript(filePath, sessionId = 'claude-
       type: 'user',
       sessionId,
       uuid: 'claude-user-1',
-      cwd: path.dirname(filePath),
+      cwd,
       timestamp: '2026-04-25T00:00:01.000Z',
       message: {
         role: 'user',
@@ -109,7 +109,7 @@ async function writeSyntheticClaudeCodeTranscript(filePath, sessionId = 'claude-
       type: 'assistant',
       sessionId,
       uuid: 'claude-assistant-tool',
-      cwd: path.dirname(filePath),
+      cwd,
       timestamp: '2026-04-25T00:00:02.000Z',
       message: {
         role: 'assistant',
@@ -120,7 +120,7 @@ async function writeSyntheticClaudeCodeTranscript(filePath, sessionId = 'claude-
       type: 'user',
       sessionId,
       uuid: 'claude-tool-result',
-      cwd: path.dirname(filePath),
+      cwd,
       timestamp: '2026-04-25T00:00:03.000Z',
       message: {
         role: 'user',
@@ -131,7 +131,7 @@ async function writeSyntheticClaudeCodeTranscript(filePath, sessionId = 'claude-
       type: 'assistant',
       sessionId,
       uuid: 'claude-assistant-1',
-      cwd: path.dirname(filePath),
+      cwd,
       timestamp: '2026-04-25T00:00:04.000Z',
       message: {
         role: 'assistant',
@@ -735,6 +735,72 @@ test('Codex router service installer creates an agent-level router unit', async 
   assert.match(result.stdout, /Installed codex agent router unit:/);
   assert.match(result.stdout, /Enabled Codex repos: 1/);
   assert.match(unit, /ingestCodexRoutedSessions/);
+  assert.match(unit, new RegExp(`--repoRegistry ${registryPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  assert.doesNotMatch(unit, /--repoPath/);
+});
+
+test('Claude Code router service installer creates an agent-level router unit', async () => {
+  const home = await makeTempDir();
+  const registryPath = path.join(home, 'repos.json');
+  const fakeBin = path.join(home, 'bin');
+  const systemctlLog = path.join(home, 'systemctl.log');
+  await fs.mkdir(fakeBin, { recursive: true });
+  await fs.writeFile(
+    registryPath,
+    JSON.stringify({
+      repos: [
+        {
+          name: 'repo-a',
+          repoPath: '/work/repo-a',
+          scopeKey: 'github.com/example/repo-a',
+          adapters: ['claude_code'],
+        },
+        {
+          name: 'repo-b',
+          repoPath: '/work/repo-b',
+          scopeKey: 'github.com/example/repo-b',
+          adapters: ['codex'],
+        },
+      ],
+    }),
+  );
+  await fs.writeFile(
+    path.join(fakeBin, 'systemctl'),
+    `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> ${JSON.stringify(systemctlLog)}\n`,
+    { mode: 0o755 },
+  );
+
+  const result = await execFileAsync(
+    'bash',
+    [
+      'scripts/install-claude-code-router-service.sh',
+      '--name',
+      'claude-code',
+      '--repo-registry',
+      registryPath,
+      '--remote-url',
+      'https://memory.example.com',
+      '--token-env-file',
+      path.join(home, 'token.env'),
+      '--distill',
+      'false',
+    ],
+    {
+      env: {
+        ...process.env,
+        HOME: home,
+        PATH: `${fakeBin}:${process.env.PATH}`,
+      },
+    },
+  );
+
+  const unit = await fs.readFile(
+    path.join(home, '.config', 'systemd', 'user', 'contextforge-claude-code-router-claude-code.service'),
+    'utf8',
+  );
+  assert.match(result.stdout, /Installed claude_code agent router unit:/);
+  assert.match(result.stdout, /Enabled Claude Code repos: 1/);
+  assert.match(unit, /ingestClaudeCodeRoutedSessions/);
   assert.match(unit, new RegExp(`--repoRegistry ${registryPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
   assert.doesNotMatch(unit, /--repoPath/);
 });
@@ -1397,6 +1463,123 @@ test('CLI ingests Claude Code JSONL transcripts with agent provenance', async ()
   assert.ok(events.every((event) => event.metadata.sourceAgent === 'claude_code'));
   assert.ok(events.every((event) => event.metadata.sourceAdapter === 'claude_code_jsonl'));
   assert.ok(events.every((event) => event.metadata.nativeSessionId === 'claude-native-session'));
+});
+
+test('CLI routes Claude Code global transcripts through a repo registry', async () => {
+  const dataDir = await makeTempDir();
+  const projectsDir = await makeTempDir();
+  const suiteRepo = await makeTempDir();
+  const appRepo = path.join(suiteRepo, 'app');
+  const frontendRepo = path.join(suiteRepo, 'app', 'frontend');
+  const unknownRepo = await makeTempDir();
+  await fs.mkdir(frontendRepo, { recursive: true });
+  await fs.mkdir(path.join(projectsDir, 'suite'), { recursive: true });
+  await writeSyntheticClaudeCodeTranscript(path.join(projectsDir, 'suite', 'suite.jsonl'), 'claude-suite', suiteRepo);
+  await writeSyntheticClaudeCodeTranscript(
+    path.join(projectsDir, 'suite', 'app.jsonl'),
+    'claude-app',
+    path.join(appRepo, 'src'),
+  );
+  await writeSyntheticClaudeCodeTranscript(
+    path.join(projectsDir, 'suite', 'frontend.jsonl'),
+    'claude-frontend',
+    path.join(frontendRepo, 'src'),
+  );
+  await writeSyntheticClaudeCodeTranscript(
+    path.join(projectsDir, 'suite', 'unknown.jsonl'),
+    'claude-unknown',
+    unknownRepo,
+  );
+  const registryPath = path.join(projectsDir, 'repo-registry.json');
+  await fs.writeFile(
+    registryPath,
+    JSON.stringify(
+      {
+        repos: [
+          {
+            name: 'suite',
+            repoPath: suiteRepo,
+            scopeKey: 'github.com/example/suite',
+            adapters: ['claude_code'],
+          },
+          {
+            name: 'app',
+            repoPath: appRepo,
+            scopeKey: 'github.com/example/app',
+          },
+          {
+            name: 'frontend',
+            repoPath: frontendRepo,
+            scopeKey: 'github.com/example/frontend',
+          },
+          {
+            name: 'disabled',
+            repoPath: unknownRepo,
+            scopeKey: 'github.com/example/disabled',
+            enabled: false,
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+  const env = {
+    ...process.env,
+    CONTEXTFORGE_DATA_DIR: dataDir,
+  };
+
+  const result = await execFileAsync(
+    'node',
+    [
+      'src/cli.js',
+      'ingestClaudeCodeRoutedSessions',
+      '--projectsDir',
+      projectsDir,
+      '--repoRegistry',
+      registryPath,
+      '--distill',
+      'never',
+    ],
+    { env },
+  );
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.source, 'claude_code_sessions_router');
+  assert.equal(parsed.filesScanned, 4);
+  assert.equal(parsed.routedFiles, 3);
+  assert.equal(parsed.skippedFiles, 1);
+  assert.equal(parsed.appendedEvents, 12);
+  assert.deepEqual(
+    parsed.fileResults
+      .filter((item) => item.matchedRepo)
+      .map((item) => [item.sessionId, item.matchedRepo.name, item.matchedRepo.scopeKey])
+      .sort(),
+    [
+      ['claude_code:claude-app', 'app', 'github.com/example/app'],
+      ['claude_code:claude-frontend', 'frontend', 'github.com/example/frontend'],
+      ['claude_code:claude-suite', 'suite', 'github.com/example/suite'],
+    ],
+  );
+  const skipped = parsed.fileResults.find((item) => item.sessionId === 'claude_code:claude-unknown');
+  assert.equal(skipped.skippedReason, 'unmatched_repo_cwd');
+
+  const app = createContextForge({ env, cwd: process.cwd() });
+  assert.equal(
+    app.listRawEvents({
+      scope: 'repo',
+      scopeKey: 'github.com/example/frontend',
+      sessionId: 'claude_code:claude-frontend',
+    }).length,
+    4,
+  );
+  assert.equal(
+    app.listRawEvents({
+      scope: 'repo',
+      scopeKey: 'github.com/example/app',
+      sessionId: 'claude_code:claude-frontend',
+    }).length,
+    0,
+  );
 });
 
 test('repoPath ingest skips Claude Code transcripts from other working directories', async () => {

@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 import { createContextForge } from './core.js';
-import { ingestClaudeCodeFile, ingestClaudeCodeSessions, watchClaudeCodeSessions } from './ingest/claude_code.js';
+import {
+  ingestClaudeCodeFile,
+  ingestClaudeCodeRoutedSessions,
+  ingestClaudeCodeSessions,
+  watchClaudeCodeRoutedSessions,
+  watchClaudeCodeSessions,
+} from './ingest/claude_code.js';
 import {
   ingestCodexRolloutFile,
   ingestCodexRoutedSessions,
@@ -154,6 +160,15 @@ async function main() {
             },
           })
         : ingestClaudeCodeSessions(app, coreOptions),
+    ingestClaudeCodeRoutedSessions: (app, coreOptions) =>
+      coreOptions.watch
+        ? watchClaudeCodeRoutedSessions(app, {
+            ...coreOptions,
+            onResult: (result) => {
+              console.log(JSON.stringify(result));
+            },
+          })
+        : ingestClaudeCodeRoutedSessions(app, coreOptions),
   };
 
   if (!command || command === 'help' || command === '--help') {

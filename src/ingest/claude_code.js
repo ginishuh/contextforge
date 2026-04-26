@@ -27,6 +27,63 @@ function isPathWithin(parentPath, childPath) {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
+function normalizeAdapterList(adapters) {
+  if (adapters == null) {
+    return null;
+  }
+  if (Array.isArray(adapters)) {
+    return adapters.map((adapter) => String(adapter));
+  }
+  return String(adapters)
+    .split(',')
+    .map((adapter) => adapter.trim())
+    .filter(Boolean);
+}
+
+async function loadRepoRegistry(options = {}) {
+  const registryPath = options.repoRegistry || options.registry || options.repoRegistryFile;
+  if (!registryPath) {
+    throw new Error('--repoRegistry is required for routed Claude Code ingest.');
+  }
+  const text = await fs.readFile(registryPath, 'utf8');
+  const parsed = JSON.parse(text);
+  const repos = Array.isArray(parsed) ? parsed : parsed.repos;
+  if (!Array.isArray(repos)) {
+    throw new Error('Repo registry must be a JSON array or an object with a repos array.');
+  }
+
+  return repos
+    .filter((repo) => repo && repo.enabled !== false)
+    .map((repo, index) => {
+      if (!repo.name) {
+        throw new Error(`Repo registry entry ${index} is missing name.`);
+      }
+      if (!repo.repoPath) {
+        throw new Error(`Repo registry entry ${repo.name} is missing repoPath.`);
+      }
+      if (!repo.scopeKey) {
+        throw new Error(`Repo registry entry ${repo.name} is missing scopeKey.`);
+      }
+      const adapters = normalizeAdapterList(repo.adapters);
+      return {
+        name: String(repo.name),
+        repoPath: path.resolve(repo.repoPath),
+        scopeKey: String(repo.scopeKey),
+        adapters,
+      };
+    })
+    .filter((repo) => !repo.adapters || repo.adapters.includes('claude_code'));
+}
+
+function matchRepoForCwd(cwd, repos) {
+  if (!cwd) {
+    return null;
+  }
+  const matches = repos.filter((repo) => isPathWithin(repo.repoPath, cwd));
+  matches.sort((a, b) => b.repoPath.length - a.repoPath.length || a.name.localeCompare(b.name));
+  return matches[0] || null;
+}
+
 function shouldSkipOutsideRepo(parsed, options = {}) {
   return Boolean(options.repoPath && parsed.cwd && !isPathWithin(options.repoPath, parsed.cwd));
 }
@@ -215,11 +272,7 @@ async function appendNewEvents(app, scopeOptions, parsed) {
   return { appended, skipped };
 }
 
-export async function ingestClaudeCodeFile(app, options = {}) {
-  if (!options.file) {
-    throw new Error('file is required.');
-  }
-  const parsed = await parseClaudeCodeFile(options.file, options);
+async function ingestParsedClaudeCodeFile(app, parsed, options = {}) {
   if (!parsed.sessionId) {
     throw new Error('Claude Code session id could not be determined.');
   }
@@ -229,24 +282,6 @@ export async function ingestClaudeCodeFile(app, options = {}) {
     cwd: options.cwd || parsed.cwd,
     repoPath: options.repoPath,
   };
-  if (shouldSkipOutsideRepo(parsed, options)) {
-    return {
-      source: 'claude_code_jsonl',
-      file: options.file,
-      sessionId: parsed.sessionId,
-      conversationId: parsed.conversationId,
-      parsedEvents: parsed.events.length,
-      appendedEvents: 0,
-      skippedEvents: parsed.events.length,
-      warnings: parsed.warnings,
-      skipped: true,
-      skippedReason: 'cwd_outside_repo_path',
-      cwd: parsed.cwd,
-      repoPath: path.resolve(options.repoPath),
-      status: null,
-      checkpoint: null,
-    };
-  }
   const { appended, skipped } = await appendNewEvents(app, scopeOptions, parsed);
   const statusOptions = {
     ...scopeOptions,
@@ -270,11 +305,11 @@ export async function ingestClaudeCodeFile(app, options = {}) {
         checkpoint = await app.distillCheckpoint({
           ...scopeOptions,
           sessionId: parsed.sessionId,
-        conversationId: parsed.conversationId,
-        provider: options.provider,
-        maxEvents: options.maxEvents,
-        maxChars: options.maxChars,
-      });
+          conversationId: parsed.conversationId,
+          provider: options.provider,
+          maxEvents: options.maxEvents,
+          maxChars: options.maxChars,
+        });
       } catch (error) {
         checkpointError = {
           message: error.message,
@@ -285,18 +320,51 @@ export async function ingestClaudeCodeFile(app, options = {}) {
   }
 
   return {
-    source: 'claude_code_jsonl',
-    file: options.file,
-    sessionId: parsed.sessionId,
-    conversationId: parsed.conversationId,
     parsedEvents: parsed.events.length,
     appendedEvents: appended.length,
     skippedEvents: skipped,
-    warnings: parsed.warnings,
     status,
     checkpoint,
     checkpointError,
     checkpointSkippedReason,
+  };
+}
+
+export async function ingestClaudeCodeFile(app, options = {}) {
+  if (!options.file) {
+    throw new Error('file is required.');
+  }
+  const parsed = await parseClaudeCodeFile(options.file, options);
+  if (!parsed.sessionId) {
+    throw new Error('Claude Code session id could not be determined.');
+  }
+  if (shouldSkipOutsideRepo(parsed, options)) {
+    return {
+      source: 'claude_code_jsonl',
+      file: options.file,
+      sessionId: parsed.sessionId,
+      conversationId: parsed.conversationId,
+      parsedEvents: parsed.events.length,
+      appendedEvents: 0,
+      skippedEvents: parsed.events.length,
+      warnings: parsed.warnings,
+      skipped: true,
+      skippedReason: 'cwd_outside_repo_path',
+      cwd: parsed.cwd,
+      repoPath: path.resolve(options.repoPath),
+      status: null,
+      checkpoint: null,
+    };
+  }
+  const result = await ingestParsedClaudeCodeFile(app, parsed, options);
+
+  return {
+    source: 'claude_code_jsonl',
+    file: options.file,
+    sessionId: parsed.sessionId,
+    conversationId: parsed.conversationId,
+    warnings: parsed.warnings,
+    ...result,
   };
 }
 
@@ -362,6 +430,76 @@ export async function ingestClaudeCodeSessions(app, options = {}) {
   };
 }
 
+export async function ingestClaudeCodeRoutedSessions(app, options = {}) {
+  const repos = await loadRepoRegistry(options);
+  const files = options.file ? [options.file] : await discoverClaudeCodeFiles(options);
+  const results = [];
+
+  for (const file of files) {
+    const parsed = await parseClaudeCodeFile(file, options);
+    const matchedRepo = matchRepoForCwd(parsed.cwd, repos);
+    if (!matchedRepo) {
+      results.push({
+        source: 'claude_code_jsonl',
+        file,
+        sessionId: parsed.sessionId,
+        conversationId: parsed.conversationId,
+        parsedEvents: parsed.events.length,
+        appendedEvents: 0,
+        skippedEvents: parsed.events.length,
+        warnings: parsed.warnings,
+        skipped: true,
+        skippedReason: parsed.cwd ? 'unmatched_repo_cwd' : 'missing_cwd',
+        cwd: parsed.cwd,
+        matchedRepo: null,
+        status: null,
+        checkpoint: null,
+      });
+      continue;
+    }
+
+    const result = await ingestParsedClaudeCodeFile(app, parsed, {
+      ...options,
+      scope: 'repo',
+      scopeKey: matchedRepo.scopeKey,
+      repoPath: undefined,
+      cwd: undefined,
+    });
+    results.push({
+      source: 'claude_code_jsonl',
+      file,
+      sessionId: parsed.sessionId,
+      conversationId: parsed.conversationId,
+      warnings: parsed.warnings,
+      matchedRepo: {
+        name: matchedRepo.name,
+        repoPath: matchedRepo.repoPath,
+        scopeKey: matchedRepo.scopeKey,
+      },
+      ...result,
+    });
+  }
+
+  return {
+    source: 'claude_code_sessions_router',
+    projectsDir: path.resolve(options.projectsDir || options.sessionsDir || defaultProjectsDir()),
+    registry: path.resolve(options.repoRegistry || options.registry || options.repoRegistryFile),
+    repos: repos.map((repo) => ({
+      name: repo.name,
+      repoPath: repo.repoPath,
+      scopeKey: repo.scopeKey,
+    })),
+    filesScanned: files.length,
+    parsedEvents: results.reduce((total, result) => total + result.parsedEvents, 0),
+    appendedEvents: results.reduce((total, result) => total + result.appendedEvents, 0),
+    skippedEvents: results.reduce((total, result) => total + result.skippedEvents, 0),
+    checkpointsCreated: results.filter((result) => result.checkpoint).length,
+    routedFiles: results.filter((result) => result.matchedRepo).length,
+    skippedFiles: results.filter((result) => result.skipped).length,
+    fileResults: results,
+  };
+}
+
 function sleep(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -420,6 +558,59 @@ export async function watchClaudeCodeSessions(app, options = {}) {
 
   return {
     source: 'claude_code_sessions_watch',
+    projectsDir: path.resolve(options.projectsDir || options.sessionsDir || defaultProjectsDir()),
+    intervalMs,
+    iterations,
+    stopped,
+    startedAt,
+    completedAt: new Date().toISOString(),
+    totals: summarizeWatchResults(results),
+    results,
+  };
+}
+
+export async function watchClaudeCodeRoutedSessions(app, options = {}) {
+  const intervalMs =
+    options.intervalMs == null ? DEFAULT_WATCH_INTERVAL_MS : Math.max(0, Number(options.intervalMs));
+  const maxIterations = options.iterations == null ? null : Math.max(0, Number(options.iterations));
+  const startedAt = new Date().toISOString();
+  const results = [];
+  let iterations = 0;
+  let stopped = false;
+
+  const stop = () => {
+    stopped = true;
+  };
+
+  process.once('SIGINT', stop);
+  process.once('SIGTERM', stop);
+
+  try {
+    while (!stopped && (maxIterations == null || iterations < maxIterations)) {
+      iterations += 1;
+      const result = await ingestClaudeCodeRoutedSessions(app, options);
+      const iterationResult = {
+        ...result,
+        source: 'claude_code_sessions_router_watch_iteration',
+        iteration: iterations,
+        intervalMs,
+        watchedAt: new Date().toISOString(),
+      };
+      results.push(iterationResult);
+      if (options.onResult) {
+        await options.onResult(iterationResult);
+      }
+      if (!stopped && (maxIterations == null || iterations < maxIterations)) {
+        await sleep(intervalMs);
+      }
+    }
+  } finally {
+    process.removeListener('SIGINT', stop);
+    process.removeListener('SIGTERM', stop);
+  }
+
+  return {
+    source: 'claude_code_sessions_router_watch',
     projectsDir: path.resolve(options.projectsDir || options.sessionsDir || defaultProjectsDir()),
     intervalMs,
     iterations,

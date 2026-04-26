@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.1 - 2026-04-26
+
+- Added agent-level multi-repo routed ingest for Codex and Claude Code, so each
+  adapter can scan its global session store once and route files to repo
+  `scopeKey` values through a registry.
+- Added repo registry matching with enabled flags, adapter filters, most-specific
+  nested `repoPath` precedence, explicit unknown-cwd skips, and routed result
+  logs that include matched repo names and canonical scope keys.
+- Added systemd user service installers for `codex` and `claude_code` agent
+  routers, keeping the older repo-specific watcher available for simple
+  single-repo deployments.
+- Strengthened README positioning with the explainer comic, remote-first
+  architecture guidance, canonical repo `scopeKey` setup notes, and
+  agent-router examples.
+
 ## 0.1.0 - 2026-04-25
 
 - Added `ingestCodexRollout`, which ingests Codex TUI rollout JSONL artifacts

@@ -526,8 +526,8 @@ watched safely by a repo-specific service.
 
 For machines that use several repositories, prefer one ingest router per agent
 adapter over one watcher per repository. A `codex` router scans the global
-Codex sessions tree once; a future `claude_code` router should do the same for
-Claude Code's transcript store. Each router matches file metadata such as `cwd`
+Codex sessions tree once; a `claude_code` router does the same for Claude
+Code's transcript store. Each router matches file metadata such as `cwd`
 against a repo registry and writes to the matched repo's canonical `scopeKey`.
 
 Example repo registry:
@@ -577,6 +577,17 @@ Install the `codex` agent router as a systemd user service:
 CONTEXTFORGE_REMOTE_URL=https://memory.example.com \
 scripts/install-codex-router-service.sh \
   --name codex \
+  --repo-registry ~/.config/contextforge/repos.json \
+  --token-env-file ~/.config/contextforge/server.env \
+  --distill auto
+```
+
+Install the `claude_code` agent router as a systemd user service:
+
+```bash
+CONTEXTFORGE_REMOTE_URL=https://memory.example.com \
+scripts/install-claude-code-router-service.sh \
+  --name claude-code \
   --repo-registry ~/.config/contextforge/repos.json \
   --token-env-file ~/.config/contextforge/server.env \
   --distill auto
@@ -637,6 +648,21 @@ node src/cli.js ingestClaudeCodeSessions \
   --repoPath /path/to/repo \
   --sinceMinutes 1440 \
   --distill auto
+```
+
+For multi-repo machines, use the routed form instead:
+
+```bash
+CONTEXTFORGE_STORAGE_MODE=remote \
+CONTEXTFORGE_REMOTE_URL=https://memory.example.com \
+CONTEXTFORGE_REMOTE_TOKEN=change-me \
+node src/cli.js ingestClaudeCodeRoutedSessions \
+  --projectsDir ~/.claude/projects \
+  --repoRegistry ~/.config/contextforge/repos.json \
+  --sinceMinutes 1440 \
+  --distill auto \
+  --watch \
+  --intervalMs 30000
 ```
 
 Claude Code sessions are stored as `claude_code:<native-session-id>` with
