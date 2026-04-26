@@ -28,14 +28,14 @@ async function makeGitRepo(remoteUrl = 'git@github.com:example/contextforge.git'
   return cwd;
 }
 
-async function writeSyntheticCodexRollout(filePath, sessionId = 'codex-rollout-session') {
+async function writeSyntheticCodexRollout(filePath, sessionId = 'codex-rollout-session', cwd = path.dirname(filePath)) {
   const records = [
     {
       timestamp: '2026-04-25T00:00:00.000Z',
       type: 'session_meta',
       payload: {
         id: sessionId,
-        cwd: path.dirname(filePath),
+        cwd,
       },
     },
     {
@@ -673,6 +673,72 @@ test('Codex watch service installer rejects non-canonical repo scope keys', asyn
   );
 });
 
+test('Codex router service installer creates an agent-level router unit', async () => {
+  const home = await makeTempDir();
+  const registryPath = path.join(home, 'repos.json');
+  const fakeBin = path.join(home, 'bin');
+  const systemctlLog = path.join(home, 'systemctl.log');
+  await fs.mkdir(fakeBin, { recursive: true });
+  await fs.writeFile(
+    registryPath,
+    JSON.stringify({
+      repos: [
+        {
+          name: 'repo-a',
+          repoPath: '/work/repo-a',
+          scopeKey: 'github.com/example/repo-a',
+          adapters: ['codex'],
+        },
+        {
+          name: 'repo-b',
+          repoPath: '/work/repo-b',
+          scopeKey: 'github.com/example/repo-b',
+          adapters: ['claude_code'],
+        },
+      ],
+    }),
+  );
+  await fs.writeFile(
+    path.join(fakeBin, 'systemctl'),
+    `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> ${JSON.stringify(systemctlLog)}\n`,
+    { mode: 0o755 },
+  );
+
+  const result = await execFileAsync(
+    'bash',
+    [
+      'scripts/install-codex-router-service.sh',
+      '--name',
+      'codex',
+      '--repo-registry',
+      registryPath,
+      '--remote-url',
+      'https://memory.example.com',
+      '--token-env-file',
+      path.join(home, 'token.env'),
+      '--distill',
+      'false',
+    ],
+    {
+      env: {
+        ...process.env,
+        HOME: home,
+        PATH: `${fakeBin}:${process.env.PATH}`,
+      },
+    },
+  );
+
+  const unit = await fs.readFile(
+    path.join(home, '.config', 'systemd', 'user', 'contextforge-codex-router-codex.service'),
+    'utf8',
+  );
+  assert.match(result.stdout, /Installed Codex router unit:/);
+  assert.match(result.stdout, /Enabled Codex repos: 1/);
+  assert.match(unit, /ingestCodexRoutedSessions/);
+  assert.match(unit, new RegExp(`--repoRegistry ${registryPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  assert.doesNotMatch(unit, /--repoPath/);
+});
+
 test('CLI reports invalid metadata JSON clearly', async () => {
   const dataDir = await makeTempDir();
   const env = { ...process.env, CONTEXTFORGE_DATA_DIR: dataDir };
@@ -1142,6 +1208,116 @@ test('CLI Codex sessions scan is not capped by search limit defaults', async () 
   const parsed = JSON.parse(result.stdout);
   assert.equal(parsed.filesScanned, 11);
   assert.equal(parsed.appendedEvents, 44);
+});
+
+test('CLI routes Codex global sessions through a repo registry', async () => {
+  const dataDir = await makeTempDir();
+  const sessionsDir = await makeTempDir();
+  const suiteRepo = await makeTempDir();
+  const appRepo = path.join(suiteRepo, 'app');
+  const frontendRepo = path.join(suiteRepo, 'app', 'frontend');
+  const unknownRepo = await makeTempDir();
+  await fs.mkdir(frontendRepo, { recursive: true });
+  const rolloutDir = path.join(sessionsDir, '2026', '04', '26');
+  await fs.mkdir(rolloutDir, { recursive: true });
+  await writeSyntheticCodexRollout(path.join(rolloutDir, 'rollout-suite.jsonl'), 'codex-suite', suiteRepo);
+  await writeSyntheticCodexRollout(path.join(rolloutDir, 'rollout-app.jsonl'), 'codex-app', path.join(appRepo, 'src'));
+  await writeSyntheticCodexRollout(
+    path.join(rolloutDir, 'rollout-frontend.jsonl'),
+    'codex-frontend',
+    path.join(frontendRepo, 'src'),
+  );
+  await writeSyntheticCodexRollout(path.join(rolloutDir, 'rollout-unknown.jsonl'), 'codex-unknown', unknownRepo);
+  const registryPath = path.join(sessionsDir, 'repo-registry.json');
+  await fs.writeFile(
+    registryPath,
+    JSON.stringify(
+      {
+        repos: [
+          {
+            name: 'suite',
+            repoPath: suiteRepo,
+            scopeKey: 'github.com/example/suite',
+            adapters: ['codex'],
+          },
+          {
+            name: 'app',
+            repoPath: appRepo,
+            scopeKey: 'github.com/example/app',
+          },
+          {
+            name: 'frontend',
+            repoPath: frontendRepo,
+            scopeKey: 'github.com/example/frontend',
+          },
+          {
+            name: 'disabled',
+            repoPath: unknownRepo,
+            scopeKey: 'github.com/example/disabled',
+            enabled: false,
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+  const env = {
+    ...process.env,
+    CONTEXTFORGE_DATA_DIR: dataDir,
+  };
+
+  const result = await execFileAsync(
+    'node',
+    [
+      'src/cli.js',
+      'ingestCodexRoutedSessions',
+      '--sessionsDir',
+      sessionsDir,
+      '--repoRegistry',
+      registryPath,
+      '--distill',
+      'never',
+    ],
+    { env },
+  );
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.source, 'codex_sessions_router');
+  assert.equal(parsed.filesScanned, 4);
+  assert.equal(parsed.routedFiles, 3);
+  assert.equal(parsed.skippedFiles, 1);
+  assert.equal(parsed.appendedEvents, 12);
+  assert.deepEqual(
+    parsed.fileResults
+      .filter((item) => item.matchedRepo)
+      .map((item) => [item.sessionId, item.matchedRepo.name, item.matchedRepo.scopeKey])
+      .sort(),
+    [
+      ['codex:codex-app', 'app', 'github.com/example/app'],
+      ['codex:codex-frontend', 'frontend', 'github.com/example/frontend'],
+      ['codex:codex-suite', 'suite', 'github.com/example/suite'],
+    ],
+  );
+  const skipped = parsed.fileResults.find((item) => item.sessionId === 'codex:codex-unknown');
+  assert.equal(skipped.skippedReason, 'unmatched_repo_cwd');
+
+  const app = createContextForge({ env, cwd: process.cwd() });
+  assert.equal(
+    app.listRawEvents({
+      scope: 'repo',
+      scopeKey: 'github.com/example/frontend',
+      sessionId: 'codex:codex-frontend',
+    }).length,
+    4,
+  );
+  assert.equal(
+    app.listRawEvents({
+      scope: 'repo',
+      scopeKey: 'github.com/example/app',
+      sessionId: 'codex:codex-frontend',
+    }).length,
+    0,
+  );
 });
 
 test('CLI ingests Claude Code JSONL transcripts with agent provenance', async () => {

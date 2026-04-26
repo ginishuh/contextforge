@@ -524,6 +524,67 @@ pick it up when complete. When `--repoPath` is set, files whose recorded TUI
 cwd is outside that repo path are skipped so a global sessions directory can be
 watched safely by a repo-specific service.
 
+For machines that use several repositories, prefer one Codex router service
+over one watcher per repository. The router scans the global Codex sessions
+tree once, matches each rollout's recorded `cwd` against a repo registry, and
+writes to the matched repo's canonical `scopeKey`.
+
+Example repo registry:
+
+```json
+{
+  "repos": [
+    {
+      "name": "suite",
+      "repoPath": "/home/ginis/wastelite-suite",
+      "scopeKey": "github.com/ginishuh-dev/wastelite-suite",
+      "adapters": ["codex"]
+    },
+    {
+      "name": "frontend",
+      "repoPath": "/home/ginis/wastelite-suite/wastelite_frontend",
+      "scopeKey": "github.com/ginishuh-dev/wastelite_frontend",
+      "adapters": ["codex"]
+    }
+  ]
+}
+```
+
+Run the Codex router once:
+
+```bash
+CONTEXTFORGE_STORAGE_MODE=remote \
+CONTEXTFORGE_REMOTE_URL=https://memory.example.com \
+CONTEXTFORGE_REMOTE_TOKEN=change-me \
+node src/cli.js ingestCodexRoutedSessions \
+  --sessionsDir ~/.codex/sessions \
+  --repoRegistry ~/.config/contextforge/repos.json \
+  --sinceMinutes 1440 \
+  --distill auto \
+  --watch \
+  --intervalMs 30000
+```
+
+Nested repo paths are matched by most-specific path first. Unknown `cwd` values
+are skipped by default; the router does not silently write unmatched sessions to
+`shared` or `local` memory. Each routed file result logs the matched repo name,
+repo path, and `scopeKey`, or a skipped reason such as `unmatched_repo_cwd`.
+
+Install the Codex router as a systemd user service:
+
+```bash
+CONTEXTFORGE_REMOTE_URL=https://memory.example.com \
+scripts/install-codex-router-service.sh \
+  --name codex \
+  --repo-registry ~/.config/contextforge/repos.json \
+  --token-env-file ~/.config/contextforge/server.env \
+  --distill auto
+```
+
+The older repo-specific watcher remains supported for simple single-repo
+setups, but the router is the recommended operating shape for suite-style
+workspaces and other multi-repo environments.
+
 For local TUI use, the same command can stay resident and poll for new rollout
 events:
 

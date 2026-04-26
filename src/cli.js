@@ -1,7 +1,13 @@
 #!/usr/bin/env node
 import { createContextForge } from './core.js';
 import { ingestClaudeCodeFile, ingestClaudeCodeSessions, watchClaudeCodeSessions } from './ingest/claude_code.js';
-import { ingestCodexRolloutFile, ingestCodexSessions, watchCodexSessions } from './ingest/codex.js';
+import {
+  ingestCodexRolloutFile,
+  ingestCodexRoutedSessions,
+  ingestCodexSessions,
+  watchCodexRoutedSessions,
+  watchCodexSessions,
+} from './ingest/codex.js';
 import { startContextForgeServer } from './server.js';
 
 function parseArgs(argv) {
@@ -82,6 +88,7 @@ function toCoreOptions(options) {
     maxEvents: options.maxEvents == null ? undefined : Number(options.maxEvents),
     maxChars: options.maxChars == null ? undefined : Number(options.maxChars),
     file: options.file,
+    repoRegistry: options.repoRegistry || options.registry || options.repoRegistryFile,
     sessionsDir: options.sessionsDir,
     projectsDir: options.projectsDir,
     distill: options.distill,
@@ -128,6 +135,15 @@ async function main() {
             },
           })
         : ingestCodexSessions(app, coreOptions),
+    ingestCodexRoutedSessions: (app, coreOptions) =>
+      coreOptions.watch
+        ? watchCodexRoutedSessions(app, {
+            ...coreOptions,
+            onResult: (result) => {
+              console.log(JSON.stringify(result));
+            },
+          })
+        : ingestCodexRoutedSessions(app, coreOptions),
     ingestClaudeCodeFile: (app, coreOptions) => ingestClaudeCodeFile(app, coreOptions),
     ingestClaudeCodeSessions: (app, coreOptions) =>
       coreOptions.watch
