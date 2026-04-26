@@ -8,6 +8,7 @@ import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import Database from 'better-sqlite3';
 import { createContextForge } from '../src/core.js';
 import { validateDistillOutput } from '../src/distill/validate.js';
 import { ingestCodexRolloutFile, watchCodexSessions } from '../src/ingest/codex.js';
@@ -1860,6 +1861,150 @@ test('appendRaw and mock distillCheckpoint preserve raw evidence', async () => {
   assert.equal(statusAfter.shouldDistill, false);
 });
 
+test('raw event TTL pruning is controlled by environment config', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_RAW_TTL_DAYS: '7',
+    },
+    cwd: process.cwd(),
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-ttl',
+    sessionId: 'session-ttl',
+    role: 'user',
+    content: 'old raw evidence',
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-ttl',
+    sessionId: 'session-ttl',
+    role: 'assistant',
+    content: 'fresh raw evidence',
+  });
+
+  const db = new Database(path.join(dataDir, 'contextforge.db'));
+  try {
+    db.prepare('UPDATE raw_events SET created_at = ? WHERE content = ?').run(
+      '2026-01-01T00:00:00.000Z',
+      'old raw evidence',
+    );
+  } finally {
+    db.close();
+  }
+
+  const result = app.pruneRawEvents();
+  assert.equal(result.ttlDays, 7);
+  assert.equal(result.deletedRawEvents, 1);
+
+  const events = app.listRawEvents({
+    scope: 'repo',
+    scopeKey: 'repo-ttl',
+    sessionId: 'session-ttl',
+  });
+  assert.deepEqual(
+    events.map((event) => event.content),
+    ['fresh raw evidence'],
+  );
+});
+
+test('char-threshold distillation waits for the char minimum interval after a checkpoint', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_MIN_INTERVAL_MS: '600000',
+      CONTEXTFORGE_DISTILL_CHAR_MIN_INTERVAL_MS: '600000',
+    },
+    cwd: process.cwd(),
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-cost',
+    sessionId: 'session-cost',
+    role: 'user',
+    content: 'first checkpoint seed',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'repo-cost',
+    sessionId: 'session-cost',
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-cost',
+    sessionId: 'session-cost',
+    role: 'assistant',
+    content: 'x'.repeat(500),
+  });
+
+  const status = app.sessionStatus({
+    scope: 'repo',
+    scopeKey: 'repo-cost',
+    sessionId: 'session-cost',
+    charThreshold: 10,
+  });
+  assert.equal(status.charsSinceLastCheckpoint >= 10, true);
+  assert.equal(status.shouldDistill, false);
+  assert.equal(status.reasons.includes('char_threshold_since_checkpoint'), false);
+  assert.equal(status.thresholds.charMinIntervalMs, 600000);
+});
+
+test('sessionStatus continues after the last raw event covered by a checkpoint', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-covered',
+    sessionId: 'session-covered',
+    role: 'user',
+    content: 'covered raw event',
+  });
+  const firstRaw = app.listRawEvents({
+    scope: 'repo',
+    scopeKey: 'repo-covered',
+    sessionId: 'session-covered',
+  })[0];
+  const checkpoint = await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'repo-covered',
+    sessionId: 'session-covered',
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-covered',
+    sessionId: 'session-covered',
+    role: 'assistant',
+    content: 'raw appended while distillation was finishing',
+  });
+
+  const betweenFirstRawAndCheckpoint = new Date(Date.parse(firstRaw.createdAt) + 1).toISOString();
+  const db = new Database(path.join(dataDir, 'contextforge.db'));
+  try {
+    db.prepare('UPDATE raw_events SET created_at = ? WHERE content = ?').run(
+      betweenFirstRawAndCheckpoint,
+      'raw appended while distillation was finishing',
+    );
+  } finally {
+    db.close();
+  }
+
+  const status = app.sessionStatus({
+    scope: 'repo',
+    scopeKey: 'repo-covered',
+    sessionId: 'session-covered',
+    charThreshold: 1,
+    charMinIntervalMs: 1,
+  });
+  assert.equal(checkpoint.metadata.sourceRawEventIds.length, 1);
+  assert.equal(status.latestCheckpointId, checkpoint.id);
+  assert.equal(status.eventsSinceLastCheckpoint, 1);
+  assert.equal(status.distillWindow.selectedEventCount, 1);
+  assert.equal(status.distillWindow.firstRawEventId !== checkpoint.metadata.sourceRawEventIds[0], true);
+});
+
 test('distillCheckpoint uses a bounded recent raw-event window', async () => {
   const dataDir = await makeTempDir();
   const seen = [];
@@ -2448,6 +2593,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'list_memory_events',
       'promote_memory',
       'promote_memory_candidate',
+      'prune_raw_events',
       'remember',
       'search',
       'session_status',

@@ -261,6 +261,7 @@ CONTEXTFORGE_REMOTE_PORT=8765
 CONTEXTFORGE_REMOTE_TOKEN=change-me
 CONTEXTFORGE_SERVER_STORAGE_MODE=local
 CONTEXTFORGE_DATA_DIR=/var/lib/contextforge
+CONTEXTFORGE_RAW_TTL_DAYS=30
 CONTEXTFORGE_DISTILL_PROVIDER=codex_exec
 CONTEXTFORGE_CODEX_EXEC_MODEL=gpt-5.4-mini
 CONTEXTFORGE_CODEX_EXEC_REASONING_EFFORT=low
@@ -457,6 +458,7 @@ CONTEXTFORGE_REMOTE_PORT=8765 \
 CONTEXTFORGE_REMOTE_TOKEN=change-me \
 CONTEXTFORGE_SERVER_STORAGE_MODE=local \
 CONTEXTFORGE_DATA_DIR=/var/lib/contextforge \
+CONTEXTFORGE_RAW_TTL_DAYS=30 \
 CONTEXTFORGE_DISTILL_PROVIDER=codex_exec \
 CONTEXTFORGE_CODEX_EXEC_MODEL=gpt-5.4-mini \
 CONTEXTFORGE_CODEX_EXEC_REASONING_EFFORT=low \
@@ -471,6 +473,24 @@ ContextForge does not currently run distillation on a built-in timer. Raw
 events are captured when callers use `appendRaw`, and checkpoints are produced
 only when a caller invokes `distillCheckpoint` or the MCP `distill_checkpoint`
 tool. This keeps cost and model usage explicit.
+
+Raw evidence can be pruned by age without deleting checkpoints, distill runs,
+or promoted durable memories. Set `CONTEXTFORGE_RAW_TTL_DAYS` on the server or
+local runtime to enable automatic pruning during raw-event writes. The prune
+check runs at most once per `CONTEXTFORGE_RAW_PRUNE_INTERVAL_MS`, which defaults
+to one hour. You can also run it manually:
+
+```bash
+CONTEXTFORGE_RAW_TTL_DAYS=30 \
+node src/cli.js pruneRawEvents
+```
+
+Distillation cost is controlled by the threshold policy. `CONTEXTFORGE_DISTILL_MIN_INTERVAL_MS`
+sets the normal minimum interval after a checkpoint, and
+`CONTEXTFORGE_DISTILL_CHAR_MIN_INTERVAL_MS` controls how soon a char-threshold
+trigger may create another checkpoint. By default the char trigger uses the same
+minimum interval, so one long tool output does not immediately force another
+LLM distillation right after a checkpoint.
 
 Codex TUI sessions can also be ingested from their rollout JSONL artifacts
 without routing raw transcript text through the model. This keeps raw capture

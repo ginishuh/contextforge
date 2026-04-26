@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.2 - 2026-04-26
+
+- Added server/local raw evidence TTL pruning with `CONTEXTFORGE_RAW_TTL_DAYS`,
+  preserving checkpoints, distill runs, and promoted durable memories.
+- Added `pruneRawEvents` to the CLI, remote API, and MCP tools for explicit
+  raw evidence cleanup.
+- Reduced distillation cost risk by requiring
+  `CONTEXTFORGE_DISTILL_CHAR_MIN_INTERVAL_MS` before char-threshold checkpoint
+  creation after an existing checkpoint.
+- Made checkpoint continuation use the last raw event actually covered by the
+  previous checkpoint, so already-distilled raw evidence is skipped while raw
+  appended during distillation remains eligible for the next checkpoint.
+- Documented raw retention and distillation cost controls in the remote
+  operation guide.
+
 ## 0.1.1 - 2026-04-26
 
 - Added agent-level multi-repo routed ingest for Codex and Claude Code, so each

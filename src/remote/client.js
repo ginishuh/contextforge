@@ -16,11 +16,12 @@ const REMOTE_METHODS = [
   'search',
   'appendRaw',
   'listRawEvents',
+  'pruneRawEvents',
   'distillCheckpoint',
   'listDistillRuns',
 ];
 
-const UNSCOPED_REMOTE_METHODS = new Set(['dbInfo', 'checkCodexExec']);
+const UNSCOPED_REMOTE_METHODS = new Set(['dbInfo', 'checkCodexExec', 'pruneRawEvents']);
 
 function remoteUrl(baseUrl, method) {
   const url = new URL(baseUrl);

@@ -18,6 +18,18 @@ function parsePositiveInteger(value, name, fallback) {
   return parsed;
 }
 
+function parseOptionalPositiveInteger(value, name) {
+  if (value == null || value === '') {
+    return null;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer.`);
+  }
+  return parsed;
+}
+
 function findGitRoot(cwd) {
   let current = path.resolve(cwd);
   while (true) {
@@ -157,6 +169,11 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
     'CONTEXTFORGE_CODEX_EXEC_MAX_INPUT_CHARS',
     12000,
   );
+  const distillMinIntervalMs = parsePositiveInteger(
+    env.CONTEXTFORGE_DISTILL_MIN_INTERVAL_MS,
+    'CONTEXTFORGE_DISTILL_MIN_INTERVAL_MS',
+    10 * 60 * 1000,
+  );
   const defaultSharedScopeKey = env.CONTEXTFORGE_SHARED_SCOPE_KEY || 'global';
   const defaultScopeKey =
     env.CONTEXTFORGE_DEFAULT_SCOPE_KEY || defaultScopeKeyFor(defaultScope, resolvedCwd, defaultSharedScopeKey);
@@ -195,10 +212,11 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
     },
     distillPolicy: {
       minEvents: parsePositiveInteger(env.CONTEXTFORGE_DISTILL_MIN_EVENTS, 'CONTEXTFORGE_DISTILL_MIN_EVENTS', 5),
-      minIntervalMs: parsePositiveInteger(
-        env.CONTEXTFORGE_DISTILL_MIN_INTERVAL_MS,
-        'CONTEXTFORGE_DISTILL_MIN_INTERVAL_MS',
-        10 * 60 * 1000,
+      minIntervalMs: distillMinIntervalMs,
+      charMinIntervalMs: parsePositiveInteger(
+        env.CONTEXTFORGE_DISTILL_CHAR_MIN_INTERVAL_MS,
+        'CONTEXTFORGE_DISTILL_CHAR_MIN_INTERVAL_MS',
+        distillMinIntervalMs,
       ),
       charThreshold: parsePositiveInteger(
         env.CONTEXTFORGE_DISTILL_CHAR_THRESHOLD,
@@ -210,6 +228,17 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
         env.CONTEXTFORGE_DISTILL_MAX_CHARS,
         'CONTEXTFORGE_DISTILL_MAX_CHARS',
         codexExecMaxInputChars,
+      ),
+    },
+    rawRetention: {
+      ttlDays: parseOptionalPositiveInteger(
+        env.CONTEXTFORGE_RAW_TTL_DAYS ?? env.CONTEXTFORGE_RAW_EVENT_TTL_DAYS,
+        'CONTEXTFORGE_RAW_TTL_DAYS',
+      ),
+      pruneIntervalMs: parsePositiveInteger(
+        env.CONTEXTFORGE_RAW_PRUNE_INTERVAL_MS,
+        'CONTEXTFORGE_RAW_PRUNE_INTERVAL_MS',
+        60 * 60 * 1000,
       ),
     },
   };

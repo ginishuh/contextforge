@@ -288,6 +288,7 @@ async function ingestParsedClaudeCodeFile(app, parsed, options = {}) {
     sessionId: parsed.sessionId,
     minEvents: options.minEvents,
     minIntervalMs: options.minIntervalMs,
+    charMinIntervalMs: options.charMinIntervalMs,
     charThreshold: options.charThreshold,
     maxEvents: options.maxEvents,
     maxChars: options.maxChars,

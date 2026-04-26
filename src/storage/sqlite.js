@@ -274,6 +274,15 @@ export class ContextForgeStore {
     };
   }
 
+  pruneRawEventsOlderThan(cutoffIso) {
+    if (!cutoffIso) throw new Error('cutoffIso is required.');
+    const result = this.db.prepare('DELETE FROM raw_events WHERE created_at < ?').run(cutoffIso);
+    return {
+      deletedRawEvents: result.changes,
+      cutoffIso,
+    };
+  }
+
   rebuildMemoryFts() {
     this.db.prepare('DELETE FROM memory_fts').run();
     const rows = this.db

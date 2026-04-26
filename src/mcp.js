@@ -64,6 +64,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
         sessionId: z.string(),
         minEvents: z.number().int().positive().optional(),
         minIntervalMs: z.number().int().positive().optional(),
+        charMinIntervalMs: z.number().int().positive().optional(),
         charThreshold: z.number().int().positive().optional(),
       },
       annotations: {
@@ -158,6 +159,24 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
       },
     },
     async (args) => jsonResult(await app.appendRaw(args)),
+  );
+
+  server.registerTool(
+    'prune_raw_events',
+    {
+      title: 'Prune Raw Evidence',
+      description:
+        'Delete raw evidence older than the configured raw TTL. Checkpoints, distill runs, and durable memories are preserved.',
+      inputSchema: {
+        ttlDays: z.number().int().positive().optional(),
+      },
+      annotations: {
+        title: 'Prune Raw Evidence',
+        readOnlyHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.pruneRawEvents(args)),
   );
 
   server.registerTool(

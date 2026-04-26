@@ -45,6 +45,17 @@ function checkpointTimestamp(checkpoint) {
 }
 
 function eventsAfterCheckpoint(events, checkpoint) {
+  const sourceRawEventIds = Array.isArray(checkpoint?.metadata?.sourceRawEventIds)
+    ? checkpoint.metadata.sourceRawEventIds
+    : [];
+  const lastSourceRawEventId = sourceRawEventIds.at(-1);
+  if (lastSourceRawEventId) {
+    const lastSourceIndex = events.findIndex((event) => event.id === lastSourceRawEventId);
+    if (lastSourceIndex !== -1) {
+      return events.slice(lastSourceIndex + 1);
+    }
+  }
+
   const checkpointTime = checkpointTimestamp(checkpoint);
   if (!checkpointTime) return events;
   return events.filter((event) => Date.parse(event.createdAt) > checkpointTime);
@@ -111,7 +122,11 @@ function buildSessionStatus({ scope, sessionId, rawEvents, latestCheckpoint, pol
   if (latestCheckpoint && eventsSinceLastCheckpoint.length >= policy.minEvents && elapsedMs >= policy.minIntervalMs) {
     reasons.push('events_and_interval_since_checkpoint');
   }
-  if (latestCheckpoint && charsSinceLastCheckpoint >= policy.charThreshold) {
+  if (
+    latestCheckpoint &&
+    charsSinceLastCheckpoint >= policy.charThreshold &&
+    elapsedMs >= policy.charMinIntervalMs
+  ) {
     reasons.push('char_threshold_since_checkpoint');
   }
 
@@ -149,6 +164,11 @@ function sourceProvenanceFromEvents(rawEvents) {
   return provenance;
 }
 
+function rawTtlCutoffIso(ttlDays, now = new Date()) {
+  positiveNumber(Number(ttlDays), 'ttlDays');
+  return new Date(now.getTime() - Number(ttlDays) * 24 * 60 * 60 * 1000).toISOString();
+}
+
 export function createContextForge(options = {}) {
   const config = loadConfig(options);
   if (config.storageMode === 'remote') {
@@ -167,6 +187,19 @@ export function createContextForge(options = {}) {
     }
     return withStore(config, fn);
   };
+  let lastRawPruneAt = 0;
+
+  function pruneRawEventsIfDue(store, now = new Date()) {
+    if (!config.rawRetention.ttlDays) {
+      return null;
+    }
+    const nowMs = now.getTime();
+    if (nowMs - lastRawPruneAt < config.rawRetention.pruneIntervalMs) {
+      return null;
+    }
+    lastRawPruneAt = nowMs;
+    return store.pruneRawEventsOlderThan(rawTtlCutoffIso(config.rawRetention.ttlDays, now));
+  }
 
   return {
     config,
@@ -178,7 +211,13 @@ export function createContextForge(options = {}) {
     },
 
     dbInfo() {
-      return useStore((store) => store.dbInfo());
+      return useStore((store) => ({
+        ...store.dbInfo(),
+        rawRetention: {
+          ttlDays: config.rawRetention.ttlDays,
+          pruneIntervalMs: config.rawRetention.pruneIntervalMs,
+        },
+      }));
     },
 
     checkCodexExec(options = {}) {
@@ -214,6 +253,10 @@ export function createContextForge(options = {}) {
         charThreshold: positiveNumber(
           options.charThreshold == null ? config.distillPolicy.charThreshold : Number(options.charThreshold),
           'charThreshold',
+        ),
+        charMinIntervalMs: positiveNumber(
+          options.charMinIntervalMs == null ? config.distillPolicy.charMinIntervalMs : Number(options.charMinIntervalMs),
+          'charMinIntervalMs',
         ),
         maxEvents: positiveNumber(
           options.maxEvents == null ? config.distillPolicy.maxEvents : Number(options.maxEvents),
@@ -431,16 +474,36 @@ export function createContextForge(options = {}) {
       requireOption(options.sessionId, 'sessionId');
       requireOption(options.role, 'role');
       requireOption(options.content, 'content');
-      return useStore((store) =>
-        store.appendRawEvent({
+      return useStore((store) => {
+        pruneRawEventsIfDue(store);
+        return store.appendRawEvent({
           ...scope,
           sessionId: options.sessionId,
           conversationId: options.conversationId,
           role: options.role,
           content: options.content,
           metadata: options.metadata,
-        }),
-      );
+        });
+      });
+    },
+
+    pruneRawEvents(options = {}) {
+      const ttlDays = options.ttlDays == null ? config.rawRetention.ttlDays : Number(options.ttlDays);
+      if (!ttlDays) {
+        return {
+          deletedRawEvents: 0,
+          cutoffIso: null,
+          ttlDays: null,
+          skipped: true,
+          reason: 'raw_ttl_disabled',
+        };
+      }
+      const cutoffIso = rawTtlCutoffIso(ttlDays);
+      return useStore((store) => ({
+        ...store.pruneRawEventsOlderThan(cutoffIso),
+        ttlDays,
+        skipped: false,
+      }));
     },
 
     listRawEvents(options) {
