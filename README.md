@@ -853,7 +853,9 @@ node src/cli.js distillUsage \
 characters, estimated input tokens, elapsed time, and actual provider token
 usage when a provider records it. When actual provider usage is unavailable,
 `estimatedInputTokens` uses `selectedCharCount / 4` by default. Override the
-estimation ratio with `--charsPerToken`.
+estimation ratio with `--charsPerToken`. Older runs that do not have
+`sourceEventWindow` metadata may report `selectedCharCount` and
+`estimatedInputTokens` as `0`.
 
 CLI output is JSON so adapters and scripts can consume it directly.
 

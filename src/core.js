@@ -138,6 +138,7 @@ function summarizeDistillUsage({ scope, sessionId, runs, charsPerToken = 4 }) {
     estimatedInputTokens: details.reduce((total, run) => total + run.estimatedInputTokens, 0),
     elapsedMs: details.reduce((total, run) => total + (run.elapsedMs || 0), 0),
   };
+  const completedRuns = totals.succeeded + totals.failed;
   const actualUsageRuns = details.filter((run) => run.usage);
   const actualUsage = {
     runs: actualUsageRuns.length,
@@ -153,11 +154,12 @@ function summarizeDistillUsage({ scope, sessionId, runs, charsPerToken = 4 }) {
     charsPerEstimatedToken: charsPerToken,
     note:
       actualUsage.runs > 0
-        ? 'Actual provider usage was found for some runs; missing runs use only estimates.'
-        : 'No actual provider token usage was recorded; estimatedInputTokens uses selectedCharCount divided by charsPerEstimatedToken.',
+        ? 'Actual provider usage was found for some runs; runs without actual usage only have estimates.'
+        : 'No actual provider token usage was recorded; estimatedInputTokens uses selectedCharCount divided by charsPerEstimatedToken. Older runs without sourceEventWindow metadata may estimate as 0.',
     totals: {
       ...totals,
-      averageElapsedMs: totals.runs ? Math.round(totals.elapsedMs / totals.runs) : 0,
+      completedRuns,
+      averageElapsedMs: completedRuns ? Math.round(totals.elapsedMs / completedRuns) : 0,
       actualUsage,
     },
     runs: details,

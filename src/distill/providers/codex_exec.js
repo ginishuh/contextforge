@@ -152,6 +152,7 @@ export function buildCodexExecPrompt(input, options = {}) {
       'Preserve uncertainty in openQuestions instead of inventing facts.',
       'Use only the raw events and previous checkpoint supplied in this request.',
       'For memoryCandidates, include v2 review fields when useful: candidateType, confidence, stability, sensitivity, promotionRecommendation, and sourceEventIds.',
+      'For nullable memoryCandidate fields that are not applicable, return null; do not omit required schema fields.',
       'Set promotionRecommendation to promote only for stable, reviewed-looking durable facts; otherwise prefer review, ignore, or reject.',
     ],
     session: input.session,

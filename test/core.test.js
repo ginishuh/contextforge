@@ -15,7 +15,7 @@ import { createInterruptibleSleep, shouldSkipRecentFailedAutoDistill } from '../
 import { ingestCodexRolloutFile, watchCodexSessions } from '../src/ingest/codex.js';
 import { searchMemories } from '../src/retrieval/search.js';
 import { startContextForgeServer } from '../src/server.js';
-import { SCHEMA_VERSION } from '../src/storage/sqlite.js';
+import { ContextForgeStore, SCHEMA_VERSION } from '../src/storage/sqlite.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -2531,6 +2531,7 @@ test('distillUsage summarizes estimated and actual provider usage', async () => 
   });
   assert.equal(usage.totals.runs, 1);
   assert.equal(usage.totals.succeeded, 1);
+  assert.equal(usage.totals.completedRuns, 1);
   assert.equal(usage.totals.selectedCharCount, 10);
   assert.equal(usage.totals.estimatedInputTokens, 2);
   assert.deepEqual(usage.totals.actualUsage, {
@@ -2540,6 +2541,52 @@ test('distillUsage summarizes estimated and actual provider usage', async () => 
     totalTokens: 50,
   });
   assert.equal(usage.runs[0].usage.totalTokens, 50);
+});
+
+test('distillUsage averages elapsed time across completed runs only', async () => {
+  const dataDir = await makeTempDir();
+  const store = new ContextForgeStore({ dataDir });
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd(), store });
+  const scope = { scopeType: 'repo', scopeKey: 'repo-usage-average' };
+
+  store.startDistillRun({
+    ...scope,
+    sessionId: 'usage-average-session',
+    provider: 'mock',
+    sourceEventCount: 1,
+    inputMetadata: {
+      sourceEventWindow: {
+        selectedEventCount: 1,
+        selectedCharCount: 20,
+      },
+    },
+  });
+  const completed = store.startDistillRun({
+    ...scope,
+    sessionId: 'usage-average-session',
+    provider: 'mock',
+    sourceEventCount: 1,
+    inputMetadata: {
+      sourceEventWindow: {
+        selectedEventCount: 1,
+        selectedCharCount: 40,
+      },
+    },
+  });
+  store.completeDistillRun({ id: completed.id });
+
+  const usage = app.distillUsage({
+    scope: 'repo',
+    scopeKey: 'repo-usage-average',
+    sessionId: 'usage-average-session',
+  });
+
+  assert.equal(usage.totals.runs, 2);
+  assert.equal(usage.totals.started, 1);
+  assert.equal(usage.totals.completedRuns, 1);
+  assert.equal(usage.totals.estimatedInputTokens, 15);
+  assert.equal(usage.totals.averageElapsedMs, usage.totals.elapsedMs);
+  app.close();
 });
 
 test('distillCheckpoint rejects malformed provider output and preserves raw evidence', async () => {
