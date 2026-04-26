@@ -934,6 +934,7 @@ The MCP server exposes a narrow tool surface over the same core API:
 - `list_memory_events`
 - `list_memory_candidates`
 - `append_raw`
+- `prune_raw_events`
 - `distill_checkpoint`
 - `promote_memory`
 - `promote_memory_candidate`
@@ -991,6 +992,14 @@ reviewed candidate directly by checkpoint id and candidate index. Use
 `correct_memory` to preserve the previous value while changing a durable key,
 and `deactivate_memory` to remove stale memories from retrieval without
 deleting their history.
+
+For agent prompt or `AGENTS.md` guidance, see
+[ContextForge Agent Instructions](docs/agent-instructions.md). That guide
+covers startup bootstrap, retrieval order, repo scope keys, checkpoint
+candidate review, durable memory promotion, raw evidence retention, and
+distillation cost discipline. Keep repository `AGENTS.md` files short: include
+only a small ContextForge bootstrap snippet and link to the longer guide instead
+of copying every MCP rule into each project.
 
 ## codex_exec Provider
 
