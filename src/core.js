@@ -40,6 +40,130 @@ function rawCharCount(events) {
   return events.reduce((total, event) => total + String(event.content || '').length, 0);
 }
 
+function truncateForSummary(value, maxChars = 240) {
+  const text = String(value || '');
+  if (text.length <= maxChars) {
+    return text;
+  }
+  return `${text.slice(0, maxChars)}\n[truncated]`;
+}
+
+function finiteNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function estimateTokensFromChars(charCount, charsPerToken) {
+  const chars = finiteNumber(charCount);
+  if (chars == null || chars <= 0) {
+    return 0;
+  }
+  return Math.ceil(chars / charsPerToken);
+}
+
+function usageNumberFrom(metadata, keys) {
+  if (!metadata || typeof metadata !== 'object') {
+    return null;
+  }
+  for (const key of keys) {
+    const number = finiteNumber(metadata[key]);
+    if (number != null) {
+      return number;
+    }
+  }
+  return null;
+}
+
+function extractUsageMetadata(run) {
+  const providerMetadata = run.outputMetadata?.providerMetadata || {};
+  const candidates = [
+    run.outputMetadata?.usage,
+    providerMetadata.usage,
+    providerMetadata.codexExec?.usage,
+    providerMetadata.codexExec,
+  ];
+
+  for (const candidate of candidates) {
+    const inputTokens = usageNumberFrom(candidate, ['inputTokens', 'input_tokens', 'promptTokens', 'prompt_tokens']);
+    const outputTokens = usageNumberFrom(candidate, [
+      'outputTokens',
+      'output_tokens',
+      'completionTokens',
+      'completion_tokens',
+    ]);
+    const totalTokens = usageNumberFrom(candidate, ['totalTokens', 'total_tokens']);
+    if (inputTokens != null || outputTokens != null || totalTokens != null) {
+      return {
+        inputTokens,
+        outputTokens,
+        totalTokens: totalTokens ?? (inputTokens != null && outputTokens != null ? inputTokens + outputTokens : null),
+      };
+    }
+  }
+
+  return null;
+}
+
+function summarizeDistillUsage({ scope, sessionId, runs, charsPerToken = 4 }) {
+  const details = runs.map((run) => {
+    const window = run.inputMetadata?.sourceEventWindow || {};
+    const selectedCharCount = finiteNumber(window.selectedCharCount) ?? 0;
+    const selectedEventCount = finiteNumber(window.selectedEventCount) ?? run.sourceEventCount;
+    const elapsedMs = Date.parse(run.completedAt || '') - Date.parse(run.createdAt || '');
+    const usage = extractUsageMetadata(run);
+    return {
+      id: run.id,
+      status: run.status,
+      provider: run.provider,
+      createdAt: run.createdAt,
+      completedAt: run.completedAt,
+      sourceEventCount: run.sourceEventCount,
+      selectedEventCount,
+      selectedCharCount,
+      estimatedInputTokens: estimateTokensFromChars(selectedCharCount, charsPerToken),
+      usage,
+      elapsedMs: Number.isFinite(elapsedMs) ? elapsedMs : null,
+      errorSummary: run.errorMessage ? truncateForSummary(run.errorMessage) : null,
+    };
+  });
+
+  const totals = {
+    runs: details.length,
+    succeeded: details.filter((run) => run.status === 'succeeded').length,
+    failed: details.filter((run) => run.status === 'failed').length,
+    started: details.filter((run) => run.status === 'started').length,
+    sourceEventCount: details.reduce((total, run) => total + (finiteNumber(run.sourceEventCount) ?? 0), 0),
+    selectedEventCount: details.reduce((total, run) => total + (finiteNumber(run.selectedEventCount) ?? 0), 0),
+    selectedCharCount: details.reduce((total, run) => total + run.selectedCharCount, 0),
+    estimatedInputTokens: details.reduce((total, run) => total + run.estimatedInputTokens, 0),
+    elapsedMs: details.reduce((total, run) => total + (run.elapsedMs || 0), 0),
+  };
+  const actualUsageRuns = details.filter((run) => run.usage);
+  const actualUsage = {
+    runs: actualUsageRuns.length,
+    inputTokens: actualUsageRuns.reduce((total, run) => total + (run.usage.inputTokens || 0), 0),
+    outputTokens: actualUsageRuns.reduce((total, run) => total + (run.usage.outputTokens || 0), 0),
+    totalTokens: actualUsageRuns.reduce((total, run) => total + (run.usage.totalTokens || 0), 0),
+  };
+
+  return {
+    scopeType: scope.scopeType,
+    scopeKey: scope.scopeKey,
+    sessionId,
+    charsPerEstimatedToken: charsPerToken,
+    note:
+      actualUsage.runs > 0
+        ? 'Actual provider usage was found for some runs; missing runs use only estimates.'
+        : 'No actual provider token usage was recorded; estimatedInputTokens uses selectedCharCount divided by charsPerEstimatedToken.',
+    totals: {
+      ...totals,
+      averageElapsedMs: totals.runs ? Math.round(totals.elapsedMs / totals.runs) : 0,
+      actualUsage,
+    },
+    runs: details,
+  };
+}
+
 function normalizeContentForRisk(value) {
   return String(value || '')
     .toLowerCase()
@@ -815,6 +939,27 @@ export function createContextForge(options = {}) {
           sessionId: options.sessionId,
         }),
       );
+    },
+
+    distillUsage(options) {
+      const scope = normalizeScopeOptions(options, config);
+      requireOption(options.sessionId, 'sessionId');
+      const charsPerToken = positiveNumber(
+        options.charsPerToken == null ? 4 : Number(options.charsPerToken),
+        'charsPerToken',
+      );
+      return useStore((store) => {
+        const runs = store.listDistillRuns({
+          ...scope,
+          sessionId: options.sessionId,
+        });
+        return summarizeDistillUsage({
+          scope,
+          sessionId: options.sessionId,
+          runs,
+          charsPerToken,
+        });
+      });
     },
   };
 }

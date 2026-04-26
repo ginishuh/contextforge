@@ -204,6 +204,26 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
   );
 
   server.registerTool(
+    'distill_usage',
+    {
+      title: 'Distill Usage',
+      description:
+        'Summarize distillation run usage for one session, including selected raw-event characters, estimated input tokens, actual provider usage when recorded, status counts, and elapsed time.',
+      inputSchema: {
+        ...scopedSchema,
+        sessionId: z.string(),
+        charsPerToken: z.number().positive().optional(),
+      },
+      annotations: {
+        title: 'Distill Usage',
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.distillUsage(args)),
+  );
+
+  server.registerTool(
     'list_memory_events',
     {
       title: 'List Memory Events',

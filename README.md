@@ -840,6 +840,21 @@ node src/cli.js listDistillRuns \
   --sessionId demo-session
 ```
 
+Summarize distillation usage for a session:
+
+```bash
+node src/cli.js distillUsage \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --sessionId demo-session
+```
+
+`distillUsage` reports run counts, success/failure counts, selected raw-event
+characters, estimated input tokens, elapsed time, and actual provider token
+usage when a provider records it. When actual provider usage is unavailable,
+`estimatedInputTokens` uses `selectedCharCount / 4` by default. Override the
+estimation ratio with `--charsPerToken`.
+
 CLI output is JSON so adapters and scripts can consume it directly.
 
 Promote a reviewed checkpoint candidate into durable memory:
@@ -960,6 +975,7 @@ The MCP server exposes a narrow tool surface over the same core API:
 - `append_raw`
 - `prune_raw_events`
 - `distill_checkpoint`
+- `distill_usage`
 - `promote_memory`
 - `promote_memory_candidate`
 - `reject_memory_candidate`

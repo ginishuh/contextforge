@@ -11,7 +11,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import Database from 'better-sqlite3';
 import { createContextForge } from '../src/core.js';
 import { validateDistillOutput } from '../src/distill/validate.js';
-import { createInterruptibleSleep } from '../src/ingest/common.js';
+import { createInterruptibleSleep, shouldSkipRecentFailedAutoDistill } from '../src/ingest/common.js';
 import { ingestCodexRolloutFile, watchCodexSessions } from '../src/ingest/codex.js';
 import { searchMemories } from '../src/retrieval/search.js';
 import { startContextForgeServer } from '../src/server.js';
@@ -1412,6 +1412,30 @@ test('Codex ingest preserves raw evidence when auto distill fails', async () => 
   );
 });
 
+test('recent failed auto distill suppression uses the newest run', async () => {
+  const skip = await shouldSkipRecentFailedAutoDistill(
+    {
+      listDistillRuns: async () => [
+        {
+          status: 'succeeded',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          completedAt: '2026-01-01T00:00:01.000Z',
+        },
+        {
+          status: 'failed',
+          createdAt: new Date().toISOString(),
+          completedAt: new Date().toISOString(),
+        },
+      ],
+    },
+    { scope: 'repo', scopeKey: 'repo-failed-distill' },
+    'session-failed-distill',
+    { thresholds: { minIntervalMs: 600000 } },
+  );
+
+  assert.equal(skip, true);
+});
+
 test('CLI ingest works through remote storage mode', async () => {
   const dataDir = await makeTempDir();
   const rolloutDir = await makeTempDir();
@@ -2457,6 +2481,67 @@ test('distillCheckpoint uses a bounded recent raw-event window', async () => {
   assert.equal(runs[0].inputMetadata.sourceEventWindow.totalRawEventCount, 6);
 });
 
+test('distillUsage summarizes estimated and actual provider usage', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'usage_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      usage_provider: async () => ({
+        summaryShort: 'Usage checkpoint.',
+        summaryText: 'The provider returned usage metadata.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [],
+        sourceEventCount: 1,
+        provider: 'usage_provider',
+        metadata: {
+          usage: {
+            inputTokens: 42,
+            outputTokens: 8,
+            totalTokens: 50,
+          },
+        },
+      }),
+    },
+  });
+
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-usage',
+    sessionId: 'usage-session',
+    role: 'user',
+    content: '1234567890',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'repo-usage',
+    sessionId: 'usage-session',
+  });
+
+  const usage = app.distillUsage({
+    scope: 'repo',
+    scopeKey: 'repo-usage',
+    sessionId: 'usage-session',
+    charsPerToken: 5,
+  });
+  assert.equal(usage.totals.runs, 1);
+  assert.equal(usage.totals.succeeded, 1);
+  assert.equal(usage.totals.selectedCharCount, 10);
+  assert.equal(usage.totals.estimatedInputTokens, 2);
+  assert.deepEqual(usage.totals.actualUsage, {
+    runs: 1,
+    inputTokens: 42,
+    outputTokens: 8,
+    totalTokens: 50,
+  });
+  assert.equal(usage.runs[0].usage.totalTokens, 50);
+});
+
 test('distillCheckpoint rejects malformed provider output and preserves raw evidence', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({
@@ -2572,6 +2657,7 @@ test('distillCheckpoint records provider failures without deleting raw evidence'
 test('codex_exec provider distills synthetic raw events through a runner', async () => {
   const dataDir = await makeTempDir();
   let invocation;
+  let schema;
   const app = createContextForge({
     env: {
       CONTEXTFORGE_DATA_DIR: dataDir,
@@ -2585,6 +2671,8 @@ test('codex_exec provider distills synthetic raw events through a runner', async
     cwd: process.cwd(),
     codexExecRunner: async (args) => {
       invocation = args;
+      const schemaPath = args.args[args.args.indexOf('--output-schema') + 1];
+      schema = JSON.parse(await fs.readFile(schemaPath, 'utf8'));
       return {
         stdout: JSON.stringify({
           summaryShort: 'Codex checkpoint for synthetic events.',
@@ -2592,7 +2680,22 @@ test('codex_exec provider distills synthetic raw events through a runner', async
           decisions: ['Use codex_exec behind the provider contract.'],
           todos: ['Document setup expectations.'],
           openQuestions: [],
-          memoryCandidates: [{ key: 'provider', content: 'codex_exec is available.' }],
+          memoryCandidates: [
+            {
+              key: 'provider',
+              content: 'codex_exec is available.',
+              reason: 'Synthetic provider output.',
+              category: 'note',
+              tags: [],
+              importance: 0,
+              candidateType: null,
+              confidence: null,
+              stability: null,
+              sensitivity: null,
+              promotionRecommendation: null,
+              sourceEventIds: [],
+            },
+          ],
           sourceEventCount: 1,
           metadata: { synthetic: true },
         }),
@@ -2630,6 +2733,8 @@ test('codex_exec provider distills synthetic raw events through a runner', async
   assert.ok(invocation.args.includes('-c'));
   assert.ok(invocation.args.includes('model_reasoning_effort="low"'));
   assert.equal(invocation.timeoutMs, 1234);
+  const candidateSchema = schema.properties.memoryCandidates.items;
+  assert.deepEqual(candidateSchema.required, Object.keys(candidateSchema.properties));
 
   const runs = app.listDistillRuns({
     scope: 'repo',
@@ -2945,6 +3050,23 @@ test('CLI supports the v0 workflow with synthetic data', async () => {
     { env },
   );
   assert.match(runs.stdout, /"status": "succeeded"/);
+
+  const usage = await execFileAsync(
+    'node',
+    [
+      'src/cli.js',
+      'distillUsage',
+      '--scope',
+      'repo',
+      '--scopeKey',
+      'cli-repo',
+      '--sessionId',
+      'cli-session',
+    ],
+    { env },
+  );
+  assert.match(usage.stdout, /"estimatedInputTokens":/);
+  assert.match(usage.stdout, /"runs": 1/);
 });
 
 test('MCP stdio server exposes core tools for synthetic integration', async () => {
@@ -2972,6 +3094,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'correct_memory',
       'deactivate_memory',
       'distill_checkpoint',
+      'distill_usage',
       'get_memory',
       'list_memory_candidates',
       'list_memory_events',
@@ -2992,6 +3115,8 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     const distillTool = toolList.tools.find((tool) => tool.name === 'distill_checkpoint');
     assert.ok(distillTool.inputSchema.properties.maxEvents);
     assert.ok(distillTool.inputSchema.properties.maxChars);
+    const distillUsageTool = toolList.tools.find((tool) => tool.name === 'distill_usage');
+    assert.ok(distillUsageTool.inputSchema.properties.charsPerToken);
 
     const rememberResult = await client.callTool({
       name: 'remember',

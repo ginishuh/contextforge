@@ -20,6 +20,7 @@ const REMOTE_METHODS = [
   'pruneRawEvents',
   'distillCheckpoint',
   'listDistillRuns',
+  'distillUsage',
 ];
 
 const UNSCOPED_REMOTE_METHODS = new Set(['dbInfo', 'checkCodexExec', 'pruneRawEvents']);

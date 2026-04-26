@@ -113,6 +113,7 @@ function toCoreOptions(options) {
     watch: options.watch === true || options.watch === 'true',
     intervalMs: options.intervalMs == null ? undefined : Number(options.intervalMs),
     iterations: options.iterations == null ? undefined : Number(options.iterations),
+    charsPerToken: options.charsPerToken == null ? undefined : Number(options.charsPerToken),
   };
 }
 
@@ -142,6 +143,7 @@ async function main() {
     pruneRawEvents: (app, coreOptions) => app.pruneRawEvents(coreOptions),
     distillCheckpoint: (app, coreOptions) => app.distillCheckpoint(coreOptions),
     listDistillRuns: (app, coreOptions) => app.listDistillRuns(coreOptions),
+    distillUsage: (app, coreOptions) => app.distillUsage(coreOptions),
     ingestCodexRollout: (app, coreOptions) => ingestCodexRolloutFile(app, coreOptions),
     ingestCodexSessions: (app, coreOptions) =>
       coreOptions.watch

@@ -74,7 +74,7 @@ export async function shouldSkipRecentFailedAutoDistill(app, scopeOptions, sessi
     ...scopeOptions,
     sessionId,
   });
-  const latest = runs[0];
+  const latest = runs.at(-1);
   if (!latest || latest.status !== 'failed') {
     return false;
   }

@@ -213,6 +213,8 @@ Prefer distilling at meaningful boundaries:
 - `append_raw`: capture scoped evidence for distillation and debugging.
 - `session_status`: inspect raw/checkpoint thresholds before distilling.
 - `distill_checkpoint`: create a recent-continuity checkpoint.
+- `distill_usage`: summarize distillation run counts, selected input size,
+  estimated input tokens, elapsed time, and actual provider usage when recorded.
 - `list_memory_candidates`: inspect checkpoint-generated durable-memory
   candidates.
 - `promote_memory_candidate`: promote a reviewed candidate by candidate id.
