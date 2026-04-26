@@ -3,6 +3,7 @@ set -euo pipefail
 
 name="contextforge"
 repo_path=""
+scope_key=""
 remote_url="${CONTEXTFORGE_REMOTE_URL:-}"
 token_env_file="${CONTEXTFORGE_TOKEN_ENV_FILE:-$HOME/.config/contextforge/server.env}"
 sessions_dir="${CONTEXTFORGE_CODEX_SESSIONS_DIR:-$HOME/.codex/sessions}"
@@ -19,6 +20,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --repo-path)
       repo_path="$2"
+      shift 2
+      ;;
+    --scope-key|--scopeKey)
+      scope_key="$2"
       shift 2
       ;;
     --remote-url)
@@ -71,6 +76,11 @@ unit_dir="$HOME/.config/systemd/user"
 unit_name="contextforge-codex-watch-${safe_name}.service"
 unit_path="$unit_dir/$unit_name"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+scope_key_args=""
+
+if [ -n "$scope_key" ]; then
+  scope_key_args=" --scopeKey ${scope_key}"
+fi
 
 mkdir -p "$unit_dir"
 
@@ -85,7 +95,7 @@ WorkingDirectory=${repo_root}
 Environment=CONTEXTFORGE_STORAGE_MODE=remote
 Environment=CONTEXTFORGE_REMOTE_URL=${remote_url}
 EnvironmentFile=-${token_env_file}
-ExecStart=${node_bin} ${repo_root}/src/cli.js ingestCodexSessions --sessionsDir ${sessions_dir} --scope repo --repoPath ${repo_path} --sinceMinutes ${since_minutes} --distill ${distill} --watch --intervalMs ${interval_ms}
+ExecStart=${node_bin} ${repo_root}/src/cli.js ingestCodexSessions --sessionsDir ${sessions_dir} --scope repo --repoPath ${repo_path}${scope_key_args} --sinceMinutes ${since_minutes} --distill ${distill} --watch --intervalMs ${interval_ms}
 Restart=always
 RestartSec=10
 

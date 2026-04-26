@@ -79,11 +79,13 @@ By default, runtime data is stored in `.contextforge/contextforge.db` under the
 current working directory. This directory and SQLite sidecar files are ignored by
 git. To use another location, set `CONTEXTFORGE_DATA_DIR`.
 
-Repo scope keys default to the current git checkout when possible. ContextForge
-normalizes common GitHub origin remotes to `github.com/owner/repo`; outside a
-git checkout it falls back to a deterministic `path:<hash>:<name>` key. Pass
-`--scopeKey` or set `CONTEXTFORGE_DEFAULT_SCOPE_KEY` when you want an explicit
-scope key.
+Repo scope keys default to the current git checkout when possible. `repoPath`
+and `cwd` locate the local checkout; they are not the canonical repo identity.
+ContextForge normalizes common GitHub origin remotes to `github.com/owner/repo`,
+so different local paths can share the same repo memory when they point to the
+same GitHub repo. Outside a git checkout it falls back to a deterministic
+`path:<hash>:<name>` key. Pass `--scopeKey` or set
+`CONTEXTFORGE_DEFAULT_SCOPE_KEY` when you want an explicit canonical scope key.
 
 ## Usage Modes
 
@@ -396,6 +398,7 @@ CONTEXTFORGE_REMOTE_URL=https://memory.example.com \
 scripts/install-codex-watch-service.sh \
   --name my-repo \
   --repo-path /absolute/path/to/my-repo \
+  --scope-key github.com/example/my-repo \
   --token-env-file ~/.config/contextforge/server.env \
   --distill auto
 ```
@@ -403,6 +406,9 @@ scripts/install-codex-watch-service.sh \
 The service scans the global Codex sessions directory but only ingests rollout
 files whose recorded TUI `cwd` is inside `--repo-path`, so one machine can have
 separate watch services for separate repos without crossing repo scopes.
+`--scope-key` is optional when the checkout has a stable GitHub origin, but it
+is recommended for cross-machine deployments because it pins the canonical repo
+memory key independent of local paths.
 
 6. Check service logs:
 
@@ -412,8 +418,9 @@ journalctl --user -u contextforge-codex-watch-my-repo.service -n 50 --no-pager
 ```
 
 Use the same remote URL and token on every machine that should share memory.
-Use different `--repo-path` values per checkout; repo scope keys are inferred
-from the checkout's git remote when possible.
+Use different `--repo-path` values per checkout; either pass the same
+`--scope-key` on every machine or let ContextForge infer the same normalized
+GitHub remote key from each checkout.
 
 ### Remote Operation
 
@@ -836,8 +843,11 @@ serve many repositories. Repo scope keys are inferred from the active git
 checkout when possible. If an agent is launched outside the repository but is
 working on a specific checkout, pass `repoPath` or `cwd` on scoped tool calls so
 the client can resolve that checkout before talking to the remote store.
-`repoPath` takes precedence when both are provided. Pass an explicit `scopeKey`
-when the client cannot provide a useful working directory.
+`repoPath` takes precedence when both are provided. For cross-machine
+consistency, treat `scopeKey` as the canonical repo memory key and pass an
+explicit normalized GitHub key such as `github.com/example/contextforge` when a
+checkout has no useful remote, points at a fork, or may live at different local
+paths.
 
 Agents should use `search` for scoped retrieval on demand, call `get_memory`
 only when they know the durable key they need, append raw evidence for later

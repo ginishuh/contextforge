@@ -550,6 +550,50 @@ test('CLI accepts repoPath for repo-scoped memory', async () => {
   assert.match(remembered.stdout, /"scopeKey": "github.com\/example\/cli-repo"/);
 });
 
+test('Codex watch service installer pins explicit repo scope key', async () => {
+  const home = await makeTempDir();
+  const fakeBin = path.join(home, 'bin');
+  const systemctlLog = path.join(home, 'systemctl.log');
+  await fs.mkdir(fakeBin, { recursive: true });
+  await fs.writeFile(
+    path.join(fakeBin, 'systemctl'),
+    `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> ${JSON.stringify(systemctlLog)}\n`,
+    { mode: 0o755 },
+  );
+
+  await execFileAsync(
+    'bash',
+    [
+      'scripts/install-codex-watch-service.sh',
+      '--name',
+      'scope-test',
+      '--repo-path',
+      '/work/repo',
+      '--scope-key',
+      'github.com/example/repo',
+      '--remote-url',
+      'https://memory.example.com',
+      '--token-env-file',
+      path.join(home, 'token.env'),
+      '--distill',
+      'false',
+    ],
+    {
+      env: {
+        ...process.env,
+        HOME: home,
+        PATH: `${fakeBin}:${process.env.PATH}`,
+      },
+    },
+  );
+
+  const unit = await fs.readFile(
+    path.join(home, '.config', 'systemd', 'user', 'contextforge-codex-watch-scope-test.service'),
+    'utf8',
+  );
+  assert.match(unit, /--repoPath \/work\/repo --scopeKey github\.com\/example\/repo/);
+});
+
 test('CLI reports invalid metadata JSON clearly', async () => {
   const dataDir = await makeTempDir();
   const env = { ...process.env, CONTEXTFORGE_DATA_DIR: dataDir };
