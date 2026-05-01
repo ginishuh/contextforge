@@ -3362,6 +3362,114 @@ test('codex_exec parse failures preserve raw evidence', async () => {
   assert.equal(runs[0].outputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v3');
 });
 
+test('bootstrapContext returns semantic retrieval with trust and verification hints', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-bootstrap',
+    key: 'issue-69-contract',
+    content: 'Issues and PRs changed the bootstrap API contract for agents.',
+    category: 'decision',
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-bootstrap',
+    key: 'indentation-style',
+    content: 'Use four spaces for generated examples in this repo.',
+    category: 'preference',
+  });
+  app.remember({
+    scope: 'shared',
+    scopeKey: 'global',
+    key: 'agent-bootstrap-policy',
+    content: 'Agents should verify PR and CI state before acting on retrieved context.',
+    category: 'policy',
+  });
+
+  const result = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-bootstrap',
+    query: 'issue 69 bootstrap contract previous work',
+    includeShared: true,
+    limit: 5,
+  });
+
+  assert.deepEqual(result.scope, { scopeType: 'repo', scopeKey: 'repo-bootstrap' });
+  assert.equal(result.storage.mode, 'project-local');
+  assert.equal(result.storage.authority, 'project-local');
+  assert.match(result.summary, /Found/);
+  assert.ok(result.results.some((item) => item.group === 'primary' && item.key === 'issue-69-contract'));
+  assert.ok(result.results.some((item) => item.group === 'shared' && item.key === 'agent-bootstrap-policy'));
+  const repoHit = result.results.find((item) => item.key === 'issue-69-contract');
+  assert.equal(repoHit.trust, 'reviewed_durable');
+  assert.equal(repoHit.verificationRequired, true);
+  assert.ok(Array.isArray(repoHit.why));
+  assert.equal(Object.hasOwn(repoHit, 'score'), false);
+  assert.match(repoHit.whyUse, /Reviewed durable/);
+  assert.ok(result.nextActions.some((item) => item.includes('Verify current git')));
+
+  const stableResult = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-bootstrap',
+    query: 'indentation style examples',
+    limit: 3,
+  });
+  const stableHit = stableResult.results.find((item) => item.key === 'indentation-style');
+  assert.equal(stableHit.verificationRequired, false);
+});
+
+test('bootstrapContext reuses one query embedding across repo and shared retrieval', async () => {
+  const dataDir = await makeTempDir();
+  let embedCalls = 0;
+  const provider = {
+    name: 'test-vector',
+    model: 'test-embedding',
+    dimensions: 3,
+    async embed(texts) {
+      embedCalls += 1;
+      return texts.map(() => [1, 0, 0]);
+    },
+  };
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_EMBEDDINGS_PROVIDER: 'openai',
+      CONTEXTFORGE_EMBEDDINGS_DIMENSIONS: '3',
+    },
+    cwd: process.cwd(),
+    embeddingProviders: {
+      openai: provider,
+    },
+  });
+
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-bootstrap-embed',
+    key: 'repo-bootstrap-memory',
+    content: 'Repo bootstrap retrieval should reuse embeddings.',
+  });
+  app.remember({
+    scope: 'shared',
+    scopeKey: 'global',
+    key: 'shared-bootstrap-memory',
+    content: 'Shared bootstrap retrieval should reuse embeddings.',
+  });
+
+  const result = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-bootstrap-embed',
+    query: 'bootstrap retrieval',
+    includeShared: true,
+  });
+
+  assert.equal(embedCalls, 1);
+  assert.equal(result.sharedLimit, 3);
+  assert.ok(result.results.some((item) => item.group === 'primary'));
+  assert.ok(result.results.some((item) => item.group === 'shared'));
+});
+
 test('CLI supports the v0 workflow with synthetic data', async () => {
   const dataDir = await makeTempDir();
   const env = { ...process.env, CONTEXTFORGE_DATA_DIR: dataDir };
@@ -3394,6 +3502,14 @@ test('CLI supports the v0 workflow with synthetic data', async () => {
     { env },
   );
   assert.match(search.stdout, /"key": "retrieval"/);
+
+  const bootstrap = await execFileAsync(
+    'node',
+    ['src/cli.js', 'bootstrapContext', '--scope', 'repo', '--scopeKey', 'cli-repo', '--query', 'durable previous work'],
+    { env },
+  );
+  assert.match(bootstrap.stdout, /"trust": "reviewed_durable"/);
+  assert.match(bootstrap.stdout, /"nextActions":/);
 
   await execFileAsync(
     'node',
@@ -3502,6 +3618,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.deepEqual(toolNames, [
       'append_raw',
       'begin_session',
+      'bootstrap_context',
       'correct_memory',
       'db_info',
       'deactivate_memory',
@@ -3552,6 +3669,17 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       },
     });
     assert.equal(searchResult.structuredContent.result[0].memory.key, 'mcp-rule');
+
+    const bootstrapResult = await client.callTool({
+      name: 'bootstrap_context',
+      arguments: {
+        scope: 'repo',
+        scopeKey: 'mcp-repo',
+        query: 'retrieval demand previous work',
+      },
+    });
+    assert.equal(bootstrapResult.structuredContent.result.scope.scopeKey, 'mcp-repo');
+    assert.equal(bootstrapResult.structuredContent.result.results[0].trust, 'reviewed_durable');
 
     const repoPathResult = await client.callTool({
       name: 'remember',
@@ -3802,6 +3930,16 @@ test('remote storage mode delegates core calls and preserves scope semantics', a
     });
     assert.equal(repoResults.length, 1);
     assert.equal(repoResults[0].memory.scopeType, 'repo');
+
+    const bootstrap = await app.bootstrapContext({
+      scope: 'repo',
+      scopeKey: 'repo-remote',
+      query: 'remote shared scope previous work',
+      includeShared: true,
+    });
+    assert.equal(bootstrap.scope.scopeKey, 'repo-remote');
+    assert.ok(bootstrap.results.some((item) => item.group === 'primary' && item.key === 'storage-mode'));
+    assert.ok(bootstrap.results.some((item) => item.group === 'shared' && item.key === 'storage-mode'));
 
     await app.appendRaw({
       scope: 'repo',

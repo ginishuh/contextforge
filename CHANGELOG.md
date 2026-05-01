@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Expanded agent guidance for repo-scoped semantic continuation retrieval,
+  vector result verification boundaries, durable promotion criteria, and
+  memory-candidate review queue handling.
+- Added `bootstrapContext` to the core API, CLI, remote API, and MCP
+  `bootstrap_context` tool so agents can resolve startup memory context,
+  storage/vector readiness, trust hints, and live-state verification reminders
+  in one call.
+
 ## 0.2.0 - 2026-05-01
 
 - Added sqlite-vec backed derived embedding storage with startup `vec_version`

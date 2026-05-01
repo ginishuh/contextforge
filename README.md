@@ -1105,7 +1105,13 @@ distillation cost discipline. It also includes separate `AGENTS.md` snippets
 for remote-canonical deployments and local/project-local stores. Keep
 repository `AGENTS.md` files short: include only a small ContextForge bootstrap
 snippet and link to the longer guide instead of copying every MCP rule into
-each project.
+each project. For loose continuation prompts like "yesterday", "continue",
+"previous work", issue/PR follow-up, or cross-agent handoff, agents should call
+`bootstrap_context` or `bootstrapContext` early. The bootstrap response reviews
+repo-scoped `memory`, `checkpoint`, and `memory_candidate` hits as context
+candidates, optionally includes up to three shared-scope hits, then reminds the
+agent to verify current branch, issue/PR, CI, migration, and runtime state
+against live sources before acting.
 
 ## codex_exec Provider
 

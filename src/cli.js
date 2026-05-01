@@ -71,6 +71,7 @@ function toCoreOptions(options) {
     limit: options.limit == null ? 10 : Number(options.limit),
     searchScopes: options.searchScopes,
     sharedScopeKey: options.sharedScopeKey,
+    includeShared: options.includeShared === true || options.includeShared === 'true',
     sessionId: options.sessionId,
     conversationId: options.conversationId,
     role: options.role,
@@ -127,6 +128,7 @@ async function main() {
   const { command, options } = parseArgs(process.argv);
   const commands = {
     dbInfo: (app) => app.dbInfo(),
+    bootstrapContext: (app, coreOptions) => app.bootstrapContext(coreOptions),
     doctorCodexExec: (app, coreOptions) => app.checkCodexExec(coreOptions),
     beginSession: (app, coreOptions) => app.beginSession(coreOptions),
     sessionStatus: (app, coreOptions) => app.sessionStatus(coreOptions),
