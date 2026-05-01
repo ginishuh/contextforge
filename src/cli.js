@@ -114,6 +114,8 @@ function toCoreOptions(options) {
     intervalMs: options.intervalMs == null ? undefined : Number(options.intervalMs),
     iterations: options.iterations == null ? undefined : Number(options.iterations),
     charsPerToken: options.charsPerToken == null ? undefined : Number(options.charsPerToken),
+    batchSize: options.batchSize == null ? undefined : Number(options.batchSize),
+    force: options.force === true || options.force === 'true',
   };
 }
 
@@ -137,6 +139,7 @@ async function main() {
     listMemoryEvents: (app, coreOptions) => app.listMemoryEvents(coreOptions),
     listMemoryCandidates: (app, coreOptions) => app.listMemoryCandidates(coreOptions),
     search: (app, coreOptions) => app.search(coreOptions),
+    rebuildEmbeddings: (app, coreOptions) => app.rebuildEmbeddings(coreOptions),
     getMemory: (app, coreOptions) => app.getMemory(coreOptions),
     appendRaw: (app, coreOptions) => app.appendRaw(coreOptions),
     listRawEvents: (app, coreOptions) => app.listRawEvents(coreOptions),

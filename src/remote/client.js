@@ -15,6 +15,7 @@ const REMOTE_METHODS = [
   'listMemoryCandidates',
   'getMemory',
   'search',
+  'rebuildEmbeddings',
   'appendRaw',
   'listRawEvents',
   'pruneRawEvents',

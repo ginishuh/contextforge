@@ -265,12 +265,35 @@ CONTEXTFORGE_RAW_TTL_DAYS=30
 CONTEXTFORGE_DISTILL_PROVIDER=codex_exec
 CONTEXTFORGE_CODEX_EXEC_MODEL=gpt-5.4-mini
 CONTEXTFORGE_CODEX_EXEC_REASONING_EFFORT=low
+CONTEXTFORGE_EMBEDDINGS_PROVIDER=openai
+CONTEXTFORGE_OPENAI_API_KEY=sk-...
+CONTEXTFORGE_EMBEDDINGS_MODEL=text-embedding-3-small
+CONTEXTFORGE_EMBEDDINGS_DIMENSIONS=1536
+CONTEXTFORGE_EMBEDDINGS_TIMEOUT_MS=30000
 ```
 
 Use a long random token and store the same value on client machines as
 `CONTEXTFORGE_REMOTE_TOKEN`. Treat this token as an administrator credential:
 it can call every remote API method, including pruning raw evidence and running
 provider health checks. Do not put this file in git.
+
+`CONTEXTFORGE_OPENAI_API_KEY` is only needed on the process that performs
+embedding calls. In remote/server-backed deployments, keep that key only in the
+server environment file. Clients that call the remote server need
+`CONTEXTFORGE_REMOTE_TOKEN`, not the OpenAI key.
+
+If you run the remote server as a systemd user service instead of a system
+service, use the same variable names in a private user env file such as:
+
+```text
+~/.config/contextforge/server.env
+```
+
+and point the user unit at it:
+
+```ini
+EnvironmentFile=%h/.config/contextforge/server.env
+```
 
 5. Install a systemd service:
 
@@ -359,6 +382,18 @@ layer already provides encryption and access control. The bearer token protects
 the ContextForge API, but it is not a replacement for TLS on untrusted networks
 or for operator-only handling of admin-capable credentials.
 
+When embeddings are enabled on the server, successful `distillCheckpoint` calls
+immediately embed the new checkpoint and any memory candidates from that
+checkpoint into the derived sqlite-vec index. The canonical tables remain
+SQLite memory/checkpoint tables; the vector index is rebuildable with:
+
+```bash
+node src/cli.js rebuildEmbeddings --scope repo --scopeKey github.com/example/repo
+```
+
+If embedding fails after a successful distillation, the checkpoint remains
+stored and the result reports `embedding.reason = "embedding_failed"`.
+
 After the VPS is healthy, configure each laptop, desktop, or agent host with
 the same URL and bearer token using the next section.
 
@@ -385,6 +420,8 @@ chmod 600 ~/.config/contextforge/server.env
 ```
 
 Do not commit this file. Use the token configured on the remote server.
+Do not put `CONTEXTFORGE_OPENAI_API_KEY` on client machines unless they also run
+ContextForge in local/project-local mode and perform embeddings directly.
 
 3. Register the remote HTTP MCP endpoint with Codex:
 
@@ -1042,9 +1079,11 @@ For agent prompt or `AGENTS.md` guidance, see
 [ContextForge Agent Instructions](docs/agent-instructions.md). That guide
 covers startup bootstrap, retrieval order, repo scope keys, checkpoint
 candidate review, durable memory promotion, raw evidence retention, and
-distillation cost discipline. Keep repository `AGENTS.md` files short: include
-only a small ContextForge bootstrap snippet and link to the longer guide instead
-of copying every MCP rule into each project.
+distillation cost discipline. It also includes separate `AGENTS.md` snippets
+for remote-canonical deployments and local/project-local stores. Keep
+repository `AGENTS.md` files short: include only a small ContextForge bootstrap
+snippet and link to the longer guide instead of copying every MCP rule into
+each project.
 
 ## codex_exec Provider
 

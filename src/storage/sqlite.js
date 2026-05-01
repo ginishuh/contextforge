@@ -1,9 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
+import * as sqliteVec from 'sqlite-vec';
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 function nowIso() {
   return new Date().toISOString();
@@ -160,6 +161,18 @@ function normalizeTags(tags) {
   return Array.isArray(tags) ? tags.map((tag) => String(tag)) : [];
 }
 
+function contentHash(value) {
+  return createHash('sha256').update(String(value || '')).digest('hex');
+}
+
+function validateDimensions(dimensions) {
+  const parsed = Number(dimensions);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error('embedding dimensions must be a positive integer.');
+  }
+  return parsed;
+}
+
 function normalizeCandidate(candidate) {
   const value = candidate && typeof candidate === 'object' && !Array.isArray(candidate) ? candidate : {};
   return {
@@ -185,7 +198,25 @@ export class ContextForgeStore {
     this.dbPath = path.join(dataDir, 'contextforge.db');
     this.db = new Database(this.dbPath);
     this.db.exec('PRAGMA foreign_keys = ON;');
+    this.vectorStatus = this.loadVectorExtension();
     this.migrate();
+  }
+
+  loadVectorExtension() {
+    try {
+      sqliteVec.load(this.db);
+      return {
+        available: true,
+        version: this.db.prepare('SELECT vec_version() AS version').get().version,
+        error: null,
+      };
+    } catch (error) {
+      return {
+        available: false,
+        version: null,
+        error: error.message,
+      };
+    }
   }
 
   close() {
@@ -361,6 +392,12 @@ export class ContextForgeStore {
 
   dbInfo() {
     const count = (table) => this.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count;
+    const embeddingIndexExists = this.db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'embedding_index'")
+      .get();
+    const embeddingDimensions = this.db
+      .prepare("SELECT value FROM schema_meta WHERE key = 'embedding_dimensions'")
+      .get()?.value;
     return {
       dataDir: this.dataDir,
       dbPath: this.dbPath,
@@ -374,8 +411,376 @@ export class ContextForgeStore {
         distillRuns: count('distill_runs'),
         memoryEvents: count('memory_events'),
         memoryCandidates: count('memory_candidate_index'),
+        embeddings: embeddingIndexExists ? count('embedding_index') : 0,
+      },
+      vector: {
+        sqliteVecAvailable: this.vectorStatus.available,
+        sqliteVecVersion: this.vectorStatus.version,
+        error: this.vectorStatus.error,
+        dimensions: embeddingDimensions ? Number(embeddingDimensions) : null,
       },
     };
+  }
+
+  ensureEmbeddingIndex(dimensions) {
+    const parsedDimensions = validateDimensions(dimensions);
+    if (!this.vectorStatus.available) {
+      throw new Error(`sqlite-vec is not available: ${this.vectorStatus.error}`);
+    }
+
+    const existing = this.db.prepare("SELECT value FROM schema_meta WHERE key = 'embedding_dimensions'").get();
+    const existingDimensions = existing?.value ? Number(existing.value) : null;
+    if (existingDimensions && existingDimensions !== parsedDimensions) {
+      this.db.exec(`
+        DROP TABLE IF EXISTS embedding_vec;
+        DROP TABLE IF EXISTS embedding_index;
+      `);
+    }
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS embedding_index (
+        source_id TEXT PRIMARY KEY,
+        source_type TEXT NOT NULL CHECK (source_type IN ('memory', 'checkpoint', 'memory_candidate')),
+        scope_type TEXT NOT NULL CHECK (scope_type IN ('shared', 'repo', 'local')),
+        scope_key TEXT NOT NULL,
+        record_id TEXT NOT NULL,
+        model TEXT NOT NULL,
+        dimensions INTEGER NOT NULL,
+        content_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_embedding_index_scope
+        ON embedding_index(source_type, scope_type, scope_key);
+      CREATE INDEX IF NOT EXISTS idx_embedding_index_record
+        ON embedding_index(source_type, record_id);
+    `);
+    this.db.exec(
+      `CREATE VIRTUAL TABLE IF NOT EXISTS embedding_vec USING vec0(source_id TEXT PRIMARY KEY, embedding FLOAT[${parsedDimensions}])`,
+    );
+    this.db
+      .prepare(`
+        INSERT INTO schema_meta (key, value)
+        VALUES ('embedding_dimensions', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+      `)
+      .run(String(parsedDimensions));
+  }
+
+  embeddingTextForMemory(memory) {
+    return [
+      `key: ${memory.key}`,
+      `category: ${memory.category}`,
+      memory.tags.length ? `tags: ${memory.tags.join(', ')}` : '',
+      `content: ${memory.content}`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  embeddingSourceForMemory(memory) {
+    const text = this.embeddingTextForMemory(memory);
+    return {
+      sourceType: 'memory',
+      recordId: memory.id,
+      scopeType: memory.scopeType,
+      scopeKey: memory.scopeKey,
+      text,
+      contentHash: contentHash(text),
+      memory,
+    };
+  }
+
+  embeddingTextForCheckpoint(checkpoint) {
+    const retrievalHooks = Array.isArray(checkpoint.metadata?.providerMetadata?.retrievalHooks)
+      ? checkpoint.metadata.providerMetadata.retrievalHooks
+      : [];
+    return [
+      `summary: ${checkpoint.summaryShort}`,
+      `details: ${checkpoint.summaryText}`,
+      checkpoint.decisions.length ? `decisions: ${checkpoint.decisions.join('\n')}` : '',
+      checkpoint.todos.length ? `todos: ${checkpoint.todos.join('\n')}` : '',
+      checkpoint.openQuestions.length ? `open questions: ${checkpoint.openQuestions.join('\n')}` : '',
+      retrievalHooks.length ? `retrieval hooks: ${retrievalHooks.join(', ')}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  embeddingSourceForCheckpoint(checkpoint) {
+    const text = this.embeddingTextForCheckpoint(checkpoint);
+    return {
+      sourceType: 'checkpoint',
+      recordId: checkpoint.id,
+      scopeType: checkpoint.scopeType,
+      scopeKey: checkpoint.scopeKey,
+      text,
+      contentHash: contentHash(text),
+      checkpoint,
+    };
+  }
+
+  embeddingTextForMemoryCandidate(candidate) {
+    return [
+      `key: ${candidate.candidate.key}`,
+      `category: ${candidate.candidate.category}`,
+      candidate.candidate.tags.length ? `tags: ${candidate.candidate.tags.join(', ')}` : '',
+      candidate.candidate.reason ? `reason: ${candidate.candidate.reason}` : '',
+      `content: ${candidate.candidate.content}`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  embeddingSourceForMemoryCandidate(candidate) {
+    const text = this.embeddingTextForMemoryCandidate(candidate);
+    return {
+      sourceType: 'memory_candidate',
+      recordId: candidate.id,
+      scopeType: candidate.scopeType,
+      scopeKey: candidate.scopeKey,
+      text,
+      contentHash: contentHash(text),
+      candidate,
+    };
+  }
+
+  listMemoryEmbeddingSources({ scopeType = null, scopeKey = null, model, dimensions, force = false }) {
+    const values = [model, dimensions];
+    const scopeClause = [];
+    if (scopeType) {
+      scopeClause.push('memories.scope_type = ?');
+      values.push(scopeType);
+    }
+    if (scopeKey) {
+      scopeClause.push('memories.scope_key = ?');
+      values.push(scopeKey);
+    }
+    const scopeSql = scopeClause.length ? `AND ${scopeClause.join(' AND ')}` : '';
+    const rows = this.db
+      .prepare(`
+        SELECT memories.*, embedding_index.content_hash AS embedding_content_hash
+        FROM memories
+        LEFT JOIN embedding_index
+          ON embedding_index.source_type = 'memory'
+          AND embedding_index.record_id = memories.id
+          AND embedding_index.model = ?
+          AND embedding_index.dimensions = ?
+        WHERE memories.status = 'active'
+          ${scopeSql}
+        ORDER BY memories.updated_at ASC, memories.id ASC
+      `)
+      .all(...values);
+    return rows
+      .map((row) => {
+        const memory = hydrateMemory(row);
+        return {
+          ...this.embeddingSourceForMemory(memory),
+          indexedContentHash: row.embedding_content_hash,
+        };
+      })
+      .filter((source) => force || source.indexedContentHash !== source.contentHash);
+  }
+
+  listCheckpointEmbeddingSources({ scopeType = null, scopeKey = null, model, dimensions, force = false }) {
+    const values = [model, dimensions];
+    const scopeClause = [];
+    if (scopeType) {
+      scopeClause.push('checkpoints.scope_type = ?');
+      values.push(scopeType);
+    }
+    if (scopeKey) {
+      scopeClause.push('checkpoints.scope_key = ?');
+      values.push(scopeKey);
+    }
+    const scopeSql = scopeClause.length ? `AND ${scopeClause.join(' AND ')}` : '';
+    const rows = this.db
+      .prepare(`
+        SELECT checkpoints.*, embedding_index.content_hash AS embedding_content_hash
+        FROM checkpoints
+        LEFT JOIN embedding_index
+          ON embedding_index.source_type = 'checkpoint'
+          AND embedding_index.record_id = checkpoints.id
+          AND embedding_index.model = ?
+          AND embedding_index.dimensions = ?
+        WHERE 1 = 1
+          ${scopeSql}
+        ORDER BY checkpoints.created_at ASC, checkpoints.id ASC
+      `)
+      .all(...values);
+    return rows
+      .map((row) => {
+        const checkpoint = hydrateCheckpoint(row);
+        return {
+          ...this.embeddingSourceForCheckpoint(checkpoint),
+          indexedContentHash: row.embedding_content_hash,
+        };
+      })
+      .filter((source) => force || source.indexedContentHash !== source.contentHash);
+  }
+
+  listMemoryCandidateEmbeddingSources({ scopeType = null, scopeKey = null, model, dimensions, force = false }) {
+    const values = [model, dimensions];
+    const scopeClause = [];
+    if (scopeType) {
+      scopeClause.push('memory_candidate_index.scope_type = ?');
+      values.push(scopeType);
+    }
+    if (scopeKey) {
+      scopeClause.push('memory_candidate_index.scope_key = ?');
+      values.push(scopeKey);
+    }
+    const scopeSql = scopeClause.length ? `AND ${scopeClause.join(' AND ')}` : '';
+    const rows = this.db
+      .prepare(`
+        SELECT
+          memory_candidate_index.*,
+          checkpoints.provider,
+          checkpoints.distill_run_id,
+          checkpoints.source_event_count,
+          checkpoints.created_at AS checkpoint_created_at,
+          embedding_index.content_hash AS embedding_content_hash
+        FROM memory_candidate_index
+        JOIN checkpoints ON checkpoints.id = memory_candidate_index.checkpoint_id
+        LEFT JOIN embedding_index
+          ON embedding_index.source_type = 'memory_candidate'
+          AND embedding_index.record_id = memory_candidate_index.id
+          AND embedding_index.model = ?
+          AND embedding_index.dimensions = ?
+        WHERE memory_candidate_index.status IN ('pending', 'promoted')
+          ${scopeSql}
+        ORDER BY memory_candidate_index.created_at ASC, memory_candidate_index.id ASC
+      `)
+      .all(...values);
+    return rows
+      .map((row) => {
+        const candidate = hydrateMemoryCandidate(row);
+        return {
+          ...this.embeddingSourceForMemoryCandidate(candidate),
+          indexedContentHash: row.embedding_content_hash,
+        };
+      })
+      .filter((source) => force || source.indexedContentHash !== source.contentHash);
+  }
+
+  upsertEmbedding({ sourceType, recordId, scopeType, scopeKey, model, dimensions, contentHash: hash, embedding }) {
+    this.ensureEmbeddingIndex(dimensions);
+    const sourceId = `${sourceType}:${recordId}`;
+    const timestamp = nowIso();
+    this.db.prepare('DELETE FROM embedding_vec WHERE source_id = ?').run(sourceId);
+    this.db
+      .prepare('INSERT INTO embedding_vec(source_id, embedding) VALUES (?, ?)')
+      .run(sourceId, JSON.stringify(embedding));
+    this.db
+      .prepare(`
+        INSERT INTO embedding_index (
+          source_id, source_type, scope_type, scope_key, record_id,
+          model, dimensions, content_hash, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source_id) DO UPDATE SET
+          scope_type = excluded.scope_type,
+          scope_key = excluded.scope_key,
+          model = excluded.model,
+          dimensions = excluded.dimensions,
+          content_hash = excluded.content_hash,
+          updated_at = excluded.updated_at
+      `)
+      .run(sourceId, sourceType, scopeType, scopeKey, recordId, model, Number(dimensions), hash, timestamp, timestamp);
+  }
+
+  searchMemoryVectorIndex({ scopeType, scopeKey, embedding, limit = 50 }) {
+    const dimensions = embedding.length;
+    this.ensureEmbeddingIndex(dimensions);
+    return this.db
+      .prepare(`
+        SELECT
+          memories.*,
+          embedding_vec.distance AS vector_distance,
+          embedding_index.model AS embedding_model,
+          embedding_index.dimensions AS embedding_dimensions
+        FROM embedding_vec
+        JOIN embedding_index ON embedding_index.source_id = embedding_vec.source_id
+        JOIN memories ON memories.id = embedding_index.record_id
+        WHERE embedding_vec.embedding MATCH ?
+          AND k = ?
+          AND embedding_index.source_type = 'memory'
+          AND embedding_index.scope_type = ?
+          AND embedding_index.scope_key = ?
+          AND memories.status = 'active'
+        ORDER BY embedding_vec.distance ASC
+      `)
+      .all(JSON.stringify(embedding), limit, scopeType, scopeKey)
+      .map((row) => ({
+        memory: hydrateMemory(row),
+        distance: row.vector_distance,
+        model: row.embedding_model,
+        dimensions: row.embedding_dimensions,
+      }));
+  }
+
+  searchCheckpointVectorIndex({ scopeType, scopeKey, embedding, limit = 50 }) {
+    const dimensions = embedding.length;
+    this.ensureEmbeddingIndex(dimensions);
+    return this.db
+      .prepare(`
+        SELECT
+          checkpoints.*,
+          embedding_vec.distance AS vector_distance,
+          embedding_index.model AS embedding_model,
+          embedding_index.dimensions AS embedding_dimensions
+        FROM embedding_vec
+        JOIN embedding_index ON embedding_index.source_id = embedding_vec.source_id
+        JOIN checkpoints ON checkpoints.id = embedding_index.record_id
+        WHERE embedding_vec.embedding MATCH ?
+          AND k = ?
+          AND embedding_index.source_type = 'checkpoint'
+          AND embedding_index.scope_type = ?
+          AND embedding_index.scope_key = ?
+        ORDER BY embedding_vec.distance ASC
+      `)
+      .all(JSON.stringify(embedding), limit, scopeType, scopeKey)
+      .map((row) => ({
+        checkpoint: hydrateCheckpoint(row),
+        distance: row.vector_distance,
+        model: row.embedding_model,
+        dimensions: row.embedding_dimensions,
+      }));
+  }
+
+  searchMemoryCandidateVectorIndex({ scopeType, scopeKey, embedding, limit = 50 }) {
+    const dimensions = embedding.length;
+    this.ensureEmbeddingIndex(dimensions);
+    return this.db
+      .prepare(`
+        SELECT
+          memory_candidate_index.*,
+          checkpoints.provider,
+          checkpoints.distill_run_id,
+          checkpoints.source_event_count,
+          checkpoints.created_at AS checkpoint_created_at,
+          embedding_vec.distance AS vector_distance,
+          embedding_index.model AS embedding_model,
+          embedding_index.dimensions AS embedding_dimensions
+        FROM embedding_vec
+        JOIN embedding_index ON embedding_index.source_id = embedding_vec.source_id
+        JOIN memory_candidate_index ON memory_candidate_index.id = embedding_index.record_id
+        JOIN checkpoints ON checkpoints.id = memory_candidate_index.checkpoint_id
+        WHERE embedding_vec.embedding MATCH ?
+          AND k = ?
+          AND embedding_index.source_type = 'memory_candidate'
+          AND embedding_index.scope_type = ?
+          AND embedding_index.scope_key = ?
+          AND memory_candidate_index.status IN ('pending', 'promoted')
+        ORDER BY embedding_vec.distance ASC
+      `)
+      .all(JSON.stringify(embedding), limit, scopeType, scopeKey)
+      .map((row) => ({
+        candidate: hydrateMemoryCandidate(row),
+        distance: row.vector_distance,
+        model: row.embedding_model,
+        dimensions: row.embedding_dimensions,
+      }));
   }
 
   backfillMemoryCandidateIndex() {
