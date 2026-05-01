@@ -24,7 +24,7 @@ function jsonResult(result) {
 
 const MCP_INSTRUCTIONS = [
   'Use ContextForge for scoped memory retrieval on demand.',
-  'At the start of non-trivial project work, run a small bootstrap: call db_info when storage mode or vector readiness matters, search repo scope for the task, and search shared scope only when cross-repo or user-wide policy may matter.',
+  'At the start of non-trivial project work, call bootstrap_context with repoPath, cwd, or an explicit scopeKey. It summarizes storage authority, vector readiness, repo semantic retrieval results, and trust hints in one response.',
   'If db_info shows remote storage, treat results as shared canonical ContextForge state for the configured scope. If it shows local or project-local storage, treat results as machine-local context unless the user confirms that store is authoritative.',
   'Search result types have different trust levels: memory is reviewed durable fact or decision; checkpoint is recent session continuity, not canonical truth; memory_candidate is an unreviewed promotion candidate for review.',
   'If working on a repository while the MCP process cwd is elsewhere, pass repoPath or cwd so repo scope resolves to that checkout; repoPath takes precedence when both are provided.',
@@ -60,6 +60,28 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
       },
     },
     async () => jsonResult(await app.dbInfo()),
+  );
+
+  server.registerTool(
+    'bootstrap_context',
+    {
+      title: 'Bootstrap Context',
+      description:
+        'Resolve scoped ContextForge memory for a task in one call. Searches repo scope semantically across memory, checkpoint, and memory_candidate results, optionally includes shared scope, and annotates trust and verification hints for agents.',
+      inputSchema: {
+        ...scopedSchema,
+        query: z.string(),
+        includeShared: z.boolean().optional(),
+        limit: z.number().int().positive().optional(),
+        sharedScopeKey: z.string().optional(),
+      },
+      annotations: {
+        title: 'Bootstrap Context',
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.bootstrapContext(args)),
   );
 
   server.registerTool(

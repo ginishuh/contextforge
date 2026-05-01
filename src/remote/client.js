@@ -2,6 +2,7 @@ import { normalizeScopeOptions } from '../scopes/index.js';
 
 const REMOTE_METHODS = [
   'dbInfo',
+  'bootstrapContext',
   'checkCodexExec',
   'beginSession',
   'sessionStatus',
