@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 
 const VALID_SCOPES = new Set(['shared', 'repo', 'local']);
 const VALID_STORAGE_MODES = new Set(['local', 'project-local', 'remote']);
+const VALID_EMBEDDINGS_PROVIDERS = new Set(['none', 'openai']);
 
 function parsePositiveInteger(value, name, fallback) {
   if (value == null || value === '') {
@@ -169,6 +170,15 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
     'CONTEXTFORGE_CODEX_EXEC_MAX_INPUT_CHARS',
     12000,
   );
+  const embeddingsProvider = env.CONTEXTFORGE_EMBEDDINGS_PROVIDER || (env.CONTEXTFORGE_OPENAI_API_KEY || env.OPENAI_API_KEY ? 'openai' : 'none');
+  if (!VALID_EMBEDDINGS_PROVIDERS.has(embeddingsProvider)) {
+    throw new Error(`Invalid CONTEXTFORGE_EMBEDDINGS_PROVIDER: ${embeddingsProvider}`);
+  }
+  const embeddingsDimensions = parsePositiveInteger(
+    env.CONTEXTFORGE_EMBEDDINGS_DIMENSIONS,
+    'CONTEXTFORGE_EMBEDDINGS_DIMENSIONS',
+    1536,
+  );
   const distillMinIntervalMs = parsePositiveInteger(
     env.CONTEXTFORGE_DISTILL_MIN_INTERVAL_MS,
     'CONTEXTFORGE_DISTILL_MIN_INTERVAL_MS',
@@ -186,6 +196,18 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
     defaultScopeKey,
     defaultSharedScopeKey,
     distillProvider: env.CONTEXTFORGE_DISTILL_PROVIDER || 'mock',
+    embeddings: {
+      provider: embeddingsProvider,
+      model: env.CONTEXTFORGE_EMBEDDINGS_MODEL || 'text-embedding-3-small',
+      dimensions: embeddingsDimensions,
+      apiKey: env.CONTEXTFORGE_OPENAI_API_KEY || env.OPENAI_API_KEY || null,
+      baseUrl: env.CONTEXTFORGE_OPENAI_BASE_URL || 'https://api.openai.com/v1',
+      timeoutMs: parsePositiveInteger(
+        env.CONTEXTFORGE_EMBEDDINGS_TIMEOUT_MS,
+        'CONTEXTFORGE_EMBEDDINGS_TIMEOUT_MS',
+        30000,
+      ),
+    },
     remote: {
       url: env.CONTEXTFORGE_REMOTE_URL || null,
       token: env.CONTEXTFORGE_REMOTE_TOKEN || null,

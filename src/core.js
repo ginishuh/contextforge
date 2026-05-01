@@ -3,6 +3,7 @@ import { loadConfig } from './config/index.js';
 import { createDistillProvider } from './distill/index.js';
 import { checkCodexExecProvider } from './distill/providers/codex_exec.js';
 import { validateDistillOutput } from './distill/validate.js';
+import { createEmbeddingProvider } from './embeddings/index.js';
 import { createRemoteContextForge } from './remote/client.js';
 import { searchMemories } from './retrieval/search.js';
 import { normalizeScopeOptions } from './scopes/index.js';
@@ -390,6 +391,9 @@ export function createContextForge(options = {}) {
 
   const sharedStore = options.store || (options.reuseStore ? new ContextForgeStore({ dataDir: config.dataDir }) : null);
   const distillProviders = options.distillProviders || {};
+  const embeddingProvider = createEmbeddingProvider(config, options.embeddingProviders || {}, {
+    fetchImpl: options.fetchImpl,
+  });
   const codexExec = {
     ...config.codexExec,
     runner: options.codexExecRunner,
@@ -414,6 +418,76 @@ export function createContextForge(options = {}) {
     return store.pruneRawEventsOlderThan(rawTtlCutoffIso(config.rawRetention.ttlDays, now));
   }
 
+  async function embedSources(store, sources, { batchSize = 32 } = {}) {
+    if (!embeddingProvider) {
+      return {
+        provider: config.embeddings.provider,
+        skipped: true,
+        reason: 'embeddings_disabled',
+        embedded: 0,
+        bySourceType: {},
+      };
+    }
+    store.ensureEmbeddingIndex(embeddingProvider.dimensions);
+    let embedded = 0;
+    const bySourceType = {};
+    try {
+      for (let index = 0; index < sources.length; index += batchSize) {
+        const batch = sources.slice(index, index + batchSize);
+        const embeddings = await embeddingProvider.embed(batch.map((source) => source.text));
+        for (const [offset, source] of batch.entries()) {
+          store.upsertEmbedding({
+            sourceType: source.sourceType,
+            recordId: source.recordId,
+            scopeType: source.scopeType,
+            scopeKey: source.scopeKey,
+            model: embeddingProvider.model,
+            dimensions: embeddingProvider.dimensions,
+            contentHash: source.contentHash,
+            embedding: embeddings[offset],
+          });
+          embedded += 1;
+          bySourceType[source.sourceType] = (bySourceType[source.sourceType] || 0) + 1;
+        }
+      }
+    } catch (error) {
+      error.embeddingProgress = {
+        scanned: sources.length,
+        embedded,
+        bySourceType,
+      };
+      throw error;
+    }
+    return {
+      provider: embeddingProvider.name,
+      model: embeddingProvider.model,
+      dimensions: embeddingProvider.dimensions,
+      scanned: sources.length,
+      embedded,
+      bySourceType,
+      skipped: false,
+    };
+  }
+
+  function embeddingFailureResult(error) {
+    const progress = error.embeddingProgress || {};
+    return {
+      provider: embeddingProvider.name,
+      model: embeddingProvider.model,
+      dimensions: embeddingProvider.dimensions,
+      scanned: progress.scanned ?? null,
+      embedded: progress.embedded || 0,
+      bySourceType: progress.bySourceType || {},
+      skipped: false,
+      partialFailure: Boolean(progress.embedded),
+      reason: 'embedding_failed',
+      error: {
+        name: error.name,
+        message: error.message,
+      },
+    };
+  }
+
   return {
     config,
 
@@ -426,6 +500,12 @@ export function createContextForge(options = {}) {
     dbInfo() {
       return useStore((store) => ({
         ...store.dbInfo(),
+        embeddings: {
+          provider: config.embeddings.provider,
+          model: config.embeddings.model,
+          dimensions: config.embeddings.dimensions,
+          enabled: Boolean(embeddingProvider),
+        },
         rawRetention: {
           ttlDays: config.rawRetention.ttlDays,
           pruneIntervalMs: config.rawRetention.pruneIntervalMs,
@@ -747,15 +827,55 @@ export function createContextForge(options = {}) {
     search(options) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.query, 'query');
-      return useStore((store) =>
+      const runSearch = (store, queryEmbedding = null) =>
         searchMemories(store, {
           ...scope,
           query: options.query,
           limit: options.limit,
           searchScopes: options.searchScopes,
           sharedScopeKey: options.sharedScopeKey || config.defaultSharedScopeKey,
-        }),
-      );
+          queryEmbedding,
+        });
+      if (!embeddingProvider) {
+        return useStore((store) => runSearch(store));
+      }
+      return useStore(async (store) => {
+        const [queryEmbedding] = await embeddingProvider.embed([options.query]);
+        return runSearch(store, queryEmbedding);
+      });
+    },
+
+    async rebuildEmbeddings(options = {}) {
+      const scope = normalizeScopeOptions(options, config);
+      if ((options.scope == null || options.scope === '') !== (options.scopeKey == null || options.scopeKey === '')) {
+        throw new Error('rebuildEmbeddings requires both scope and scopeKey when either option is provided.');
+      }
+      if (!embeddingProvider) {
+        return {
+          provider: config.embeddings.provider,
+          skipped: true,
+          reason: 'embeddings_disabled',
+          embedded: 0,
+        };
+      }
+      const batchSize = positiveNumber(options.batchSize == null ? 32 : Number(options.batchSize), 'batchSize');
+      return useStore(async (store) => {
+        store.ensureEmbeddingIndex(embeddingProvider.dimensions, { resetOnDimensionChange: truthyOption(options.force) });
+        const shouldNarrowScope = Boolean(options.scope || options.scopeKey || options.cwd || options.repoPath);
+        const sourceOptions = {
+          scopeType: shouldNarrowScope ? scope.scopeType : null,
+          scopeKey: shouldNarrowScope ? scope.scopeKey : null,
+          model: embeddingProvider.model,
+          dimensions: embeddingProvider.dimensions,
+          force: truthyOption(options.force),
+        };
+        const sources = [
+          ...store.listMemoryEmbeddingSources(sourceOptions),
+          ...store.listCheckpointEmbeddingSources(sourceOptions),
+          ...store.listMemoryCandidateEmbeddingSources(sourceOptions),
+        ];
+        return embedSources(store, sources, { batchSize });
+      });
     },
 
     appendRaw(options) {
@@ -925,9 +1045,36 @@ export function createContextForge(options = {}) {
           },
         });
 
+        let embedding = {
+          provider: config.embeddings.provider,
+          skipped: true,
+          reason: 'embeddings_disabled',
+          embedded: 0,
+          bySourceType: {},
+        };
+        if (embeddingProvider) {
+          try {
+            const candidates = store.listMemoryCandidates({
+              ...scope,
+              checkpointId: checkpoint.id,
+            });
+            embedding = await embedSources(
+              store,
+              [
+                store.embeddingSourceForCheckpoint(checkpoint),
+                ...candidates.map((candidate) => store.embeddingSourceForMemoryCandidate(candidate)),
+              ],
+              { batchSize: 32 },
+            );
+          } catch (error) {
+            embedding = embeddingFailureResult(error);
+          }
+        }
+
         return {
           ...checkpoint,
           memoryCandidateCount: output.memoryCandidates.length,
+          embedding,
         };
       });
     },

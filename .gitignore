@@ -12,7 +12,6 @@ data/
 # Local environment
 .env
 .env.*
-!.env.example
 
 # Logs
 *.log

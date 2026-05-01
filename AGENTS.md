@@ -30,6 +30,9 @@ Private agent-memory systems may be useful reference material, but do not mutate
 - Store runtime data locally by default and keep it out of git.
 - Support `shared`, `repo`, and `local` scopes explicitly.
 - Treat checkpoints as recent continuity, not canonical truth.
+- Treat distilled checkpoints as compressed retrieval indexes: preserve
+  concrete names, numbers, intervals, APIs, paths, commands, error strings,
+  decisions, rationale, risks, conditions, next actions, and retrieval hooks.
 - Promote durable facts and decisions intentionally.
 
 ## Storage Modes
@@ -91,6 +94,16 @@ At task start, run a small bootstrap: search repo memory for this task, and
 search shared memory only when cross-repo or user-wide policy may matter. Use
 the inferred repo scope key, or an explicit `github.com/owner/repo` key when
 cross-machine continuity matters.
+
+Before relying on retrieval, distinguish storage authority. Remote ContextForge
+storage is canonical shared memory for the configured scope; local or
+project-local storage is machine/check-out local context unless the user says
+otherwise.
+
+Interpret search result types by trust level:
+- `memory`: reviewed durable fact or decision.
+- `checkpoint`: recent session continuity, not canonical truth.
+- `memory_candidate`: unreviewed promotion candidate and review material.
 
 Keep durable memory intentional. After distilling a checkpoint, review
 `list_memory_candidates` and promote only stable, reviewed facts.

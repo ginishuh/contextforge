@@ -3,8 +3,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-export const CODEX_EXEC_PROMPT_VERSION = 'codex_exec.prompt.v1';
-export const CODEX_EXEC_OUTPUT_SCHEMA_VERSION = 'contextforge.checkpoint.v2';
+export const CODEX_EXEC_PROMPT_VERSION = 'codex_exec.prompt.v3';
+export const CODEX_EXEC_OUTPUT_SCHEMA_VERSION = 'contextforge.checkpoint.v3';
 
 const OUTPUT_SCHEMA = {
   $id: CODEX_EXEC_OUTPUT_SCHEMA_VERSION,
@@ -67,9 +67,15 @@ const OUTPUT_SCHEMA = {
     metadata: {
       type: 'object',
       additionalProperties: false,
-      required: ['providerNotes'],
+      required: ['providerNotes', 'retrievalHooks'],
       properties: {
         providerNotes: { type: 'string' },
+        retrievalHooks: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Concrete future-search hooks preserved from the evidence: product names, APIs, commands, paths, error names, issue numbers, model names, time intervals, thresholds, and domain keywords.',
+        },
       },
     },
   },
@@ -151,9 +157,23 @@ export function buildCodexExecPrompt(input, options = {}) {
       'Do not include Markdown, code fences, commentary, or private assumptions.',
       'Preserve uncertainty in openQuestions instead of inventing facts.',
       'Use only the raw events and previous checkpoint supplied in this request.',
+      'Write the checkpoint as recent continuity for handoff and search, not as canonical durable truth.',
+      'Optimize the checkpoint for future retrieval, not for a generic meeting-summary style. Preserve concrete hooks a future agent might search for.',
+      'Preserve proper nouns, API names, command names, file paths, issue or PR numbers, model names, error strings, numeric thresholds, time intervals, and cadence details when they matter.',
+      'Distinguish decision, rationale, risks, conditions, and next action. Do not say only that a topic was discussed.',
+      'Include why a direction was chosen, not only what was chosen.',
+      'If a failure, bug, or risk was identified, name it concretely and include the suspected cause and affected path when known.',
+      'For conditional guidance, include the condition under which the decision applies.',
+      'The checkpoint should let a future agent continue without rereading raw evidence for ordinary follow-up work.',
+      'Do not copy secrets, tokens, private customer data, or large raw logs into summaries or memoryCandidates.',
+      'Populate metadata.retrievalHooks with concise search keywords from the evidence, such as API names, commands, paths, issue numbers, model names, intervals, thresholds, and error names.',
       'For memoryCandidates, include v2 review fields when useful: candidateType, confidence, stability, sensitivity, promotionRecommendation, and sourceEventIds.',
       'For nullable memoryCandidate fields that are not applicable, return null; do not omit required schema fields.',
+      'Create memoryCandidates only for facts, decisions, preferences, runbook steps, or failure modes that may remain useful beyond this checkpoint.',
+      'For memoryCandidate content, include decision plus rationale when both exist; put future-search keywords in tags and reason instead of flattening them away.',
       'Set promotionRecommendation to promote only for stable, reviewed-looking durable facts; otherwise prefer review, ignore, or reject.',
+      'Use low confidence or low stability for guesses, temporary state, implementation-in-progress details, and facts that require current runtime verification.',
+      'Use sensitivity high or restricted for any candidate that might contain secrets, personal data, customer data, private runtime paths, or credentials, and do not recommend promotion for it.',
     ],
     session: input.session,
     requestedOutputSchema: input.requestedOutputSchema,

@@ -22,6 +22,19 @@ function jsonResult(result) {
   };
 }
 
+const MCP_INSTRUCTIONS = [
+  'Use ContextForge for scoped memory retrieval on demand.',
+  'At the start of non-trivial project work, run a small bootstrap: call db_info when storage mode or vector readiness matters, search repo scope for the task, and search shared scope only when cross-repo or user-wide policy may matter.',
+  'If db_info shows remote storage, treat results as shared canonical ContextForge state for the configured scope. If it shows local or project-local storage, treat results as machine-local context unless the user confirms that store is authoritative.',
+  'Search result types have different trust levels: memory is reviewed durable fact or decision; checkpoint is recent session continuity, not canonical truth; memory_candidate is an unreviewed promotion candidate for review.',
+  'If working on a repository while the MCP process cwd is elsewhere, pass repoPath or cwd so repo scope resolves to that checkout; repoPath takes precedence when both are provided.',
+  'Treat scopeKey as the canonical repo memory key; pass an explicit normalized GitHub key when local paths differ across machines or the checkout cannot infer the right remote.',
+  'Use remember for reviewed durable facts the user or assistant intentionally wants saved.',
+  'After distill_checkpoint, check memoryCandidateCount; if it is greater than zero, call list_memory_candidates and promote only reviewed durable facts with promote_memory_candidate or reject unsuitable candidates with reject_memory_candidate.',
+  'When session_status reports latestCheckpointMemoryCandidateCount, use list_memory_candidates before deciding what should become durable memory.',
+  'Keep local scope opt-in.',
+].join(' ');
+
 export function createContextForgeMcpServer({ app = createContextForge() } = {}) {
   const server = new McpServer(
     {
@@ -29,9 +42,24 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
       version: '0.0.0',
     },
     {
-      instructions:
-        'Use ContextForge for scoped memory retrieval on demand. At the start of non-trivial project work, run a small bootstrap: search repo memory for the task, and search shared memory only when cross-repo or user-wide policy may matter. If working on a repository while the MCP process cwd is elsewhere, pass repoPath or cwd so repo scope resolves to that checkout; repoPath takes precedence when both are provided. Treat scopeKey as the canonical repo memory key; pass an explicit normalized GitHub key when local paths differ across machines or the checkout cannot infer the right remote. Use remember for reviewed durable facts the user or assistant intentionally wants saved. After distill_checkpoint, check memoryCandidateCount; if it is greater than zero, call list_memory_candidates and promote only reviewed durable facts with promote_memory_candidate or reject unsuitable candidates with reject_memory_candidate. When session_status reports latestCheckpointMemoryCandidateCount, use list_memory_candidates before deciding what should become durable memory. Keep local scope opt-in.',
+      instructions: MCP_INSTRUCTIONS,
     },
+  );
+
+  server.registerTool(
+    'db_info',
+    {
+      title: 'Database Info',
+      description:
+        'Inspect the configured ContextForge storage backend, table counts, raw retention, and sqlite-vec/embeddings readiness. Use this to distinguish remote canonical storage from local or project-local storage before relying on retrieval results.',
+      inputSchema: {},
+      annotations: {
+        title: 'Database Info',
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async () => jsonResult(await app.dbInfo()),
   );
 
   server.registerTool(
@@ -83,7 +111,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Search Memory',
       description:
-        'Search durable ContextForge memories in the requested scope. Pass repoPath or cwd to retrieve repo memories for a checkout outside the MCP process cwd; repoPath takes precedence. Pass scopeKey to pin the canonical repo memory key.',
+        'Search scoped ContextForge retrieval results. Results may include type=memory reviewed durable facts, type=checkpoint recent continuity, and type=memory_candidate unreviewed promotion candidates. Pass repoPath or cwd to retrieve repo results for a checkout outside the MCP process cwd; repoPath takes precedence. Pass scopeKey to pin the canonical repo memory key.',
       inputSchema: {
         ...scopedSchema,
         query: z.string(),
@@ -98,6 +126,26 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
       },
     },
     async (args) => jsonResult(await app.search(args)),
+  );
+
+  server.registerTool(
+    'rebuild_embeddings',
+    {
+      title: 'Rebuild Embeddings',
+      description:
+        'Backfill or rebuild the derived sqlite-vec embedding index for durable memories, checkpoints, and memory candidates. Requires an embeddings provider such as OpenAI to be configured. Pass force=true only when intentionally resetting the index after an embedding dimension change.',
+      inputSchema: {
+        ...scopedSchema,
+        batchSize: z.number().int().positive().optional(),
+        force: z.boolean().optional(),
+      },
+      annotations: {
+        title: 'Rebuild Embeddings',
+        readOnlyHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.rebuildEmbeddings(args)),
   );
 
   server.registerTool(

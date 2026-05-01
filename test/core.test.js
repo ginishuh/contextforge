@@ -11,6 +11,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import Database from 'better-sqlite3';
 import { createContextForge } from '../src/core.js';
 import { validateDistillOutput } from '../src/distill/validate.js';
+import { createOpenAiEmbeddingProvider } from '../src/embeddings/index.js';
 import { createInterruptibleSleep, shouldSkipRecentFailedAutoDistill } from '../src/ingest/common.js';
 import { ingestCodexRolloutFile, watchCodexSessions } from '../src/ingest/codex.js';
 import { searchMemories } from '../src/retrieval/search.js';
@@ -2155,7 +2156,292 @@ test('search uses explainable FTS-backed ranking while keeping durable memory ca
   assert.equal(fetched.content, 'Use SQLite FTS for explainable retrieval ranking.');
 });
 
-test('search scores only FTS candidates when the index returns matches', () => {
+test('embedding rebuild populates sqlite-vec index for hybrid retrieval', async () => {
+  const dataDir = await makeTempDir();
+  const provider = {
+    name: 'test-vector',
+    model: 'test-embedding',
+    dimensions: 3,
+    async embed(texts) {
+      return texts.map((text) => {
+        const value = String(text).toLowerCase();
+        if (value.includes('semantic fruit')) return [1, 0, 0];
+        if (value.includes('apple')) return [1, 0, 0];
+        if (value.includes('database')) return [0, 1, 0];
+        return [0, 0, 1];
+      });
+    },
+  };
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_EMBEDDINGS_PROVIDER: 'openai',
+      CONTEXTFORGE_EMBEDDINGS_DIMENSIONS: '3',
+    },
+    cwd: process.cwd(),
+    embeddingProviders: {
+      openai: provider,
+    },
+  });
+
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-vector',
+    key: 'apple-note',
+    content: 'Apple orchards need pollination planning.',
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-vector',
+    key: 'database-note',
+    content: 'Database migrations need rollback planning.',
+  });
+
+  const rebuilt = await app.rebuildEmbeddings({
+    scope: 'repo',
+    scopeKey: 'repo-vector',
+  });
+  assert.equal(rebuilt.embedded, 2);
+  assert.equal(rebuilt.dimensions, 3);
+  assert.deepEqual(rebuilt.bySourceType, { memory: 2 });
+
+  const results = await app.search({
+    scope: 'repo',
+    scopeKey: 'repo-vector',
+    query: 'semantic fruit',
+  });
+
+  assert.equal(results[0].memory.key, 'apple-note');
+  assert.equal(results[0].retrieval.method, 'vector');
+  assert.equal(results[0].retrieval.vectorDistance, 0);
+  assert.equal(results[0].retrieval.vectorModel, 'test-embedding');
+  assert.equal(results[0].retrieval.vectorDimensions, 3);
+
+  const info = app.dbInfo();
+  assert.equal(info.tables.embeddings, 2);
+  assert.equal(info.vector.sqliteVecAvailable, true);
+  assert.equal(info.vector.dimensions, 3);
+});
+
+test('vector search still runs for Korean queries that have no lexical tokens', () => {
+  const memory = {
+    id: 'memory-korean',
+    key: 'korean-memory',
+    category: 'note',
+    content: '한국어 의미 검색은 벡터 경로로 동작해야 한다.',
+    tags: [],
+    importance: 0,
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+
+  const results = searchMemories(
+    {
+      searchMemoryVectorIndex: () => [{ memory, distance: 0, model: 'test-embedding', dimensions: 3 }],
+      listMemories: () => {
+        throw new Error('listMemories should not be called when the query has no lexical tokens.');
+      },
+    },
+    {
+      scopeType: 'repo',
+      scopeKey: 'repo-korean',
+      query: '체크포인트 후보',
+      queryEmbedding: [1, 0, 0],
+    },
+  );
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].memory.key, 'korean-memory');
+  assert.equal(results[0].retrieval.method, 'vector');
+});
+
+test('hybrid ranking keeps strong lexical matches ahead of weak vector-only matches', () => {
+  const exactMemory = {
+    id: 'memory-exact',
+    key: 'sqlite-vec-upsert',
+    category: 'decision',
+    content: 'Track sqlite-vec upsert behavior.',
+    tags: [],
+    importance: 0,
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+  const vectorMemory = {
+    id: 'memory-vector',
+    key: 'unrelated-vector',
+    category: 'note',
+    content: 'A weak semantic neighbor.',
+    tags: [],
+    importance: 0,
+    updatedAt: '2026-01-02T00:00:00.000Z',
+  };
+
+  const results = searchMemories(
+    {
+      searchMemoryVectorIndex: () => [{ memory: vectorMemory, distance: 0.99, model: 'test-embedding', dimensions: 3 }],
+      listMemories: () => [exactMemory],
+    },
+    {
+      scopeType: 'repo',
+      scopeKey: 'repo-ranking',
+      query: 'sqlite-vec-upsert',
+      queryEmbedding: [1, 0, 0],
+    },
+  );
+
+  assert.equal(results.length, 2);
+  assert.equal(results[0].memory.key, 'sqlite-vec-upsert');
+  assert.equal(results[0].retrieval.method, 'lexical');
+  assert.equal(results[1].memory.key, 'unrelated-vector');
+  assert.equal(results[1].retrieval.method, 'vector');
+});
+
+test('distillCheckpoint embeds the new checkpoint and candidates when embeddings are enabled', async () => {
+  const dataDir = await makeTempDir();
+  const embeddingProvider = {
+    name: 'test-vector',
+    model: 'test-embedding',
+    dimensions: 3,
+    async embed(texts) {
+      return texts.map((text) => {
+        const value = String(text).toLowerCase();
+        if (value.includes('candidate')) return [0, 1, 0];
+        if (value.includes('checkpoint')) return [1, 0, 0];
+        return [0, 0, 1];
+      });
+    },
+  };
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'candidate_provider',
+      CONTEXTFORGE_EMBEDDINGS_PROVIDER: 'openai',
+      CONTEXTFORGE_EMBEDDINGS_DIMENSIONS: '3',
+    },
+    cwd: process.cwd(),
+    embeddingProviders: {
+      openai: embeddingProvider,
+    },
+    distillProviders: {
+      candidate_provider: async () => ({
+        summaryShort: 'Checkpoint summary.',
+        summaryText: 'Checkpoint detail for embedding.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'embedded-candidate',
+            content: 'Candidate content for embedding.',
+            reason: 'Candidate reason.',
+          },
+        ],
+        sourceEventCount: 1,
+        metadata: { synthetic: true },
+      }),
+    },
+  });
+
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-distill-vector',
+    sessionId: 'distill-vector-session',
+    role: 'assistant',
+    content: 'Checkpoint should embed immediately after successful distillation.',
+  });
+
+  const checkpoint = await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'repo-distill-vector',
+    sessionId: 'distill-vector-session',
+  });
+
+  assert.equal(checkpoint.embedding.embedded, 2);
+  assert.deepEqual(checkpoint.embedding.bySourceType, {
+    checkpoint: 1,
+    memory_candidate: 1,
+  });
+  assert.equal(app.dbInfo().tables.embeddings, 2);
+
+  const checkpointResults = await app.search({
+    scope: 'repo',
+    scopeKey: 'repo-distill-vector',
+    query: 'checkpoint search',
+  });
+  assert.equal(checkpointResults[0].type, 'checkpoint');
+  assert.equal(checkpointResults[0].checkpoint.id, checkpoint.id);
+  assert.equal(checkpointResults[0].retrieval.method, 'vector');
+
+  const candidateResults = await app.search({
+    scope: 'repo',
+    scopeKey: 'repo-distill-vector',
+    query: 'candidate search',
+  });
+  assert.equal(candidateResults[0].type, 'memory_candidate');
+  assert.equal(candidateResults[0].candidate.candidate.key, 'embedded-candidate');
+  assert.equal(candidateResults[0].retrieval.vectorModel, 'test-embedding');
+});
+
+test('distillCheckpoint reports partial embedding progress when a later upsert fails', async () => {
+  const dataDir = await makeTempDir();
+  const embeddingProvider = {
+    name: 'test-vector',
+    model: 'test-embedding',
+    dimensions: 3,
+    async embed(texts) {
+      return texts.map((_, index) => (index === 0 ? [1, 0, 0] : [0, 1]));
+    },
+  };
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'partial_embedding_provider',
+      CONTEXTFORGE_EMBEDDINGS_PROVIDER: 'openai',
+      CONTEXTFORGE_EMBEDDINGS_DIMENSIONS: '3',
+    },
+    cwd: process.cwd(),
+    embeddingProviders: {
+      openai: embeddingProvider,
+    },
+    distillProviders: {
+      partial_embedding_provider: async () => ({
+        summaryShort: 'Checkpoint summary.',
+        summaryText: 'Checkpoint detail.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'bad-candidate-vector',
+            content: 'Candidate content.',
+            reason: 'The second vector has the wrong dimension.',
+          },
+        ],
+        sourceEventCount: 1,
+        metadata: {},
+      }),
+    },
+  });
+
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-partial-embedding',
+    sessionId: 'partial-embedding-session',
+    role: 'assistant',
+    content: 'Create a checkpoint and candidate.',
+  });
+
+  const checkpoint = await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'repo-partial-embedding',
+    sessionId: 'partial-embedding-session',
+  });
+
+  assert.equal(checkpoint.embedding.reason, 'embedding_failed');
+  assert.equal(checkpoint.embedding.embedded, 1);
+  assert.equal(checkpoint.embedding.partialFailure, true);
+  assert.deepEqual(checkpoint.embedding.bySourceType, { checkpoint: 1 });
+});
+
+test('search unions lexical candidates with FTS candidates', () => {
   const memory = {
     id: 'memory-1',
     key: 'indexed-memory',
@@ -2168,9 +2454,7 @@ test('search scores only FTS candidates when the index returns matches', () => {
   const results = searchMemories(
     {
       searchMemoryIndex: () => [{ memory, ftsRank: -0.0001 }],
-      listMemories: () => {
-        throw new Error('listMemories should not be called when FTS returns candidates.');
-      },
+      listMemories: () => [],
     },
     {
       scopeType: 'repo',
@@ -2182,6 +2466,74 @@ test('search scores only FTS candidates when the index returns matches', () => {
   assert.equal(results.length, 1);
   assert.equal(results[0].memory.key, 'indexed-memory');
   assert.equal(results[0].retrieval.method, 'fts5+lexical');
+});
+
+test('embedding dimension changes require an explicit forced rebuild', async () => {
+  const dataDir = await makeTempDir();
+  const provider = {
+    name: 'test-vector',
+    model: 'test-embedding',
+    dimensions: 3,
+    async embed(texts) {
+      return texts.map(() => Array.from({ length: provider.dimensions }, (_, index) => (index === 0 ? 1 : 0)));
+    },
+  };
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_EMBEDDINGS_PROVIDER: 'openai',
+      CONTEXTFORGE_EMBEDDINGS_DIMENSIONS: '3',
+    },
+    cwd: process.cwd(),
+    embeddingProviders: {
+      openai: provider,
+    },
+  });
+
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-dimensions',
+    key: 'dimension-note',
+    content: 'Dimension changes should be explicit.',
+  });
+  await app.rebuildEmbeddings({ scope: 'repo', scopeKey: 'repo-dimensions' });
+
+  provider.dimensions = 2;
+  await assert.rejects(
+    () => app.rebuildEmbeddings({ scope: 'repo', scopeKey: 'repo-dimensions' }),
+    /Embedding dimensions changed from 3 to 2/,
+  );
+  const rebuilt = await app.rebuildEmbeddings({ scope: 'repo', scopeKey: 'repo-dimensions', force: true });
+  assert.equal(rebuilt.dimensions, 2);
+});
+
+test('OpenAI embeddings omit dimensions for legacy embedding models', async () => {
+  let requestBody = null;
+  const provider = createOpenAiEmbeddingProvider(
+    {
+      apiKey: 'test-key',
+      baseUrl: 'https://api.openai.test/v1',
+      model: 'text-embedding-ada-002',
+      dimensions: 1536,
+      timeoutMs: 1000,
+    },
+    {
+      fetchImpl: async (_url, options) => {
+        requestBody = JSON.parse(options.body);
+        return {
+          ok: true,
+          async json() {
+            return { data: [{ index: 0, embedding: Array.from({ length: 1536 }, () => 0) }] };
+          },
+        };
+      },
+    },
+  );
+
+  await provider.embed(['legacy model']);
+
+  assert.equal(requestBody.model, 'text-embedding-ada-002');
+  assert.equal(Object.hasOwn(requestBody, 'dimensions'), false);
 });
 
 test('appendRaw and mock distillCheckpoint preserve raw evidence', async () => {
@@ -2435,7 +2787,10 @@ test('distillCheckpoint uses a bounded recent raw-event window', async () => {
           openQuestions: [],
           memoryCandidates: [],
           sourceEventCount: input.rawEvents.length,
-          metadata: { synthetic: true },
+          metadata: {
+            providerNotes: 'synthetic provider output',
+            retrievalHooks: ['codex_exec', 'provider contract', 'synthetic raw events'],
+          },
         };
       },
     },
@@ -2744,7 +3099,10 @@ test('codex_exec provider distills synthetic raw events through a runner', async
             },
           ],
           sourceEventCount: 1,
-          metadata: { synthetic: true },
+          metadata: {
+            providerNotes: 'synthetic provider output',
+            retrievalHooks: ['codex_exec', 'provider contract', 'synthetic raw events'],
+          },
         }),
       };
     },
@@ -2766,13 +3124,18 @@ test('codex_exec provider distills synthetic raw events through a runner', async
 
   assert.equal(checkpoint.provider, 'codex_exec');
   assert.equal(checkpoint.sourceEventCount, 1);
-  assert.equal(checkpoint.metadata.providerMetadata.synthetic, true);
+  assert.equal(checkpoint.metadata.providerMetadata.providerNotes, 'synthetic provider output');
+  assert.deepEqual(checkpoint.metadata.providerMetadata.retrievalHooks, [
+    'codex_exec',
+    'provider contract',
+    'synthetic raw events',
+  ]);
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.command, 'codex-fake');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.model, 'gpt-test');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.reasoningEffort, 'low');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.timeoutMs, 1234);
-  assert.equal(checkpoint.metadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v1');
-  assert.equal(checkpoint.metadata.providerMetadata.codexExec.outputSchemaVersion, 'contextforge.checkpoint.v2');
+  assert.equal(checkpoint.metadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v3');
+  assert.equal(checkpoint.metadata.providerMetadata.codexExec.outputSchemaVersion, 'contextforge.checkpoint.v3');
   assert.match(invocation.prompt, /Return exactly one JSON object/);
   assert.deepEqual(invocation.args.slice(0, 2), ['exec', '--skip-git-repo-check']);
   assert.ok(invocation.args.includes('--output-schema'));
@@ -2782,6 +3145,7 @@ test('codex_exec provider distills synthetic raw events through a runner', async
   assert.equal(invocation.timeoutMs, 1234);
   const candidateSchema = schema.properties.memoryCandidates.items;
   assert.deepEqual(candidateSchema.required, Object.keys(candidateSchema.properties));
+  assert.deepEqual(schema.properties.metadata.required, ['providerNotes', 'retrievalHooks']);
 
   const runs = app.listDistillRuns({
     scope: 'repo',
@@ -2789,9 +3153,9 @@ test('codex_exec provider distills synthetic raw events through a runner', async
     sessionId: 'codex-session',
   });
   assert.equal(runs[0].status, 'succeeded');
-  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v1');
-  assert.equal(runs[0].inputMetadata.providerMetadata.outputSchemaVersion, 'contextforge.checkpoint.v2');
-  assert.equal(runs[0].outputMetadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v1');
+  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v3');
+  assert.equal(runs[0].inputMetadata.providerMetadata.outputSchemaVersion, 'contextforge.checkpoint.v3');
+  assert.equal(runs[0].outputMetadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v3');
 });
 
 test('codex_exec records JSON brace fallback recovery metadata', async () => {
@@ -2812,7 +3176,7 @@ test('codex_exec records JSON brace fallback recovery metadata', async () => {
         memoryCandidates: [],
         sourceEventCount: 1,
         provider: 'codex_exec',
-        metadata: { providerNotes: 'synthetic recovery' },
+        metadata: { providerNotes: 'synthetic recovery', retrievalHooks: ['brace fallback', 'codex_exec JSON'] },
       })} suffix`,
     }),
   });
@@ -2994,8 +3358,8 @@ test('codex_exec parse failures preserve raw evidence', async () => {
   });
   assert.equal(runs[0].status, 'failed');
   assert.equal(runs[0].outputMetadata.providerFailed, true);
-  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v1');
-  assert.equal(runs[0].outputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v1');
+  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v3');
+  assert.equal(runs[0].outputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v3');
 });
 
 test('CLI supports the v0 workflow with synthetic data', async () => {
@@ -3139,6 +3503,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'append_raw',
       'begin_session',
       'correct_memory',
+      'db_info',
       'deactivate_memory',
       'distill_checkpoint',
       'distill_usage',
@@ -3148,6 +3513,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'promote_memory',
       'promote_memory_candidate',
       'prune_raw_events',
+      'rebuild_embeddings',
       'reject_memory_candidate',
       'remember',
       'search',

@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.2.0 - 2026-05-01
+
+- Added sqlite-vec backed derived embedding storage with startup `vec_version`
+  reporting in `dbInfo`.
+- Added OpenAI embeddings configuration with `text-embedding-3-small` defaults,
+  configurable dimensions, dimensions request gating for legacy models, and
+  server-side credential handling for remote mode.
+- Added `rebuildEmbeddings` across the core API, CLI, remote API, and MCP
+  `rebuild_embeddings` tool to backfill durable memories, checkpoints, and
+  memory candidates.
+- Added automatic checkpoint and memory-candidate embedding after successful
+  `distillCheckpoint` runs, while keeping embedding failures from erasing or
+  failing the checkpoint itself and reporting partial write progress.
+- Expanded `search` so vector retrieval can return `memory`, `checkpoint`, and
+  `memory_candidate` result types with transparent vector distance/model
+  metadata, Korean/no-lexical-token vector fallback, lexical candidate unioning,
+  and normalized hybrid ranking.
+- Added a guard against silent vector-index drops when embedding dimensions
+  change; operators must run a forced rebuild to reset the derived index.
+- Added the MCP `db_info` tool and updated MCP instructions so agents can
+  distinguish remote canonical storage from local/project-local context.
+- Upgraded the `codex_exec` distillation prompt/schema to v3 with required
+  `metadata.retrievalHooks`, making checkpoints act as compressed retrieval
+  indexes rather than generic summaries.
+- Documented remote-vs-local `AGENTS.md` snippets, search result trust levels,
+  server-side embeddings env placement, sqlite-vec compatibility notes, and
+  checkpoint/candidate retrieval behavior.
+
 ## 0.1.4 - 2026-04-26
 
 - Added candidate-id review workflows: `promoteMemoryCandidate --candidateId`

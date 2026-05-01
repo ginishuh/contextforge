@@ -1,6 +1,6 @@
 {
   "name": "contextforge",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "description": "Self-hosted memory and distillation runtime for coding agents.",
   "type": "module",
   "bin": {
@@ -40,6 +40,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "better-sqlite3": "^12.9.0",
+    "sqlite-vec": "^0.1.9",
     "zod": "^4.3.6"
   }
 }
