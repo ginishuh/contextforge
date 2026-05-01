@@ -3370,8 +3370,15 @@ test('bootstrapContext returns semantic retrieval with trust and verification hi
     scope: 'repo',
     scopeKey: 'repo-bootstrap',
     key: 'issue-69-contract',
-    content: 'Issue 69 changed the bootstrap API contract for agents.',
+    content: 'Issues and PRs changed the bootstrap API contract for agents.',
     category: 'decision',
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-bootstrap',
+    key: 'indentation-style',
+    content: 'Use four spaces for generated examples in this repo.',
+    category: 'preference',
   });
   app.remember({
     scope: 'shared',
@@ -3391,15 +3398,76 @@ test('bootstrapContext returns semantic retrieval with trust and verification hi
 
   assert.deepEqual(result.scope, { scopeType: 'repo', scopeKey: 'repo-bootstrap' });
   assert.equal(result.storage.mode, 'project-local');
-  assert.equal(result.storage.authority, 'project_local');
+  assert.equal(result.storage.authority, 'project-local');
   assert.match(result.summary, /Found/);
   assert.ok(result.results.some((item) => item.group === 'primary' && item.key === 'issue-69-contract'));
   assert.ok(result.results.some((item) => item.group === 'shared' && item.key === 'agent-bootstrap-policy'));
   const repoHit = result.results.find((item) => item.key === 'issue-69-contract');
   assert.equal(repoHit.trust, 'reviewed_durable');
   assert.equal(repoHit.verificationRequired, true);
+  assert.ok(Array.isArray(repoHit.why));
+  assert.equal(Object.hasOwn(repoHit, 'score'), false);
   assert.match(repoHit.whyUse, /Reviewed durable/);
   assert.ok(result.nextActions.some((item) => item.includes('Verify current git')));
+
+  const stableResult = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-bootstrap',
+    query: 'indentation style examples',
+    limit: 3,
+  });
+  const stableHit = stableResult.results.find((item) => item.key === 'indentation-style');
+  assert.equal(stableHit.verificationRequired, false);
+});
+
+test('bootstrapContext reuses one query embedding across repo and shared retrieval', async () => {
+  const dataDir = await makeTempDir();
+  let embedCalls = 0;
+  const provider = {
+    name: 'test-vector',
+    model: 'test-embedding',
+    dimensions: 3,
+    async embed(texts) {
+      embedCalls += 1;
+      return texts.map(() => [1, 0, 0]);
+    },
+  };
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_EMBEDDINGS_PROVIDER: 'openai',
+      CONTEXTFORGE_EMBEDDINGS_DIMENSIONS: '3',
+    },
+    cwd: process.cwd(),
+    embeddingProviders: {
+      openai: provider,
+    },
+  });
+
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-bootstrap-embed',
+    key: 'repo-bootstrap-memory',
+    content: 'Repo bootstrap retrieval should reuse embeddings.',
+  });
+  app.remember({
+    scope: 'shared',
+    scopeKey: 'global',
+    key: 'shared-bootstrap-memory',
+    content: 'Shared bootstrap retrieval should reuse embeddings.',
+  });
+
+  const result = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-bootstrap-embed',
+    query: 'bootstrap retrieval',
+    includeShared: true,
+  });
+
+  assert.equal(embedCalls, 1);
+  assert.equal(result.sharedLimit, 3);
+  assert.ok(result.results.some((item) => item.group === 'primary'));
+  assert.ok(result.results.some((item) => item.group === 'shared'));
 });
 
 test('CLI supports the v0 workflow with synthetic data', async () => {

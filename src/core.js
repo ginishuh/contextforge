@@ -200,8 +200,8 @@ function resultTextForVerification(result) {
   return '';
 }
 
-function containsLiveStateSignal(result) {
-  return /\b(branch|pr|pull request|issue|ci|check|runtime|deploy|deployment|migration|migrate|server|service|queue|status|draft|merge|merged|commit|tag|release|rollback)\b/i.test(
+function requiresLiveStateVerification(result) {
+  return /\b(branch\w*|prs?|pull requests?|issues?|ci|checks?|runtimes?|deploy\w*|deployments?|migrations?|migrate\w*|servers?|services?|queues?|status|drafts?|merge\w*|merged|commits?|tags?|releases?|rollbacks?)\b/i.test(
     resultTextForVerification(result),
   );
 }
@@ -268,7 +268,10 @@ function bootstrapResultSummary(result) {
 
 function bootstrapResult(result, group) {
   const summary = bootstrapResultSummary(result);
-  const verificationRequired = result.type !== 'memory' || containsLiveStateSignal(result);
+  const verificationRequired =
+    result.type !== 'memory'
+      ? true
+      : requiresLiveStateVerification(result);
   return {
     group,
     type: result.type,
@@ -278,7 +281,7 @@ function bootstrapResult(result, group) {
     trust: bootstrapTrustForType(result.type),
     verificationRequired,
     whyUse: bootstrapUseHint(result),
-    score: result.score,
+    why: result.why,
     source: result.source,
     retrieval: result.retrieval,
     ...(summary.sessionId ? { sessionId: summary.sessionId } : {}),
@@ -307,7 +310,7 @@ function storageBootstrapInfo(config, info) {
   const vectorReady = Boolean(info.vector?.sqliteVecAvailable && info.embeddings?.enabled);
   return {
     mode: config.storageMode,
-    authority: config.storageMode === 'remote' ? 'canonical' : config.storageMode === 'local' ? 'local' : 'project_local',
+    authority: config.storageMode === 'remote' ? 'canonical' : config.storageMode === 'local' ? 'local' : 'project-local',
     vectorReady,
     sqliteVecAvailable: Boolean(info.vector?.sqliteVecAvailable),
     sqliteVecVersion: info.vector?.sqliteVecVersion || null,
@@ -554,6 +557,23 @@ export function createContextForge(options = {}) {
   };
   let lastRawPruneAt = 0;
 
+  function buildDbInfo(store) {
+    return {
+      ...store.dbInfo(),
+      storageMode: config.storageMode,
+      embeddings: {
+        provider: config.embeddings.provider,
+        model: config.embeddings.model,
+        dimensions: config.embeddings.dimensions,
+        enabled: Boolean(embeddingProvider),
+      },
+      rawRetention: {
+        ttlDays: config.rawRetention.ttlDays,
+        pruneIntervalMs: config.rawRetention.pruneIntervalMs,
+      },
+    };
+  }
+
   function pruneRawEventsIfDue(store, now = new Date()) {
     if (!config.rawRetention.ttlDays) {
       return null;
@@ -617,22 +637,24 @@ export function createContextForge(options = {}) {
     };
   }
 
+  function searchStoreWithScope(store, scope, options, queryEmbedding = null) {
+    return searchMemories(store, {
+      ...scope,
+      query: options.query,
+      limit: options.limit,
+      searchScopes: options.searchScopes,
+      sharedScopeKey: options.sharedScopeKey || config.defaultSharedScopeKey,
+      queryEmbedding,
+    });
+  }
+
   function searchWithScope(scope, options) {
-    const runSearch = (store, queryEmbedding = null) =>
-      searchMemories(store, {
-        ...scope,
-        query: options.query,
-        limit: options.limit,
-        searchScopes: options.searchScopes,
-        sharedScopeKey: options.sharedScopeKey || config.defaultSharedScopeKey,
-        queryEmbedding,
-      });
     if (!embeddingProvider) {
-      return useStore((store) => runSearch(store));
+      return useStore((store) => searchStoreWithScope(store, scope, options));
     }
     return useStore(async (store) => {
       const [queryEmbedding] = await embeddingProvider.embed([options.query]);
-      return runSearch(store, queryEmbedding);
+      return searchStoreWithScope(store, scope, options, queryEmbedding);
     });
   }
 
@@ -665,20 +687,7 @@ export function createContextForge(options = {}) {
     },
 
     dbInfo() {
-      return useStore((store) => ({
-        ...store.dbInfo(),
-        storageMode: config.storageMode,
-        embeddings: {
-          provider: config.embeddings.provider,
-          model: config.embeddings.model,
-          dimensions: config.embeddings.dimensions,
-          enabled: Boolean(embeddingProvider),
-        },
-        rawRetention: {
-          ttlDays: config.rawRetention.ttlDays,
-          pruneIntervalMs: config.rawRetention.pruneIntervalMs,
-        },
-      }));
+      return useStore((store) => buildDbInfo(store));
     },
 
     async bootstrapContext(options = {}) {
@@ -686,43 +695,62 @@ export function createContextForge(options = {}) {
       requireOption(options.query, 'query');
       const limit = positiveNumber(options.limit == null ? 8 : Number(options.limit), 'limit');
       const sharedLimit = Math.min(3, limit);
-      const info = await this.dbInfo();
-      const repoResults = await searchWithScope(scope, {
-        query: options.query,
-        limit,
-        sharedScopeKey: options.sharedScopeKey,
-      });
       const includeShared = truthyOption(options.includeShared);
-      const sharedResults =
-        includeShared && scope.scopeType !== 'shared'
-          ? await searchWithScope(
-              {
-                scopeType: 'shared',
-                scopeKey: options.sharedScopeKey || config.defaultSharedScopeKey,
-              },
-              {
-                query: options.query,
-                limit: sharedLimit,
-                sharedScopeKey: options.sharedScopeKey,
-              },
-            )
-          : [];
-      const results = [
-        ...repoResults.map((result) => bootstrapResult(result, 'primary')),
-        ...sharedResults.map((result) => bootstrapResult(result, 'shared')),
-      ];
-      return {
-        scope,
-        storage: storageBootstrapInfo(config, info),
-        query: options.query,
-        includeShared,
-        summary: bootstrapSummary(results),
-        results,
-        nextActions: [
-          'Verify current git/GitHub/CI/runtime/migration state before final claims or risky actions.',
-          'Review memory_candidate results at task end if durable lessons remain.',
-        ],
-      };
+      return useStore(async (store) => {
+        const info = buildDbInfo(store);
+        const queryEmbedding = embeddingProvider
+          ? (await embeddingProvider.embed([options.query]))[0]
+          : null;
+        const repoResults = searchStoreWithScope(
+          store,
+          scope,
+          {
+            query: options.query,
+            limit,
+            sharedScopeKey: options.sharedScopeKey,
+          },
+          queryEmbedding,
+        );
+        const sharedScopeKey = options.sharedScopeKey || config.defaultSharedScopeKey;
+        const sharedSkippedReason =
+          includeShared && scope.scopeType !== 'shared' && !sharedScopeKey
+            ? 'missing_shared_scope_key'
+            : null;
+        const sharedResults =
+          includeShared && scope.scopeType !== 'shared' && sharedScopeKey
+            ? searchStoreWithScope(
+                store,
+                {
+                  scopeType: 'shared',
+                  scopeKey: sharedScopeKey,
+                },
+                {
+                  query: options.query,
+                  limit: sharedLimit,
+                  sharedScopeKey,
+                },
+                queryEmbedding,
+              )
+            : [];
+        const results = [
+          ...repoResults.map((result) => bootstrapResult(result, 'primary')),
+          ...sharedResults.map((result) => bootstrapResult(result, 'shared')),
+        ];
+        return {
+          scope,
+          storage: storageBootstrapInfo(config, info),
+          query: options.query,
+          includeShared,
+          sharedLimit: includeShared ? sharedLimit : null,
+          ...(sharedSkippedReason ? { sharedSkippedReason } : {}),
+          summary: bootstrapSummary(results),
+          results,
+          nextActions: [
+            'Verify current git/GitHub/CI/runtime/migration state before final claims or risky actions.',
+            'Review memory_candidate results at task end if durable lessons remain.',
+          ],
+        };
+      });
     },
 
     checkCodexExec(options = {}) {

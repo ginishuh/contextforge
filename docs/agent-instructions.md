@@ -164,8 +164,9 @@ trust levels.
 1. Resolve the intended scope. Use `scope: "repo"` with `repoPath`, `cwd`, or an
    explicit `scopeKey`.
 2. Call `bootstrap_context` with a query derived from the user's task.
-3. Search shared scope only if user-wide conventions, deployment
-   policy, credentials locations, or cross-repo decisions may matter.
+3. Include shared scope only if user-wide conventions, deployment
+   policy, credentials locations, or cross-repo decisions may matter. Shared
+   bootstrap results are capped at three items.
 4. If `bootstrap_context` is unavailable, call `db_info` when storage mode,
    remote/local authority, schema version, raw retention, or vector readiness
    may affect the task, then call `search`.
@@ -417,8 +418,8 @@ Prefer distilling at meaningful boundaries:
 - `db_info`: inspect storage mode, table counts, raw retention, schema version,
   and sqlite-vec/embedding readiness.
 - `bootstrap_context`: resolve scoped startup context in one call. It searches
-  repo memory/checkpoints/candidates semantically, optionally includes shared
-  scope, and annotates trust plus verification hints.
+  repo memory/checkpoints/candidates semantically, optionally includes up to
+  three shared-scope results, and annotates trust plus verification hints.
 - `search`: retrieve scoped results. Results can include reviewed durable
   `memory`, recent-continuity `checkpoint`, and unreviewed
   `memory_candidate` records.

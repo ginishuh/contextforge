@@ -67,7 +67,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Bootstrap Context',
       description:
-        'Resolve scoped ContextForge memory for a task in one call. Searches repo scope semantically across memory, checkpoint, and memory_candidate results, optionally includes shared scope, and annotates trust and verification hints for agents.',
+        'Resolve scoped ContextForge memory for a task in one call. Searches repo scope semantically across memory, checkpoint, and memory_candidate results, optionally includes up to 3 shared-scope results, and annotates trust and verification hints for agents.',
       inputSchema: {
         ...scopedSchema,
         query: z.string(),
