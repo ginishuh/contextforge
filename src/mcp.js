@@ -133,7 +133,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Rebuild Embeddings',
       description:
-        'Backfill or rebuild the derived sqlite-vec embedding index for durable memories, checkpoints, and memory candidates. Requires an embeddings provider such as OpenAI to be configured.',
+        'Backfill or rebuild the derived sqlite-vec embedding index for durable memories, checkpoints, and memory candidates. Requires an embeddings provider such as OpenAI to be configured. Pass force=true only when intentionally resetting the index after an embedding dimension change.',
       inputSchema: {
         ...scopedSchema,
         batchSize: z.number().int().positive().optional(),

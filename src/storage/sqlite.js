@@ -422,7 +422,7 @@ export class ContextForgeStore {
     };
   }
 
-  ensureEmbeddingIndex(dimensions) {
+  ensureEmbeddingIndex(dimensions, { resetOnDimensionChange = false } = {}) {
     const parsedDimensions = validateDimensions(dimensions);
     if (!this.vectorStatus.available) {
       throw new Error(`sqlite-vec is not available: ${this.vectorStatus.error}`);
@@ -431,6 +431,12 @@ export class ContextForgeStore {
     const existing = this.db.prepare("SELECT value FROM schema_meta WHERE key = 'embedding_dimensions'").get();
     const existingDimensions = existing?.value ? Number(existing.value) : null;
     if (existingDimensions && existingDimensions !== parsedDimensions) {
+      if (!resetOnDimensionChange) {
+        throw new Error(
+          `Embedding dimensions changed from ${existingDimensions} to ${parsedDimensions}. ` +
+            'Run rebuildEmbeddings with force=true to reset and rebuild the vector index.',
+        );
+      }
       this.db.exec(`
         DROP TABLE IF EXISTS embedding_vec;
         DROP TABLE IF EXISTS embedding_index;
@@ -663,8 +669,18 @@ export class ContextForgeStore {
       .filter((source) => force || source.indexedContentHash !== source.contentHash);
   }
 
-  upsertEmbedding({ sourceType, recordId, scopeType, scopeKey, model, dimensions, contentHash: hash, embedding }) {
-    this.ensureEmbeddingIndex(dimensions);
+  upsertEmbedding({
+    sourceType,
+    recordId,
+    scopeType,
+    scopeKey,
+    model,
+    dimensions,
+    contentHash: hash,
+    embedding,
+    resetOnDimensionChange = false,
+  }) {
+    this.ensureEmbeddingIndex(dimensions, { resetOnDimensionChange });
     const sourceId = `${sourceType}:${recordId}`;
     const timestamp = nowIso();
     this.db.prepare('DELETE FROM embedding_vec WHERE source_id = ?').run(sourceId);

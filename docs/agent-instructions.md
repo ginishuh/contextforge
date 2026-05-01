@@ -342,4 +342,6 @@ Prefer distilling at meaningful boundaries:
 - `list_memory_events`: inspect memory provenance.
 - `prune_raw_events`: manually prune raw evidence older than the configured TTL.
 - `rebuild_embeddings`: backfill or rebuild the derived vector index for
-  durable memories, checkpoints, and memory candidates.
+  durable memories, checkpoints, and memory candidates. If embedding dimensions
+  changed, pass `force=true` only when the operator intentionally wants to reset
+  the derived sqlite-vec index.

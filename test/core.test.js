@@ -11,6 +11,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import Database from 'better-sqlite3';
 import { createContextForge } from '../src/core.js';
 import { validateDistillOutput } from '../src/distill/validate.js';
+import { createOpenAiEmbeddingProvider } from '../src/embeddings/index.js';
 import { createInterruptibleSleep, shouldSkipRecentFailedAutoDistill } from '../src/ingest/common.js';
 import { ingestCodexRolloutFile, watchCodexSessions } from '../src/ingest/codex.js';
 import { searchMemories } from '../src/retrieval/search.js';
@@ -2222,6 +2223,77 @@ test('embedding rebuild populates sqlite-vec index for hybrid retrieval', async 
   assert.equal(info.vector.dimensions, 3);
 });
 
+test('vector search still runs for Korean queries that have no lexical tokens', () => {
+  const memory = {
+    id: 'memory-korean',
+    key: 'korean-memory',
+    category: 'note',
+    content: '한국어 의미 검색은 벡터 경로로 동작해야 한다.',
+    tags: [],
+    importance: 0,
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+
+  const results = searchMemories(
+    {
+      searchMemoryVectorIndex: () => [{ memory, distance: 0, model: 'test-embedding', dimensions: 3 }],
+      listMemories: () => {
+        throw new Error('listMemories should not be called when the query has no lexical tokens.');
+      },
+    },
+    {
+      scopeType: 'repo',
+      scopeKey: 'repo-korean',
+      query: '체크포인트 후보',
+      queryEmbedding: [1, 0, 0],
+    },
+  );
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].memory.key, 'korean-memory');
+  assert.equal(results[0].retrieval.method, 'vector');
+});
+
+test('hybrid ranking keeps strong lexical matches ahead of weak vector-only matches', () => {
+  const exactMemory = {
+    id: 'memory-exact',
+    key: 'sqlite-vec-upsert',
+    category: 'decision',
+    content: 'Track sqlite-vec upsert behavior.',
+    tags: [],
+    importance: 0,
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+  const vectorMemory = {
+    id: 'memory-vector',
+    key: 'unrelated-vector',
+    category: 'note',
+    content: 'A weak semantic neighbor.',
+    tags: [],
+    importance: 0,
+    updatedAt: '2026-01-02T00:00:00.000Z',
+  };
+
+  const results = searchMemories(
+    {
+      searchMemoryVectorIndex: () => [{ memory: vectorMemory, distance: 0.99, model: 'test-embedding', dimensions: 3 }],
+      listMemories: () => [exactMemory],
+    },
+    {
+      scopeType: 'repo',
+      scopeKey: 'repo-ranking',
+      query: 'sqlite-vec-upsert',
+      queryEmbedding: [1, 0, 0],
+    },
+  );
+
+  assert.equal(results.length, 2);
+  assert.equal(results[0].memory.key, 'sqlite-vec-upsert');
+  assert.equal(results[0].retrieval.method, 'lexical');
+  assert.equal(results[1].memory.key, 'unrelated-vector');
+  assert.equal(results[1].retrieval.method, 'vector');
+});
+
 test('distillCheckpoint embeds the new checkpoint and candidates when embeddings are enabled', async () => {
   const dataDir = await makeTempDir();
   const embeddingProvider = {
@@ -2308,7 +2380,68 @@ test('distillCheckpoint embeds the new checkpoint and candidates when embeddings
   assert.equal(candidateResults[0].retrieval.vectorModel, 'test-embedding');
 });
 
-test('search scores only FTS candidates when the index returns matches', () => {
+test('distillCheckpoint reports partial embedding progress when a later upsert fails', async () => {
+  const dataDir = await makeTempDir();
+  const embeddingProvider = {
+    name: 'test-vector',
+    model: 'test-embedding',
+    dimensions: 3,
+    async embed(texts) {
+      return texts.map((_, index) => (index === 0 ? [1, 0, 0] : [0, 1]));
+    },
+  };
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'partial_embedding_provider',
+      CONTEXTFORGE_EMBEDDINGS_PROVIDER: 'openai',
+      CONTEXTFORGE_EMBEDDINGS_DIMENSIONS: '3',
+    },
+    cwd: process.cwd(),
+    embeddingProviders: {
+      openai: embeddingProvider,
+    },
+    distillProviders: {
+      partial_embedding_provider: async () => ({
+        summaryShort: 'Checkpoint summary.',
+        summaryText: 'Checkpoint detail.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'bad-candidate-vector',
+            content: 'Candidate content.',
+            reason: 'The second vector has the wrong dimension.',
+          },
+        ],
+        sourceEventCount: 1,
+        metadata: {},
+      }),
+    },
+  });
+
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-partial-embedding',
+    sessionId: 'partial-embedding-session',
+    role: 'assistant',
+    content: 'Create a checkpoint and candidate.',
+  });
+
+  const checkpoint = await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'repo-partial-embedding',
+    sessionId: 'partial-embedding-session',
+  });
+
+  assert.equal(checkpoint.embedding.reason, 'embedding_failed');
+  assert.equal(checkpoint.embedding.embedded, 1);
+  assert.equal(checkpoint.embedding.partialFailure, true);
+  assert.deepEqual(checkpoint.embedding.bySourceType, { checkpoint: 1 });
+});
+
+test('search unions lexical candidates with FTS candidates', () => {
   const memory = {
     id: 'memory-1',
     key: 'indexed-memory',
@@ -2321,9 +2454,7 @@ test('search scores only FTS candidates when the index returns matches', () => {
   const results = searchMemories(
     {
       searchMemoryIndex: () => [{ memory, ftsRank: -0.0001 }],
-      listMemories: () => {
-        throw new Error('listMemories should not be called when FTS returns candidates.');
-      },
+      listMemories: () => [],
     },
     {
       scopeType: 'repo',
@@ -2335,6 +2466,74 @@ test('search scores only FTS candidates when the index returns matches', () => {
   assert.equal(results.length, 1);
   assert.equal(results[0].memory.key, 'indexed-memory');
   assert.equal(results[0].retrieval.method, 'fts5+lexical');
+});
+
+test('embedding dimension changes require an explicit forced rebuild', async () => {
+  const dataDir = await makeTempDir();
+  const provider = {
+    name: 'test-vector',
+    model: 'test-embedding',
+    dimensions: 3,
+    async embed(texts) {
+      return texts.map(() => Array.from({ length: provider.dimensions }, (_, index) => (index === 0 ? 1 : 0)));
+    },
+  };
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_EMBEDDINGS_PROVIDER: 'openai',
+      CONTEXTFORGE_EMBEDDINGS_DIMENSIONS: '3',
+    },
+    cwd: process.cwd(),
+    embeddingProviders: {
+      openai: provider,
+    },
+  });
+
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-dimensions',
+    key: 'dimension-note',
+    content: 'Dimension changes should be explicit.',
+  });
+  await app.rebuildEmbeddings({ scope: 'repo', scopeKey: 'repo-dimensions' });
+
+  provider.dimensions = 2;
+  await assert.rejects(
+    () => app.rebuildEmbeddings({ scope: 'repo', scopeKey: 'repo-dimensions' }),
+    /Embedding dimensions changed from 3 to 2/,
+  );
+  const rebuilt = await app.rebuildEmbeddings({ scope: 'repo', scopeKey: 'repo-dimensions', force: true });
+  assert.equal(rebuilt.dimensions, 2);
+});
+
+test('OpenAI embeddings omit dimensions for legacy embedding models', async () => {
+  let requestBody = null;
+  const provider = createOpenAiEmbeddingProvider(
+    {
+      apiKey: 'test-key',
+      baseUrl: 'https://api.openai.test/v1',
+      model: 'text-embedding-ada-002',
+      dimensions: 1536,
+      timeoutMs: 1000,
+    },
+    {
+      fetchImpl: async (_url, options) => {
+        requestBody = JSON.parse(options.body);
+        return {
+          ok: true,
+          async json() {
+            return { data: [{ index: 0, embedding: Array.from({ length: 1536 }, () => 0) }] };
+          },
+        };
+      },
+    },
+  );
+
+  await provider.embed(['legacy model']);
+
+  assert.equal(requestBody.model, 'text-embedding-ada-002');
+  assert.equal(Object.hasOwn(requestBody, 'dimensions'), false);
 });
 
 test('appendRaw and mock distillCheckpoint preserve raw evidence', async () => {

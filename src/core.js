@@ -431,23 +431,32 @@ export function createContextForge(options = {}) {
     store.ensureEmbeddingIndex(embeddingProvider.dimensions);
     let embedded = 0;
     const bySourceType = {};
-    for (let index = 0; index < sources.length; index += batchSize) {
-      const batch = sources.slice(index, index + batchSize);
-      const embeddings = await embeddingProvider.embed(batch.map((source) => source.text));
-      for (const [offset, source] of batch.entries()) {
-        store.upsertEmbedding({
-          sourceType: source.sourceType,
-          recordId: source.recordId,
-          scopeType: source.scopeType,
-          scopeKey: source.scopeKey,
-          model: embeddingProvider.model,
-          dimensions: embeddingProvider.dimensions,
-          contentHash: source.contentHash,
-          embedding: embeddings[offset],
-        });
-        embedded += 1;
-        bySourceType[source.sourceType] = (bySourceType[source.sourceType] || 0) + 1;
+    try {
+      for (let index = 0; index < sources.length; index += batchSize) {
+        const batch = sources.slice(index, index + batchSize);
+        const embeddings = await embeddingProvider.embed(batch.map((source) => source.text));
+        for (const [offset, source] of batch.entries()) {
+          store.upsertEmbedding({
+            sourceType: source.sourceType,
+            recordId: source.recordId,
+            scopeType: source.scopeType,
+            scopeKey: source.scopeKey,
+            model: embeddingProvider.model,
+            dimensions: embeddingProvider.dimensions,
+            contentHash: source.contentHash,
+            embedding: embeddings[offset],
+          });
+          embedded += 1;
+          bySourceType[source.sourceType] = (bySourceType[source.sourceType] || 0) + 1;
+        }
       }
+    } catch (error) {
+      error.embeddingProgress = {
+        scanned: sources.length,
+        embedded,
+        bySourceType,
+      };
+      throw error;
     }
     return {
       provider: embeddingProvider.name,
@@ -457,6 +466,25 @@ export function createContextForge(options = {}) {
       embedded,
       bySourceType,
       skipped: false,
+    };
+  }
+
+  function embeddingFailureResult(error) {
+    const progress = error.embeddingProgress || {};
+    return {
+      provider: embeddingProvider.name,
+      model: embeddingProvider.model,
+      dimensions: embeddingProvider.dimensions,
+      scanned: progress.scanned ?? null,
+      embedded: progress.embedded || 0,
+      bySourceType: progress.bySourceType || {},
+      skipped: false,
+      partialFailure: Boolean(progress.embedded),
+      reason: 'embedding_failed',
+      error: {
+        name: error.name,
+        message: error.message,
+      },
     };
   }
 
@@ -819,6 +847,9 @@ export function createContextForge(options = {}) {
 
     async rebuildEmbeddings(options = {}) {
       const scope = normalizeScopeOptions(options, config);
+      if ((options.scope == null || options.scope === '') !== (options.scopeKey == null || options.scopeKey === '')) {
+        throw new Error('rebuildEmbeddings requires both scope and scopeKey when either option is provided.');
+      }
       if (!embeddingProvider) {
         return {
           provider: config.embeddings.provider,
@@ -829,10 +860,11 @@ export function createContextForge(options = {}) {
       }
       const batchSize = positiveNumber(options.batchSize == null ? 32 : Number(options.batchSize), 'batchSize');
       return useStore(async (store) => {
-        store.ensureEmbeddingIndex(embeddingProvider.dimensions);
+        store.ensureEmbeddingIndex(embeddingProvider.dimensions, { resetOnDimensionChange: truthyOption(options.force) });
+        const shouldNarrowScope = Boolean(options.scope || options.scopeKey || options.cwd || options.repoPath);
         const sourceOptions = {
-          scopeType: options.scope ? scope.scopeType : null,
-          scopeKey: options.scope || options.scopeKey || options.cwd || options.repoPath ? scope.scopeKey : null,
+          scopeType: shouldNarrowScope ? scope.scopeType : null,
+          scopeKey: shouldNarrowScope ? scope.scopeKey : null,
           model: embeddingProvider.model,
           dimensions: embeddingProvider.dimensions,
           force: truthyOption(options.force),
@@ -1035,19 +1067,7 @@ export function createContextForge(options = {}) {
               { batchSize: 32 },
             );
           } catch (error) {
-            embedding = {
-              provider: embeddingProvider.name,
-              model: embeddingProvider.model,
-              dimensions: embeddingProvider.dimensions,
-              skipped: true,
-              reason: 'embedding_failed',
-              embedded: 0,
-              bySourceType: {},
-              error: {
-                name: error.name,
-                message: error.message,
-              },
-            };
+            embedding = embeddingFailureResult(error);
           }
         }
 

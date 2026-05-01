@@ -35,6 +35,10 @@ function normalizeEmbedding(value, expectedDimensions) {
   return embedding;
 }
 
+function supportsDimensionsParameter(model) {
+  return String(model || '').startsWith('text-embedding-3-');
+}
+
 export function createOpenAiEmbeddingProvider(config, { fetchImpl = globalThis.fetch } = {}) {
   if (!config.apiKey) {
     throw new Error('OpenAI embeddings require CONTEXTFORGE_OPENAI_API_KEY or OPENAI_API_KEY.');
@@ -54,18 +58,21 @@ export function createOpenAiEmbeddingProvider(config, { fetchImpl = globalThis.f
       }
       const timeout = timeoutSignal(config.timeoutMs);
       try {
+        const body = {
+          model: config.model,
+          input,
+          encoding_format: 'float',
+        };
+        if (supportsDimensionsParameter(config.model)) {
+          body.dimensions = config.dimensions;
+        }
         const response = await fetchImpl(`${config.baseUrl.replace(/\/$/, '')}/embeddings`, {
           method: 'POST',
           headers: {
             authorization: `Bearer ${config.apiKey}`,
             'content-type': 'application/json',
           },
-          body: JSON.stringify({
-            model: config.model,
-            input,
-            dimensions: config.dimensions,
-            encoding_format: 'float',
-          }),
+          body: JSON.stringify(body),
           signal: timeout.signal,
         });
         if (!response.ok) {

@@ -272,6 +272,11 @@ CONTEXTFORGE_EMBEDDINGS_DIMENSIONS=1536
 CONTEXTFORGE_EMBEDDINGS_TIMEOUT_MS=30000
 ```
 
+The default and recommended embedding model is `text-embedding-3-small`.
+`CONTEXTFORGE_EMBEDDINGS_DIMENSIONS` is sent to OpenAI only for
+`text-embedding-3-*` models; legacy models such as `text-embedding-ada-002` do
+not support that request field and must return the configured dimension count.
+
 Use a long random token and store the same value on client machines as
 `CONTEXTFORGE_REMOTE_TOKEN`. Treat this token as an administrator credential:
 it can call every remote API method, including pruning raw evidence and running
@@ -392,7 +397,24 @@ node src/cli.js rebuildEmbeddings --scope repo --scopeKey github.com/example/rep
 ```
 
 If embedding fails after a successful distillation, the checkpoint remains
-stored and the result reports `embedding.reason = "embedding_failed"`.
+stored and the result reports `embedding.reason = "embedding_failed"`. If some
+rows were already written before the failure, the response also includes
+`embedding.embedded`, `embedding.bySourceType`, and
+`embedding.partialFailure = true` so operators can see the partial DB state.
+
+If the configured embedding dimensions change, ContextForge refuses to silently
+drop the existing vector index. Run a forced rebuild only when you intentionally
+want to reset and repopulate the derived sqlite-vec tables:
+
+```bash
+node src/cli.js rebuildEmbeddings --scope repo --scopeKey github.com/example/repo --force
+```
+
+ContextForge uses the npm `sqlite-vec` package and expects sqlite-vec 0.1.x with
+`vec0` support for auxiliary primary-key columns. Check `node src/cli.js dbInfo`
+for `vector.sqliteVecAvailable`, `vector.sqliteVecVersion`, and any load error.
+The package is routinely used on Linux and macOS; platform SQLite build options
+can affect extension loading.
 
 After the VPS is healthy, configure each laptop, desktop, or agent host with
 the same URL and bearer token using the next section.

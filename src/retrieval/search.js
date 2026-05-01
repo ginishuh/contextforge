@@ -19,13 +19,14 @@ function toFtsQuery(tokens) {
 
 function ftsScore(rank) {
   if (rank == null) return 0;
-  return Math.max(0, Math.round(Math.abs(Number(rank)) * 1000000));
+  const score = Math.max(0, Math.round(Math.abs(Number(rank)) * 1000000));
+  return Math.min(1000, score);
 }
 
 function vectorScore(distance) {
   const parsed = Number(distance);
   if (!Number.isFinite(parsed)) return 0;
-  return Math.round(1000000 / (1 + Math.max(0, parsed)));
+  return Math.round(1000 / (1 + Math.max(0, parsed)));
 }
 
 function scoreMemory(memory, queryTokens) {
@@ -128,7 +129,7 @@ function vectorRetrieval(match) {
 
 export function searchMemories(store, { scopeType, scopeKey, query, limit = 10, searchScopes, sharedScopeKey, queryEmbedding }) {
   const queryTokens = unique(tokenize(query));
-  if (queryTokens.length === 0) {
+  if (queryTokens.length === 0 && !queryEmbedding) {
     return [];
   }
 
@@ -137,7 +138,7 @@ export function searchMemories(store, { scopeType, scopeKey, query, limit = 10, 
 
   return scopes
     .flatMap((source) => {
-      const ftsMatches = store.searchMemoryIndex
+      const ftsMatches = store.searchMemoryIndex && ftsQuery
         ? store.searchMemoryIndex({
             scopeType: source.scopeType,
             scopeKey: source.scopeKey,
@@ -173,17 +174,22 @@ export function searchMemories(store, { scopeType, scopeKey, query, limit = 10, 
       const vectorById = new Map(vectorMatches.map((match) => [match.memory.id, match]));
       const ftsIds = new Set(ftsById.keys());
       const vectorIds = new Set(vectorById.keys());
-      const candidateMemories =
-        ftsMatches.length > 0 || vectorMatches.length > 0
-          ? [...ftsMatches.map((match) => match.memory), ...vectorMatches.map((match) => match.memory)]
-          : store.listMemories(source);
+      const lexicalCandidates =
+        queryTokens.length > 0 && store.listMemories
+          ? store.listMemories(source)
+          : [];
+      const candidateMemories = [
+        ...ftsMatches.map((match) => match.memory),
+        ...vectorMatches.map((match) => match.memory),
+        ...lexicalCandidates,
+      ];
       const memoriesById = new Map(candidateMemories.map((memory) => [memory.id, memory]));
 
       const memoryResults = [...memoriesById.values()].map((memory) => {
         const match = scoreMemory(memory, queryTokens);
         const ftsMatch = ftsById.get(memory.id);
         const vectorMatch = vectorById.get(memory.id);
-        const score = match.score + ftsScore(ftsMatch?.ftsRank) + vectorScore(vectorMatch?.distance);
+        const score = match.score * 100 + ftsScore(ftsMatch?.ftsRank) + vectorScore(vectorMatch?.distance);
         return {
           type: 'memory',
           score,
