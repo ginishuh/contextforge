@@ -789,6 +789,42 @@ most `CONTEXTFORGE_DISTILL_MAX_EVENTS` and
 `CONTEXTFORGE_DISTILL_MAX_CHARS`, then records `sourceEventWindow` and
 `sourceRawEventIds` metadata on the run/checkpoint for auditability.
 
+Each successful `distillCheckpoint` also updates one scoped working summary for
+the session. Checkpoints remain immutable delta records for retrieval,
+provenance, and memory-candidate review. The working summary is different: it
+is overwritten with the latest rolling task state for live continuation and
+handoff. When a previous working summary exists, the distillation provider
+receives it together with the new raw-event window so it can update current
+state instead of emitting a delta-only summary. Treat it as current session
+state, not reviewed durable memory.
+
+When a caller knows the session id, `bootstrapContext` can return the working
+summary and a recent raw tail alongside ordinary retrieval results:
+
+```bash
+node src/cli.js bootstrapContext \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --sessionId current-session-id \
+  --query "current task handoff" \
+  --rawTailLimit 5
+```
+
+The bootstrap response keeps these channels separate:
+
+- `results`: durable memories, checkpoints, and memory candidates from search.
+- `workingSummary`: latest rolling handoff state for the requested session.
+- `rawTail`: newest raw events for last-mile continuity.
+
+For a direct lookup, use:
+
+```bash
+node src/cli.js getWorkingSummary \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --sessionId current-session-id
+```
+
 Use an external scheduler if you want unattended checkpoints. For example, a
 systemd timer or cron job can call:
 
@@ -1112,6 +1148,11 @@ repo-scoped `memory`, `checkpoint`, and `memory_candidate` hits as context
 candidates, optionally includes up to three shared-scope hits, then reminds the
 agent to verify current branch, issue/PR, CI, migration, and runtime state
 against live sources before acting.
+
+When resuming a known session, pass `sessionId` to `bootstrap_context` or
+`bootstrapContext`. ContextForge will include the session's latest
+`workingSummary` separately from search results so agents can see current task
+state without treating it as canonical memory.
 
 ## codex_exec Provider
 

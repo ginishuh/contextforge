@@ -19,6 +19,7 @@ const REMOTE_METHODS = [
   'rebuildEmbeddings',
   'appendRaw',
   'listRawEvents',
+  'getWorkingSummary',
   'pruneRawEvents',
   'distillCheckpoint',
   'listDistillRuns',

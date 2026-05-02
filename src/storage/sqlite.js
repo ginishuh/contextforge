@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 function nowIso() {
   return new Date().toISOString();
@@ -98,6 +98,25 @@ function hydrateDistillRun(row) {
     errorStack: row.error_stack,
     createdAt: row.created_at,
     completedAt: row.completed_at,
+  };
+}
+
+function hydrateWorkingSummary(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    scopeType: row.scope_type,
+    scopeKey: row.scope_key,
+    sessionId: row.session_id,
+    conversationId: row.conversation_id,
+    summaryShort: row.summary_short,
+    summaryText: row.summary_text,
+    sourceCheckpointId: row.source_checkpoint_id,
+    distillRunId: row.distill_run_id,
+    sourceEventCount: row.source_event_count,
+    metadata: parseJson(row.metadata_json, {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -301,6 +320,25 @@ export class ContextForgeStore {
         completed_at TEXT
       );
 
+      CREATE TABLE IF NOT EXISTS working_summaries (
+        id TEXT PRIMARY KEY,
+        scope_type TEXT NOT NULL CHECK (scope_type IN ('shared', 'repo', 'local')),
+        scope_key TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        conversation_id TEXT,
+        summary_short TEXT NOT NULL,
+        summary_text TEXT NOT NULL,
+        source_checkpoint_id TEXT,
+        distill_run_id TEXT,
+        source_event_count INTEGER NOT NULL DEFAULT 0,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (scope_type, scope_key, session_id),
+        FOREIGN KEY (source_checkpoint_id) REFERENCES checkpoints(id) ON DELETE SET NULL,
+        FOREIGN KEY (distill_run_id) REFERENCES distill_runs(id) ON DELETE SET NULL
+      );
+
       CREATE TABLE IF NOT EXISTS memory_events (
         id TEXT PRIMARY KEY,
         memory_id TEXT NOT NULL,
@@ -359,6 +397,8 @@ export class ContextForgeStore {
         ON checkpoints(scope_type, scope_key, session_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_distill_runs_session
         ON distill_runs(scope_type, scope_key, session_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_working_summaries_scope
+        ON working_summaries(scope_type, scope_key, updated_at);
       CREATE INDEX IF NOT EXISTS idx_memory_candidate_scope_status
         ON memory_candidate_index(scope_type, scope_key, status, created_at);
       CREATE INDEX IF NOT EXISTS idx_memory_candidate_checkpoint
@@ -409,6 +449,7 @@ export class ContextForgeStore {
         rawEvents: count('raw_events'),
         checkpoints: count('checkpoints'),
         distillRuns: count('distill_runs'),
+        workingSummaries: count('working_summaries'),
         memoryEvents: count('memory_events'),
         memoryCandidates: count('memory_candidate_index'),
         embeddings: embeddingIndexExists ? count('embedding_index') : 0,
@@ -1176,6 +1217,23 @@ export class ContextForgeStore {
       .map(hydrateRawEvent);
   }
 
+  listRecentRawEvents({ scopeType, scopeKey, sessionId, limit = 5 }) {
+    const parsedLimit = Number(limit);
+    if (!Number.isInteger(parsedLimit) || parsedLimit <= 0) {
+      return [];
+    }
+    return this.db
+      .prepare(`
+        SELECT * FROM raw_events
+        WHERE scope_type = ? AND scope_key = ? AND session_id = ?
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?
+      `)
+      .all(scopeType, scopeKey, sessionId, parsedLimit)
+      .map(hydrateRawEvent)
+      .reverse();
+  }
+
   getLatestCheckpoint({ scopeType, scopeKey, sessionId }) {
     const row = this.db
       .prepare(`
@@ -1206,6 +1264,70 @@ export class ContextForgeStore {
           .all(scopeType, scopeKey);
 
     return rows.map(hydrateCheckpoint);
+  }
+
+  getWorkingSummary({ scopeType, scopeKey, sessionId }) {
+    const row = this.db
+      .prepare(`
+        SELECT * FROM working_summaries
+        WHERE scope_type = ? AND scope_key = ? AND session_id = ?
+      `)
+      .get(scopeType, scopeKey, sessionId);
+    return hydrateWorkingSummary(row);
+  }
+
+  upsertWorkingSummary({
+    scopeType,
+    scopeKey,
+    sessionId,
+    conversationId = null,
+    summaryShort,
+    summaryText,
+    sourceCheckpointId = null,
+    distillRunId = null,
+    sourceEventCount = 0,
+    metadata = {},
+  }) {
+    if (!sessionId) throw new Error('sessionId is required.');
+    if (!summaryShort) throw new Error('working summary summaryShort is required.');
+    if (!summaryText) throw new Error('working summary summaryText is required.');
+
+    const timestamp = nowIso();
+    const row = this.db
+      .prepare(`
+        INSERT INTO working_summaries (
+          id, scope_type, scope_key, session_id, conversation_id,
+          summary_short, summary_text, source_checkpoint_id, distill_run_id,
+          source_event_count, metadata_json, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(scope_type, scope_key, session_id) DO UPDATE SET
+          conversation_id = excluded.conversation_id,
+          summary_short = excluded.summary_short,
+          summary_text = excluded.summary_text,
+          source_checkpoint_id = excluded.source_checkpoint_id,
+          distill_run_id = excluded.distill_run_id,
+          source_event_count = excluded.source_event_count,
+          metadata_json = excluded.metadata_json,
+          updated_at = excluded.updated_at
+        RETURNING *
+      `)
+      .get(
+        randomUUID(),
+        scopeType,
+        scopeKey,
+        sessionId,
+        conversationId,
+        summaryShort,
+        summaryText,
+        sourceCheckpointId,
+        distillRunId,
+        Number(sourceEventCount),
+        json(metadata, {}),
+        timestamp,
+        timestamp,
+      );
+    return hydrateWorkingSummary(row);
   }
 
   listMemoryCandidates({

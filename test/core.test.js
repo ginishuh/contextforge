@@ -2596,6 +2596,7 @@ test('appendRaw and mock distillCheckpoint preserve raw evidence', async () => {
   assert.equal(info.tables.rawEvents, 2);
   assert.equal(info.tables.checkpoints, 1);
   assert.equal(info.tables.distillRuns, 1);
+  assert.equal(info.tables.workingSummaries, 1);
 
   const runs = app.listDistillRuns({
     scope: 'repo',
@@ -2605,7 +2606,19 @@ test('appendRaw and mock distillCheckpoint preserve raw evidence', async () => {
   assert.equal(runs.length, 1);
   assert.equal(runs[0].status, 'succeeded');
   assert.equal(runs[0].outputMetadata.checkpointId, checkpoint.id);
+  assert.equal(runs[0].outputMetadata.workingSummaryUpdated, true);
+  assert.ok(runs[0].outputMetadata.workingSummaryId);
   assert.equal(runs[0].inputMetadata.sourceEventWindow.selectedEventCount, 2);
+  assert.equal(runs[0].inputMetadata.previousWorkingSummaryId, null);
+
+  const workingSummary = app.getWorkingSummary({
+    scope: 'repo',
+    scopeKey: 'repo-a',
+    sessionId: session.sessionId,
+  });
+  assert.equal(workingSummary.sessionId, session.sessionId);
+  assert.equal(workingSummary.sourceCheckpointId, checkpoint.id);
+  assert.match(workingSummary.summaryText, /Current session state/);
 
   const statusAfter = app.sessionStatus({
     scope: 'repo',
@@ -2619,6 +2632,265 @@ test('appendRaw and mock distillCheckpoint preserve raw evidence', async () => {
   assert.equal(statusAfter.latestCheckpointMemoryCandidateCount, 0);
   assert.equal(statusAfter.memoryCandidateHint, null);
   assert.equal(statusAfter.shouldDistill, false);
+});
+
+test('bootstrapContext includes working summary and recent raw tail separately from search results', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'working_summary_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      working_summary_provider: async () => ({
+        summaryShort: 'Working summary checkpoint.',
+        summaryText: 'Checkpoint delta: the agent implemented storage scaffolding.',
+        workingSummary: 'Current state: storage is done, bootstrap wiring is next.',
+        decisions: [],
+        todos: ['Wire bootstrapContext to include working summary.'],
+        openQuestions: [],
+        memoryCandidates: [],
+        sourceEventCount: 1,
+        metadata: { synthetic: true },
+      }),
+    },
+  });
+
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-working',
+    key: 'durable-rule',
+    content: 'Durable memory remains reviewed canonical state.',
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-working',
+    sessionId: 'working-session',
+    role: 'user',
+    content: 'Implement working summaries.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'repo-working',
+    sessionId: 'working-session',
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-working',
+    sessionId: 'working-session',
+    role: 'assistant',
+    content: 'Bootstrap wiring is now in progress.',
+  });
+
+  const bootstrap = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-working',
+    sessionId: 'working-session',
+    query: 'durable working summary bootstrap',
+    rawTailLimit: 1,
+  });
+
+  assert.equal(bootstrap.results.some((item) => item.type === 'memory' && item.key === 'durable-rule'), true);
+  assert.equal(bootstrap.workingSummary.type, 'working_summary');
+  assert.equal(bootstrap.workingSummary.trust, 'live_continuity');
+  assert.match(bootstrap.workingSummary.content, /storage is done/);
+  assert.equal(bootstrap.rawTail.length, 1);
+  assert.match(bootstrap.rawTail[0].content, /Bootstrap wiring/);
+});
+
+test('distillCheckpoint passes previous working summary to provider for rolling updates', async () => {
+  const dataDir = await makeTempDir();
+  const seenPreviousWorkingSummaries = [];
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'rolling_summary_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      rolling_summary_provider: async (input) => {
+        seenPreviousWorkingSummaries.push(input.previousWorkingSummary);
+        return {
+          summaryShort: 'Rolling summary checkpoint.',
+          summaryText: 'Checkpoint delta for rolling summary.',
+          workingSummary: input.previousWorkingSummary
+            ? `${input.previousWorkingSummary.summaryText}\nUpdated with second pass.`
+            : 'Initial rolling state.',
+          decisions: [],
+          todos: [],
+          openQuestions: [],
+          memoryCandidates: [],
+          sourceEventCount: input.rawEvents.length,
+          metadata: {},
+        };
+      },
+    },
+  });
+
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-rolling',
+    sessionId: 'rolling-session',
+    role: 'user',
+    content: 'Initial raw event.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'repo-rolling',
+    sessionId: 'rolling-session',
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-rolling',
+    sessionId: 'rolling-session',
+    role: 'assistant',
+    content: 'Second raw event.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'repo-rolling',
+    sessionId: 'rolling-session',
+  });
+
+  assert.equal(seenPreviousWorkingSummaries[0], null);
+  assert.match(seenPreviousWorkingSummaries[1].summaryText, /Initial rolling state/);
+  const workingSummary = app.getWorkingSummary({
+    scope: 'repo',
+    scopeKey: 'repo-rolling',
+    sessionId: 'rolling-session',
+  });
+  assert.match(workingSummary.summaryText, /Updated with second pass/);
+});
+
+test('distillCheckpoint recovers when working summary update fails after checkpoint insert', async () => {
+  const dataDir = await makeTempDir();
+  const store = new ContextForgeStore({ dataDir });
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'summary_fail_provider',
+    },
+    cwd: process.cwd(),
+    store,
+    distillProviders: {
+      summary_fail_provider: async () => ({
+        summaryShort: 'Checkpoint survives.',
+        summaryText: 'The checkpoint should persist even if working summary update fails.',
+        workingSummary: 'This working summary update will fail.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [],
+        sourceEventCount: 1,
+        metadata: {},
+      }),
+    },
+  });
+  store.upsertWorkingSummary = () => {
+    throw new Error('synthetic working summary failure');
+  };
+
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-summary-fail',
+    sessionId: 'summary-fail-session',
+    role: 'assistant',
+    content: 'Checkpoint should still be inserted.',
+  });
+
+  const checkpoint = await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'repo-summary-fail',
+    sessionId: 'summary-fail-session',
+  });
+
+  assert.equal(checkpoint.summaryShort, 'Checkpoint survives.');
+  assert.equal(checkpoint.workingSummary.updated, false);
+  assert.match(checkpoint.workingSummary.error.message, /synthetic working summary failure/);
+  const runs = app.listDistillRuns({
+    scope: 'repo',
+    scopeKey: 'repo-summary-fail',
+    sessionId: 'summary-fail-session',
+  });
+  assert.equal(runs[0].status, 'succeeded');
+  assert.equal(runs[0].outputMetadata.checkpointId, checkpoint.id);
+  assert.match(runs[0].outputMetadata.workingSummaryError.message, /synthetic working summary failure/);
+  app.close();
+});
+
+test('distillCheckpoint records working summary if checkpoint insert fails', async () => {
+  const dataDir = await makeTempDir();
+  const store = new ContextForgeStore({ dataDir });
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'checkpoint_fail_provider',
+    },
+    cwd: process.cwd(),
+    store,
+    distillProviders: {
+      checkpoint_fail_provider: async () => ({
+        summaryShort: 'Summary survives.',
+        summaryText: 'Checkpoint insert will fail.',
+        workingSummary: 'Current state can still be saved for handoff.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [],
+        sourceEventCount: 1,
+        metadata: {},
+      }),
+    },
+  });
+  store.insertCheckpoint = () => {
+    throw new Error('synthetic checkpoint insert failure');
+  };
+
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-checkpoint-fail',
+    sessionId: 'checkpoint-fail-session',
+    role: 'assistant',
+    content: 'Working summary should still be attempted.',
+  });
+
+  await assert.rejects(
+    () =>
+      app.distillCheckpoint({
+        scope: 'repo',
+        scopeKey: 'repo-checkpoint-fail',
+        sessionId: 'checkpoint-fail-session',
+      }),
+    /synthetic checkpoint insert failure/,
+  );
+
+  const workingSummary = app.getWorkingSummary({
+    scope: 'repo',
+    scopeKey: 'repo-checkpoint-fail',
+    sessionId: 'checkpoint-fail-session',
+  });
+  assert.match(workingSummary.summaryText, /still be saved/);
+  assert.equal(workingSummary.sourceCheckpointId, null);
+
+  const runs = app.listDistillRuns({
+    scope: 'repo',
+    scopeKey: 'repo-checkpoint-fail',
+    sessionId: 'checkpoint-fail-session',
+  });
+  assert.equal(runs[0].status, 'failed');
+  assert.equal(runs[0].outputMetadata.checkpointFailed, true);
+  assert.equal(runs[0].outputMetadata.workingSummaryUpdated, true);
+
+  const bootstrap = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-checkpoint-fail',
+    sessionId: 'checkpoint-fail-session',
+    query: 'checkpoint failed handoff',
+  });
+  assert.equal(bootstrap.workingSummary.degraded, true);
+  assert.equal(bootstrap.workingSummary.checkpointInsertFailed, true);
+  app.close();
 });
 
 test('raw event TTL pruning is controlled by environment config', async () => {
@@ -3079,6 +3351,7 @@ test('codex_exec provider distills synthetic raw events through a runner', async
         stdout: JSON.stringify({
           summaryShort: 'Codex checkpoint for synthetic events.',
           summaryText: 'The user decided to test the codex_exec provider path.',
+          workingSummary: 'Current state: codex_exec provider path is under synthetic test.',
           decisions: ['Use codex_exec behind the provider contract.'],
           todos: ['Document setup expectations.'],
           openQuestions: [],
@@ -3134,8 +3407,8 @@ test('codex_exec provider distills synthetic raw events through a runner', async
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.model, 'gpt-test');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.reasoningEffort, 'low');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.timeoutMs, 1234);
-  assert.equal(checkpoint.metadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v3');
-  assert.equal(checkpoint.metadata.providerMetadata.codexExec.outputSchemaVersion, 'contextforge.checkpoint.v3');
+  assert.equal(checkpoint.metadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v4');
+  assert.equal(checkpoint.metadata.providerMetadata.codexExec.outputSchemaVersion, 'contextforge.checkpoint.v4');
   assert.match(invocation.prompt, /Return exactly one JSON object/);
   assert.deepEqual(invocation.args.slice(0, 2), ['exec', '--skip-git-repo-check']);
   assert.ok(invocation.args.includes('--output-schema'));
@@ -3153,9 +3426,9 @@ test('codex_exec provider distills synthetic raw events through a runner', async
     sessionId: 'codex-session',
   });
   assert.equal(runs[0].status, 'succeeded');
-  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v3');
-  assert.equal(runs[0].inputMetadata.providerMetadata.outputSchemaVersion, 'contextforge.checkpoint.v3');
-  assert.equal(runs[0].outputMetadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v3');
+  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v4');
+  assert.equal(runs[0].inputMetadata.providerMetadata.outputSchemaVersion, 'contextforge.checkpoint.v4');
+  assert.equal(runs[0].outputMetadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v4');
 });
 
 test('codex_exec records JSON brace fallback recovery metadata', async () => {
@@ -3170,6 +3443,7 @@ test('codex_exec records JSON brace fallback recovery metadata', async () => {
       stdout: `prefix ${JSON.stringify({
         summaryShort: 'Recovered checkpoint.',
         summaryText: 'The provider output needed brace fallback recovery.',
+        workingSummary: 'Current state: brace fallback recovery succeeded.',
         decisions: [],
         todos: [],
         openQuestions: [],
@@ -3358,8 +3632,8 @@ test('codex_exec parse failures preserve raw evidence', async () => {
   });
   assert.equal(runs[0].status, 'failed');
   assert.equal(runs[0].outputMetadata.providerFailed, true);
-  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v3');
-  assert.equal(runs[0].outputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v3');
+  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v4');
+  assert.equal(runs[0].outputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v4');
 });
 
 test('bootstrapContext returns semantic retrieval with trust and verification hints', async () => {
@@ -3415,9 +3689,11 @@ test('bootstrapContext returns semantic retrieval with trust and verification hi
     scopeKey: 'repo-bootstrap',
     query: 'indentation style examples',
     limit: 3,
+    rawTailLimit: 0,
   });
   const stableHit = stableResult.results.find((item) => item.key === 'indentation-style');
   assert.equal(stableHit.verificationRequired, false);
+  assert.equal(Object.hasOwn(stableResult, 'rawTailLimit'), false);
 });
 
 test('bootstrapContext reuses one query embedding across repo and shared retrieval', async () => {
@@ -3625,6 +3901,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'distill_checkpoint',
       'distill_usage',
       'get_memory',
+      'get_working_summary',
       'list_memory_candidates',
       'list_memory_events',
       'promote_memory',
@@ -3647,6 +3924,9 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.ok(distillTool.inputSchema.properties.maxChars);
     const distillUsageTool = toolList.tools.find((tool) => tool.name === 'distill_usage');
     assert.ok(distillUsageTool.inputSchema.properties.charsPerToken);
+    const bootstrapTool = toolList.tools.find((tool) => tool.name === 'bootstrap_context');
+    assert.ok(bootstrapTool.inputSchema.properties.sessionId);
+    assert.ok(bootstrapTool.inputSchema.properties.rawTailLimit);
 
     const rememberResult = await client.callTool({
       name: 'remember',
