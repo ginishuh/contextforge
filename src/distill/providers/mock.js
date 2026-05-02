@@ -24,6 +24,10 @@ export async function distillWithMockProvider(input) {
       `Roles: ${roles}`,
       `First event: ${firstUsefulLine(events)}`,
     ].join('\n'),
+    workingSummary: [
+      `Current session state for ${input.session.sessionId}: ${sourceEventCount} raw event(s) distilled.`,
+      `Latest useful event: ${firstUsefulLine(events)}`,
+    ].join('\n'),
     decisions: collectLines(events, /\b(decision|decide|decided)\b/i),
     todos: collectLines(events, /\b(todo|next|follow up|fix|implement)\b/i),
     openQuestions: collectLines(events, /\?/),

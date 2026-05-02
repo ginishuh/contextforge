@@ -19,6 +19,10 @@ Use semantic repo retrieval early for loose continuation requests such as
 handoff. Search results may include durable memories, recent checkpoints, and
 memory candidates; use all three as context candidates.
 
+When resuming a known session, pass `sessionId` to bootstrap_context. Use the
+returned `workingSummary` as latest rolling handoff state, and keep it separate
+from reviewed durable memory and checkpoint retrieval results.
+
 Before relying on results, identify whether ContextForge is using remote
 canonical storage or local/project-local storage. Remote results are shared
 ContextForge state for the configured scope. Local/project-local results are
@@ -172,7 +176,10 @@ trust levels.
    may affect the task, then call `search`.
 5. If resuming a known session, call `session_status` for that `sessionId` to
    inspect recent checkpoint state.
-6. If the task depends on recent handoff state, call `list_memory_candidates`
+6. If the task needs live handoff state, pass `sessionId` to
+   `bootstrap_context` or call `get_working_summary`. Treat the returned
+   working summary as current session state, not durable truth.
+7. If the task depends on recent handoff state, call `list_memory_candidates`
    for the relevant session or checkpoint and review candidates before
    promoting anything.
 

@@ -59,6 +59,10 @@ export function validateDistillOutput(output) {
     decisions: output.decisions,
     todos: output.todos,
     openQuestions: output.openQuestions,
+    workingSummary:
+      typeof output.workingSummary === 'string' && output.workingSummary.trim()
+        ? output.workingSummary
+        : output.summaryText,
     memoryCandidates: output.memoryCandidates,
     sourceEventCount: output.sourceEventCount,
     provider: output.provider,

@@ -232,6 +232,14 @@ function bootstrapUseHint(result) {
   return 'Context candidate; verify before acting.';
 }
 
+function errorSummary(error) {
+  if (!error) return null;
+  return {
+    name: error.name || 'Error',
+    message: error.message || String(error),
+  };
+}
+
 function bootstrapResultSummary(result) {
   if (result.memory) {
     return {
@@ -263,6 +271,38 @@ function bootstrapResultSummary(result) {
     key: null,
     category: null,
     content: '',
+  };
+}
+
+function bootstrapWorkingSummary(summary) {
+  if (!summary) {
+    return null;
+  }
+  return {
+    type: 'working_summary',
+    id: summary.id,
+    sessionId: summary.sessionId,
+    conversationId: summary.conversationId,
+    content: truncateText(summary.summaryText, 1200),
+    summaryShort: summary.summaryShort,
+    sourceCheckpointId: summary.sourceCheckpointId,
+    distillRunId: summary.distillRunId,
+    sourceEventCount: summary.sourceEventCount,
+    updatedAt: summary.updatedAt,
+    trust: 'live_continuity',
+    verificationRequired: true,
+    whyUse:
+      'Latest rolling session state for handoff; useful for live continuation, but not reviewed durable memory.',
+  };
+}
+
+function bootstrapRawTailEvent(event) {
+  return {
+    id: event.id,
+    role: event.role,
+    content: truncateText(event.content, 800),
+    metadata: event.metadata,
+    createdAt: event.createdAt,
   };
 }
 
@@ -696,6 +736,8 @@ export function createContextForge(options = {}) {
       const limit = positiveNumber(options.limit == null ? 8 : Number(options.limit), 'limit');
       const sharedLimit = Math.min(3, limit);
       const includeShared = truthyOption(options.includeShared);
+      const rawTailLimit =
+        options.rawTailLimit == null ? 5 : positiveNumber(Number(options.rawTailLimit), 'rawTailLimit');
       return useStore(async (store) => {
         const info = buildDbInfo(store);
         const queryEmbedding = embeddingProvider
@@ -736,12 +778,22 @@ export function createContextForge(options = {}) {
           ...repoResults.map((result) => bootstrapResult(result, 'primary')),
           ...sharedResults.map((result) => bootstrapResult(result, 'shared')),
         ];
+        const sessionId = options.sessionId || null;
+        const workingSummary = sessionId
+          ? bootstrapWorkingSummary(store.getWorkingSummary({ ...scope, sessionId }))
+          : null;
+        const rawTail = sessionId
+          ? store
+              .listRecentRawEvents({ ...scope, sessionId, limit: rawTailLimit })
+              .map((event) => bootstrapRawTailEvent(event))
+          : [];
         return {
           scope,
           storage: storageBootstrapInfo(config, info),
           query: options.query,
           includeShared,
           sharedLimit: includeShared ? sharedLimit : null,
+          ...(sessionId ? { sessionId, workingSummary, rawTail, rawTailLimit } : {}),
           ...(sharedSkippedReason ? { sharedSkippedReason } : {}),
           summary: bootstrapSummary(results),
           results,
@@ -1146,6 +1198,12 @@ export function createContextForge(options = {}) {
       return useStore((store) => store.listRawEvents({ ...scope, sessionId: options.sessionId }));
     },
 
+    getWorkingSummary(options) {
+      const scope = normalizeScopeOptions(options, config);
+      requireOption(options.sessionId, 'sessionId');
+      return useStore((store) => store.getWorkingSummary({ ...scope, sessionId: options.sessionId }));
+    },
+
     async distillCheckpoint(options) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.sessionId, 'sessionId');
@@ -1157,6 +1215,7 @@ export function createContextForge(options = {}) {
       return useStore(async (store) => {
         const rawEvents = store.listRawEvents({ ...scope, sessionId: options.sessionId });
         const previousCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId });
+        const previousWorkingSummary = store.getWorkingSummary({ ...scope, sessionId: options.sessionId });
         const policy = {
           maxEvents: positiveNumber(
             options.maxEvents == null ? config.distillPolicy.maxEvents : Number(options.maxEvents),
@@ -1178,6 +1237,7 @@ export function createContextForge(options = {}) {
           decisions: 'string[]',
           todos: 'string[]',
           openQuestions: 'string[]',
+          workingSummary: 'string',
           memoryCandidates: 'object[]',
           sourceEventCount: 'number',
           provider: 'string',
@@ -1192,6 +1252,7 @@ export function createContextForge(options = {}) {
           inputMetadata: {
             rawEventIds: selectedRawEvents.map((event) => event.id),
             previousCheckpointId: previousCheckpoint?.id || null,
+            previousWorkingSummaryId: previousWorkingSummary?.id || null,
             requestedOutputSchema,
             providerMetadata,
             sourceProvenance,
@@ -1209,6 +1270,7 @@ export function createContextForge(options = {}) {
             },
             rawEvents: selectedRawEvents,
             previousCheckpoint,
+            previousWorkingSummary,
             requestedOutputSchema,
           });
         } catch (error) {
@@ -1239,7 +1301,7 @@ export function createContextForge(options = {}) {
           throw error;
         }
 
-        const checkpoint = store.insertCheckpoint({
+        const checkpointInput = {
           ...scope,
           sessionId: options.sessionId,
           conversationId,
@@ -1258,7 +1320,56 @@ export function createContextForge(options = {}) {
             sourceRawEventIds: selectedRawEvents.map((event) => event.id),
             sourceEventWindow: distillWindow.metadata,
           },
-        });
+        };
+
+        let checkpoint = null;
+        let checkpointError = null;
+        try {
+          checkpoint = store.insertCheckpoint(checkpointInput);
+        } catch (error) {
+          checkpointError = error;
+        }
+
+        let workingSummary = null;
+        let workingSummaryError = null;
+        try {
+          workingSummary = store.upsertWorkingSummary({
+            ...scope,
+            sessionId: options.sessionId,
+            conversationId,
+            summaryShort: output.summaryShort,
+            summaryText: output.workingSummary || output.summaryText,
+            sourceCheckpointId: checkpoint?.id || null,
+            distillRunId: distillRun.id,
+            sourceEventCount: output.sourceEventCount ?? selectedRawEvents.length,
+            metadata: {
+              providerMetadata: output.metadata,
+              sourceProvenance,
+              sourceRawEventIds: selectedRawEvents.map((event) => event.id),
+              sourceEventWindow: distillWindow.metadata,
+              checkpointId: checkpoint?.id || null,
+              checkpointInsertFailed: Boolean(checkpointError),
+            },
+          });
+        } catch (error) {
+          workingSummaryError = error;
+        }
+
+        if (checkpointError) {
+          store.failDistillRun({
+            id: distillRun.id,
+            error: checkpointError,
+            outputMetadata: {
+              checkpointFailed: true,
+              checkpointError: errorSummary(checkpointError),
+              workingSummaryUpdated: Boolean(workingSummary),
+              workingSummaryId: workingSummary?.id || null,
+              workingSummaryError: errorSummary(workingSummaryError),
+              providerMetadata: output.metadata,
+            },
+          });
+          throw checkpointError;
+        }
 
         store.completeDistillRun({
           id: distillRun.id,
@@ -1266,6 +1377,9 @@ export function createContextForge(options = {}) {
             checkpointId: checkpoint.id,
             provider: checkpoint.provider,
             memoryCandidateCount: output.memoryCandidates.length,
+            workingSummaryUpdated: Boolean(workingSummary),
+            workingSummaryId: workingSummary?.id || null,
+            workingSummaryError: errorSummary(workingSummaryError),
             providerMetadata: output.metadata,
           },
         });
@@ -1299,6 +1413,11 @@ export function createContextForge(options = {}) {
         return {
           ...checkpoint,
           memoryCandidateCount: output.memoryCandidates.length,
+          workingSummary: {
+            updated: Boolean(workingSummary),
+            id: workingSummary?.id || null,
+            error: errorSummary(workingSummaryError),
+          },
           embedding,
         };
       });

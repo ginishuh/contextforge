@@ -27,6 +27,7 @@ const MCP_INSTRUCTIONS = [
   'At the start of non-trivial project work, call bootstrap_context with repoPath, cwd, or an explicit scopeKey. It summarizes storage authority, vector readiness, repo semantic retrieval results, and trust hints in one response.',
   'If db_info shows remote storage, treat results as shared canonical ContextForge state for the configured scope. If it shows local or project-local storage, treat results as machine-local context unless the user confirms that store is authoritative.',
   'Search result types have different trust levels: memory is reviewed durable fact or decision; checkpoint is recent session continuity, not canonical truth; memory_candidate is an unreviewed promotion candidate for review.',
+  'When resuming a known session, pass sessionId to bootstrap_context or call get_working_summary to load latest rolling handoff state separately from durable memory and checkpoint search results.',
   'If working on a repository while the MCP process cwd is elsewhere, pass repoPath or cwd so repo scope resolves to that checkout; repoPath takes precedence when both are provided.',
   'Treat scopeKey as the canonical repo memory key; pass an explicit normalized GitHub key when local paths differ across machines or the checkout cannot infer the right remote.',
   'Use remember for reviewed durable facts the user or assistant intentionally wants saved.',
@@ -71,6 +72,8 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
       inputSchema: {
         ...scopedSchema,
         query: z.string(),
+        sessionId: z.string().optional(),
+        rawTailLimit: z.number().int().positive().optional(),
         includeShared: z.boolean().optional(),
         limit: z.number().int().positive().optional(),
         sharedScopeKey: z.string().optional(),
@@ -249,6 +252,25 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
       },
     },
     async (args) => jsonResult(await app.pruneRawEvents(args)),
+  );
+
+  server.registerTool(
+    'get_working_summary',
+    {
+      title: 'Get Working Summary',
+      description:
+        'Fetch the latest rolling working summary for one scoped session. This is live continuation state, not reviewed durable memory.',
+      inputSchema: {
+        ...scopedSchema,
+        sessionId: z.string(),
+      },
+      annotations: {
+        title: 'Get Working Summary',
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.getWorkingSummary(args)),
   );
 
   server.registerTool(
