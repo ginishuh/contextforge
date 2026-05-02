@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-export const CODEX_EXEC_PROMPT_VERSION = 'codex_exec.prompt.v3';
+export const CODEX_EXEC_PROMPT_VERSION = 'codex_exec.prompt.v4';
 export const CODEX_EXEC_OUTPUT_SCHEMA_VERSION = 'contextforge.checkpoint.v4';
 
 const OUTPUT_SCHEMA = {

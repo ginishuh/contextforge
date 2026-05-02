@@ -2881,6 +2881,15 @@ test('distillCheckpoint records working summary if checkpoint insert fails', asy
   assert.equal(runs[0].status, 'failed');
   assert.equal(runs[0].outputMetadata.checkpointFailed, true);
   assert.equal(runs[0].outputMetadata.workingSummaryUpdated, true);
+
+  const bootstrap = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-checkpoint-fail',
+    sessionId: 'checkpoint-fail-session',
+    query: 'checkpoint failed handoff',
+  });
+  assert.equal(bootstrap.workingSummary.degraded, true);
+  assert.equal(bootstrap.workingSummary.checkpointInsertFailed, true);
   app.close();
 });
 
@@ -3398,7 +3407,7 @@ test('codex_exec provider distills synthetic raw events through a runner', async
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.model, 'gpt-test');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.reasoningEffort, 'low');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.timeoutMs, 1234);
-  assert.equal(checkpoint.metadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v3');
+  assert.equal(checkpoint.metadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v4');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.outputSchemaVersion, 'contextforge.checkpoint.v4');
   assert.match(invocation.prompt, /Return exactly one JSON object/);
   assert.deepEqual(invocation.args.slice(0, 2), ['exec', '--skip-git-repo-check']);
@@ -3417,9 +3426,9 @@ test('codex_exec provider distills synthetic raw events through a runner', async
     sessionId: 'codex-session',
   });
   assert.equal(runs[0].status, 'succeeded');
-  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v3');
+  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v4');
   assert.equal(runs[0].inputMetadata.providerMetadata.outputSchemaVersion, 'contextforge.checkpoint.v4');
-  assert.equal(runs[0].outputMetadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v3');
+  assert.equal(runs[0].outputMetadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v4');
 });
 
 test('codex_exec records JSON brace fallback recovery metadata', async () => {
@@ -3623,8 +3632,8 @@ test('codex_exec parse failures preserve raw evidence', async () => {
   });
   assert.equal(runs[0].status, 'failed');
   assert.equal(runs[0].outputMetadata.providerFailed, true);
-  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v3');
-  assert.equal(runs[0].outputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v3');
+  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v4');
+  assert.equal(runs[0].outputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v4');
 });
 
 test('bootstrapContext returns semantic retrieval with trust and verification hints', async () => {
@@ -3680,9 +3689,11 @@ test('bootstrapContext returns semantic retrieval with trust and verification hi
     scopeKey: 'repo-bootstrap',
     query: 'indentation style examples',
     limit: 3,
+    rawTailLimit: 0,
   });
   const stableHit = stableResult.results.find((item) => item.key === 'indentation-style');
   assert.equal(stableHit.verificationRequired, false);
+  assert.equal(Object.hasOwn(stableResult, 'rawTailLimit'), false);
 });
 
 test('bootstrapContext reuses one query embedding across repo and shared retrieval', async () => {

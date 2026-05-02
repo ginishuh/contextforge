@@ -278,6 +278,8 @@ function bootstrapWorkingSummary(summary) {
   if (!summary) {
     return null;
   }
+  const checkpointInsertFailed = Boolean(summary.metadata?.checkpointInsertFailed);
+  // Keep bootstrap small and avoid leaking provider metadata; expose only handoff-safe state flags.
   return {
     type: 'working_summary',
     id: summary.id,
@@ -288,6 +290,8 @@ function bootstrapWorkingSummary(summary) {
     sourceCheckpointId: summary.sourceCheckpointId,
     distillRunId: summary.distillRunId,
     sourceEventCount: summary.sourceEventCount,
+    degraded: checkpointInsertFailed,
+    checkpointInsertFailed,
     updatedAt: summary.updatedAt,
     trust: 'live_continuity',
     verificationRequired: true,
@@ -736,8 +740,12 @@ export function createContextForge(options = {}) {
       const limit = positiveNumber(options.limit == null ? 8 : Number(options.limit), 'limit');
       const sharedLimit = Math.min(3, limit);
       const includeShared = truthyOption(options.includeShared);
-      const rawTailLimit =
-        options.rawTailLimit == null ? 5 : positiveNumber(Number(options.rawTailLimit), 'rawTailLimit');
+      const sessionId = options.sessionId || null;
+      const rawTailLimit = sessionId
+        ? options.rawTailLimit == null
+          ? 5
+          : positiveNumber(Number(options.rawTailLimit), 'rawTailLimit')
+        : null;
       return useStore(async (store) => {
         const info = buildDbInfo(store);
         const queryEmbedding = embeddingProvider
@@ -778,7 +786,6 @@ export function createContextForge(options = {}) {
           ...repoResults.map((result) => bootstrapResult(result, 'primary')),
           ...sharedResults.map((result) => bootstrapResult(result, 'shared')),
         ];
-        const sessionId = options.sessionId || null;
         const workingSummary = sessionId
           ? bootstrapWorkingSummary(store.getWorkingSummary({ ...scope, sessionId }))
           : null;

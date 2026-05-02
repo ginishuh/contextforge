@@ -399,8 +399,6 @@ export class ContextForgeStore {
         ON distill_runs(scope_type, scope_key, session_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_working_summaries_scope
         ON working_summaries(scope_type, scope_key, updated_at);
-      CREATE INDEX IF NOT EXISTS idx_working_summaries_session
-        ON working_summaries(scope_type, scope_key, session_id);
       CREATE INDEX IF NOT EXISTS idx_memory_candidate_scope_status
         ON memory_candidate_index(scope_type, scope_key, status, created_at);
       CREATE INDEX IF NOT EXISTS idx_memory_candidate_checkpoint
