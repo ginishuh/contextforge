@@ -569,11 +569,14 @@ node src/cli.js ingestCodexRollout \
   --distill auto
 ```
 
-`ingestCodexRollout` captures user, assistant, tool-call, and tool-result
-records, skips developer/system instructions, deduplicates previously ingested
-records by stable ingest ids, then checks `sessionStatus`. Use `--distill never`
-to capture only, `--distill auto` to distill when thresholds recommend it, or
-`--distill always` to force a checkpoint after ingest.
+`ingestCodexRollout` captures user and assistant conversation records, skips
+developer/system instructions, and leaves tool-call/tool-result payloads in the
+native Codex transcript. ContextForge raw events are distillation-ready
+conversation evidence, not a clone of the native JSONL log. The adapter
+deduplicates previously ingested records by stable ingest ids, then checks
+`sessionStatus`. Use `--distill never` to capture only, `--distill auto` to
+distill when thresholds recommend it, or `--distill always` to force a
+checkpoint after ingest.
 
 Codex-ingested raw events use a namespaced session id:
 `codex:<native-codex-session-id>`. Their metadata also includes
@@ -783,11 +786,19 @@ checkpoint by itself. After a checkpoint exists, the event threshold is paired
 with the interval threshold, and the character threshold can trigger on its own
 to avoid overrunning the provider input budget.
 
-Checkpoint distillation uses a bounded recent raw-event window. Very large
-sessions are not sent to the provider as one prompt; ContextForge selects at
-most `CONTEXTFORGE_DISTILL_MAX_EVENTS` and
-`CONTEXTFORGE_DISTILL_MAX_CHARS`, then records `sourceEventWindow` and
-`sourceRawEventIds` metadata on the run/checkpoint for auditability.
+Checkpoint distillation uses a bounded oldest-first conversation window after
+the latest checkpoint. Very large sessions are not sent to the provider as one
+prompt; ContextForge selects at most `CONTEXTFORGE_DISTILL_MAX_EVENTS` and
+`CONTEXTFORGE_DISTILL_MAX_CHARS` from eligible user/assistant events, then
+records `sourceEventWindow` and `sourceRawEventIds` metadata on the
+run/checkpoint for auditability. When a window is truncated, the next
+checkpoint continues after the last selected raw id so conversation evidence is
+drained sequentially rather than skipping older raw events.
+
+Tool output is evidence, not conversation memory. Long logs, DB dumps, and
+shell output should remain in the native transcript or an explicit artifact;
+checkpoints should preserve the assistant's interpreted verification facts,
+commands, paths, errors, and conclusions that matter for future continuation.
 
 Each successful `distillCheckpoint` also updates one scoped working summary for
 the session. Checkpoints remain immutable delta records for retrieval,

@@ -223,7 +223,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
         ...scopedSchema,
         sessionId: z.string(),
         conversationId: z.string().optional(),
-        role: z.string(),
+        role: z.enum(['user', 'assistant']),
         content: z.string(),
         metadata: metadataSchema.optional(),
       },

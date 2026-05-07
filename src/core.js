@@ -445,6 +445,10 @@ function checkpointTimestamp(checkpoint) {
   return checkpoint?.createdAt ? Date.parse(checkpoint.createdAt) : null;
 }
 
+function isDistillableRawEvent(event) {
+  return event?.role === 'user' || event?.role === 'assistant';
+}
+
 function eventsAfterCheckpoint(events, checkpoint) {
   const sourceRawEventIds = Array.isArray(checkpoint?.metadata?.sourceRawEventIds)
     ? checkpoint.metadata.sourceRawEventIds
@@ -453,13 +457,13 @@ function eventsAfterCheckpoint(events, checkpoint) {
   if (lastSourceRawEventId) {
     const lastSourceIndex = events.findIndex((event) => event.id === lastSourceRawEventId);
     if (lastSourceIndex !== -1) {
-      return events.slice(lastSourceIndex + 1);
+      return events.slice(lastSourceIndex + 1).filter(isDistillableRawEvent);
     }
   }
 
   const checkpointTime = checkpointTimestamp(checkpoint);
-  if (!checkpointTime) return events;
-  return events.filter((event) => Date.parse(event.createdAt) > checkpointTime);
+  if (!checkpointTime) return events.filter(isDistillableRawEvent);
+  return events.filter((event) => isDistillableRawEvent(event) && Date.parse(event.createdAt) > checkpointTime);
 }
 
 function selectDistillWindow(rawEvents, latestCheckpoint, policy) {
@@ -469,14 +473,14 @@ function selectDistillWindow(rawEvents, latestCheckpoint, policy) {
   const maxEvents = policy.maxEvents;
   const maxChars = policy.maxChars;
 
-  for (let index = candidateEvents.length - 1; index >= 0; index -= 1) {
+  for (let index = 0; index < candidateEvents.length; index += 1) {
     if (selected.length >= maxEvents) break;
     const event = candidateEvents[index];
     const eventChars = String(event.content || '').length;
     if (selected.length > 0 && selectedChars + eventChars > maxChars) {
       break;
     }
-    selected.unshift(event);
+    selected.push(event);
     selectedChars += eventChars;
     if (selectedChars >= maxChars) {
       break;
@@ -1167,6 +1171,9 @@ export function createContextForge(options = {}) {
       requireOption(options.sessionId, 'sessionId');
       requireOption(options.role, 'role');
       requireOption(options.content, 'content');
+      if (options.role !== 'user' && options.role !== 'assistant') {
+        throw new Error('role must be one of: user, assistant');
+      }
       return useStore((store) => {
         pruneRawEventsIfDue(store);
         return store.appendRawEvent({

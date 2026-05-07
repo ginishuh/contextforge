@@ -42,12 +42,6 @@ function textFromContent(content) {
     .map((item) => {
       if (!item || typeof item !== 'object') return '';
       if (item.type === 'text') return item.text || '';
-      if (item.type === 'tool_use') {
-        return JSON.stringify({ name: item.name || 'tool_use', input: item.input || {}, id: item.id || null }, null, 2);
-      }
-      if (item.type === 'tool_result') {
-        return typeof item.content === 'string' ? item.content : JSON.stringify(item.content ?? '', null, 2);
-      }
       return '';
     })
     .filter(Boolean)
@@ -60,16 +54,6 @@ function roleFromRecord(record) {
     return role;
   }
   return null;
-}
-
-function outputRoleFromContent(content, fallbackRole) {
-  if (Array.isArray(content) && content.some((item) => item?.type === 'tool_use')) {
-    return 'tool_call';
-  }
-  if (Array.isArray(content) && content.some((item) => item?.type === 'tool_result')) {
-    return 'tool_result';
-  }
-  return fallbackRole;
 }
 
 export function normalizeClaudeCodeRecord(record, context, options = {}) {
@@ -94,7 +78,7 @@ export function normalizeClaudeCodeRecord(record, context, options = {}) {
 
   const native = context.nativeSessionId || stripClaudeCodeSessionPrefix(context.sessionId) || null;
   return {
-    role: outputRoleFromContent(contentValue, role),
+    role,
     content: content.text,
     metadata: {
       source: 'claude_code_jsonl',

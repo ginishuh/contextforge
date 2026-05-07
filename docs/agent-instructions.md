@@ -435,7 +435,10 @@ Prefer distilling at meaningful boundaries:
 - `correct_memory`: update a durable memory while preserving provenance.
 - `deactivate_memory`: remove a durable memory from retrieval without deleting
   history.
-- `append_raw`: capture scoped evidence for distillation and debugging.
+- `append_raw`: capture scoped user/assistant conversation evidence for
+  distillation and debugging. Tool output is evidence, not conversation memory;
+  keep tool-call/tool-result payloads in the native agent transcript or an
+  explicit artifact, and distill the assistant-interpreted verification facts.
 - `session_status`: inspect raw/checkpoint thresholds before distilling.
 - `distill_checkpoint`: create a recent-continuity checkpoint.
 - `distill_usage`: summarize distillation run counts, selected input size,
