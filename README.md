@@ -551,8 +551,8 @@ Distillation cost is controlled by the threshold policy. `CONTEXTFORGE_DISTILL_M
 sets the normal minimum interval after a checkpoint, and
 `CONTEXTFORGE_DISTILL_CHAR_MIN_INTERVAL_MS` controls how soon a char-threshold
 trigger may create another checkpoint. By default the char trigger uses the same
-minimum interval, so one long tool output does not immediately force another
-LLM distillation right after a checkpoint.
+minimum interval, so one long conversation turn does not immediately force
+another LLM distillation right after a checkpoint.
 
 Codex TUI sessions can also be ingested from their rollout JSONL artifacts
 without routing raw transcript text through the model. This keeps raw capture
@@ -795,10 +795,22 @@ run/checkpoint for auditability. When a window is truncated, the next
 checkpoint continues after the last selected raw id so conversation evidence is
 drained sequentially rather than skipping older raw events.
 
+If a session has a large backlog, oldest-first draining may require several
+`distillCheckpoint` calls before the newest conversation turns appear in a
+checkpoint. This is intentional: ContextForge favors gap-free checkpoint
+chains over jumping straight to the newest tail.
+
 Tool output is evidence, not conversation memory. Long logs, DB dumps, and
 shell output should remain in the native transcript or an explicit artifact;
 checkpoints should preserve the assistant's interpreted verification facts,
 commands, paths, errors, and conclusions that matter for future continuation.
+Existing databases may still contain older `tool_call` or `tool_result`
+`raw_events` rows. Those rows are preserved and still visible through
+`listRawEvents`, but new distillation windows exclude them from
+`eventsSinceLastCheckpoint`, `charsSinceLastCheckpoint`, and provider input.
+The lower-level storage API intentionally remains permissive for legacy data
+and tests; the public `appendRaw` API and MCP `append_raw` tool enforce the
+`user`/`assistant` role boundary.
 
 Each successful `distillCheckpoint` also updates one scoped working summary for
 the session. Checkpoints remain immutable delta records for retrieval,
