@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-export const CODEX_EXEC_PROMPT_VERSION = 'codex_exec.prompt.v4';
+export const CODEX_EXEC_PROMPT_VERSION = 'codex_exec.prompt.v5';
 export const CODEX_EXEC_OUTPUT_SCHEMA_VERSION = 'contextforge.checkpoint.v4';
 
 const OUTPUT_SCHEMA = {
@@ -170,7 +170,10 @@ export function buildCodexExecPrompt(input, options = {}) {
       'Return only JSON that matches the requested schema.',
       'Do not include Markdown, code fences, commentary, or private assumptions.',
       'Preserve uncertainty in openQuestions instead of inventing facts.',
-      'Use only the raw events and previous checkpoint supplied in this request.',
+      'Use only the conversation events and previous checkpoint supplied in this request.',
+      'rawEvents contains distillation-ready user/assistant conversation evidence only; it is not a native transcript clone.',
+      'Tool call and tool result payloads are not included by default. Tool output is evidence, not conversation memory.',
+      'When tool verification matters, summarize the assistant-interpreted conclusion instead of copying raw command output.',
       'Write the checkpoint as recent continuity for handoff and search, not as canonical durable truth.',
       'Write workingSummary as the latest rolling session state for immediate continuation: current goal, completed work, active blockers, and next actions.',
       'If previousWorkingSummary is supplied, update it with the new raw events instead of replacing it with a delta-only summary.',

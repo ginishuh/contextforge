@@ -47,22 +47,6 @@ function textFromContent(content) {
     .join('\n\n');
 }
 
-function normalizeFunctionCall(payload) {
-  const name = payload.name || payload.call?.name || 'tool_call';
-  const args = payload.arguments || payload.call?.arguments || {};
-  return {
-    role: 'tool_call',
-    content: JSON.stringify({ name, arguments: args }, null, 2),
-  };
-}
-
-function normalizeFunctionOutput(payload) {
-  return {
-    role: 'tool_result',
-    content: payload.output || payload.result || '',
-  };
-}
-
 export function normalizeCodexRolloutRecord(record, context, options = {}) {
   if (record.type === 'session_meta') {
     const nativeSessionId = record.payload?.id;
@@ -84,17 +68,13 @@ export function normalizeCodexRolloutRecord(record, context, options = {}) {
       role: payload.role,
       content: textFromContent(payload.content),
     };
-  } else if (payload.type === 'function_call') {
-    normalized = normalizeFunctionCall(payload);
-  } else if (payload.type === 'function_call_output') {
-    normalized = normalizeFunctionOutput(payload);
   }
 
   if (!normalized?.content) {
     return null;
   }
 
-      const content = truncate(normalized.content, options.maxContentChars || DEFAULT_MAX_CONTENT_CHARS);
+  const content = truncate(normalized.content, options.maxContentChars || DEFAULT_MAX_CONTENT_CHARS);
   return {
     role: normalized.role,
     content: content.text,

@@ -270,7 +270,7 @@ Recommended order:
 1. current repository reality
 2. ContextForge durable memory from `repo + shared`
 3. checkpoints for recent continuity when requested
-4. raw evidence only when explicit
+4. raw conversation evidence only when explicit
 5. built-in agent memory and markdown fallback as supporting context
 
 Avoid:
@@ -279,6 +279,11 @@ Avoid:
 - auto-loading raw events
 - dumping giant memory files into prompt context
 - treating vector results as unexplainable truth
+
+ContextForge raw events are a distillation-ready conversation evidence stream,
+not a canonical clone of native agent transcripts. Store user/assistant
+dialogue for checkpointing; leave tool-call/tool-result payloads, long logs,
+DB dumps, and shell output in the native transcript or an explicit artifact.
 
 The default runtime should minimize prompt bloat by preloading only tiny
 bootstrap context, then using `search` and `getMemory` for detail.

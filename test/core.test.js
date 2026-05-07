@@ -149,7 +149,10 @@ async function writeSyntheticClaudeCodeTranscript(filePath, sessionId = 'claude-
       timestamp: '2026-04-25T00:00:04.000Z',
       message: {
         role: 'assistant',
-        content: [{ type: 'text', text: 'I added Claude Code transcript ingestion.' }],
+        content: [
+          { type: 'text', text: 'I added Claude Code transcript ingestion.' },
+          { type: 'tool_use', id: 'toolu_2', name: 'TodoWrite', input: { todos: [] } },
+        ],
       },
     },
   ];
@@ -1246,10 +1249,10 @@ test('CLI ingests Codex rollout JSONL idempotently without capturing developer m
     { env },
   );
   const firstResult = JSON.parse(first.stdout);
-  assert.equal(firstResult.parsedEvents, 4);
-  assert.equal(firstResult.appendedEvents, 4);
+  assert.equal(firstResult.parsedEvents, 2);
+  assert.equal(firstResult.appendedEvents, 2);
   assert.equal(firstResult.skippedEvents, 0);
-  assert.equal(firstResult.status.rawEventCount, 4);
+  assert.equal(firstResult.status.rawEventCount, 2);
 
   const second = await execFileAsync(
     'node',
@@ -1269,8 +1272,8 @@ test('CLI ingests Codex rollout JSONL idempotently without capturing developer m
   );
   const secondResult = JSON.parse(second.stdout);
   assert.equal(secondResult.appendedEvents, 0);
-  assert.equal(secondResult.skippedEvents, 4);
-  assert.equal(secondResult.status.rawEventCount, 4);
+  assert.equal(secondResult.skippedEvents, 2);
+  assert.equal(secondResult.status.rawEventCount, 2);
 
   const rawEvents = await execFileAsync(
     'node',
@@ -1289,7 +1292,7 @@ test('CLI ingests Codex rollout JSONL idempotently without capturing developer m
   const events = JSON.parse(rawEvents.stdout);
   assert.deepEqual(
     events.map((event) => event.role),
-    ['user', 'tool_call', 'tool_result', 'assistant'],
+    ['user', 'assistant'],
   );
   assert.equal(events.some((event) => event.content.includes('Developer instructions')), false);
   assert.ok(events.every((event) => event.metadata.ingestId));
@@ -1331,7 +1334,7 @@ test('CLI ingest can auto-distill Codex rollout evidence', async () => {
     { env },
   );
   const result = JSON.parse(ingested.stdout);
-  assert.equal(result.appendedEvents, 4);
+  assert.equal(result.appendedEvents, 2);
   assert.equal(result.status.shouldDistill, true);
   assert.equal(result.checkpoint.sessionId, 'codex:codex-auto-distill-session');
   assert.equal(result.checkpoint.provider, 'mock');
@@ -1377,7 +1380,7 @@ test('Codex ingest preserves raw evidence when auto distill fails', async () => 
     charThreshold: 1,
   });
 
-  assert.equal(result.appendedEvents, 4);
+  assert.equal(result.appendedEvents, 2);
   assert.equal(result.checkpoint, null);
   assert.match(result.checkpointError.message, /synthetic provider failure/);
 
@@ -1386,7 +1389,7 @@ test('Codex ingest preserves raw evidence when auto distill fails', async () => 
     scopeKey: 'codex-auto-fail-repo',
     sessionId: 'codex:codex-auto-fail-session',
   });
-  assert.equal(events.length, 4);
+  assert.equal(events.length, 2);
   const runs = app.listDistillRuns({
     scope: 'repo',
     scopeKey: 'codex-auto-fail-repo',
@@ -1474,8 +1477,8 @@ test('CLI ingest works through remote storage mode', async () => {
       { env },
     );
     const result = JSON.parse(ingested.stdout);
-    assert.equal(result.appendedEvents, 4);
-    assert.equal(result.status.rawEventCount, 4);
+    assert.equal(result.appendedEvents, 2);
+    assert.equal(result.status.rawEventCount, 2);
 
     const app = createContextForge({ env, cwd: process.cwd() });
     const rawEvents = await app.listRawEvents({
@@ -1483,7 +1486,7 @@ test('CLI ingest works through remote storage mode', async () => {
       scopeKey: 'codex-remote-ingest-repo',
       sessionId: 'codex:codex-remote-ingest-session',
     });
-    assert.equal(rawEvents.length, 4);
+    assert.equal(rawEvents.length, 2);
   } finally {
     await remote.close();
   }
@@ -1516,8 +1519,8 @@ test('CLI ingests multiple Codex session rollout files safely', async () => {
   );
   const firstResult = JSON.parse(first.stdout);
   assert.equal(firstResult.filesScanned, 2);
-  assert.equal(firstResult.parsedEvents, 8);
-  assert.equal(firstResult.appendedEvents, 8);
+  assert.equal(firstResult.parsedEvents, 4);
+  assert.equal(firstResult.appendedEvents, 4);
   assert.equal(firstResult.skippedEvents, 0);
   assert.deepEqual(
     firstResult.fileResults.map((result) => result.sessionId).sort(),
@@ -1544,7 +1547,7 @@ test('CLI ingests multiple Codex session rollout files safely', async () => {
   const secondResult = JSON.parse(second.stdout);
   assert.equal(secondResult.filesScanned, 2);
   assert.equal(secondResult.appendedEvents, 0);
-  assert.equal(secondResult.skippedEvents, 8);
+  assert.equal(secondResult.skippedEvents, 4);
 
   const app = createContextForge({ env, cwd: process.cwd() });
   const firstEvents = app.listRawEvents({
@@ -1557,8 +1560,8 @@ test('CLI ingests multiple Codex session rollout files safely', async () => {
     scopeKey: 'codex-multi-session-repo',
     sessionId: 'codex:codex-session-second',
   });
-  assert.equal(firstEvents.length, 4);
-  assert.equal(secondEvents.length, 4);
+  assert.equal(firstEvents.length, 2);
+  assert.equal(secondEvents.length, 2);
 });
 
 test('repoPath ingest skips Codex session files from other working directories', async () => {
@@ -1632,17 +1635,17 @@ test('Codex sessions watch loop picks up new events without duplicates', async (
   });
 
   assert.equal(result.iterations, 2);
-  assert.equal(result.totals.appendedEvents, 5);
-  assert.equal(iterationResults[0].appendedEvents, 4);
+  assert.equal(result.totals.appendedEvents, 3);
+  assert.equal(iterationResults[0].appendedEvents, 2);
   assert.equal(iterationResults[1].appendedEvents, 1);
-  assert.equal(iterationResults[1].skippedEvents, 4);
+  assert.equal(iterationResults[1].skippedEvents, 2);
 
   const events = app.listRawEvents({
     scope: 'repo',
     scopeKey: 'codex-watch-repo',
     sessionId: 'codex:codex-watch-session',
   });
-  assert.equal(events.length, 5);
+  assert.equal(events.length, 3);
   assert.equal(events.at(-1).content, 'A new active TUI event arrived.');
 });
 
@@ -1680,7 +1683,7 @@ test('CLI Codex sessions scan is not capped by search limit defaults', async () 
   );
   const parsed = JSON.parse(result.stdout);
   assert.equal(parsed.filesScanned, 11);
-  assert.equal(parsed.appendedEvents, 44);
+  assert.equal(parsed.appendedEvents, 22);
 });
 
 test('CLI routes Codex global sessions through a repo registry', async () => {
@@ -1759,7 +1762,7 @@ test('CLI routes Codex global sessions through a repo registry', async () => {
   assert.equal(parsed.filesScanned, 4);
   assert.equal(parsed.routedFiles, 3);
   assert.equal(parsed.skippedFiles, 1);
-  assert.equal(parsed.appendedEvents, 12);
+  assert.equal(parsed.appendedEvents, 6);
   assert.deepEqual(
     parsed.fileResults
       .filter((item) => item.matchedRepo)
@@ -1781,7 +1784,7 @@ test('CLI routes Codex global sessions through a repo registry', async () => {
       scopeKey: 'github.com/example/frontend',
       sessionId: 'codex:codex-frontend',
     }).length,
-    4,
+    2,
   );
   assert.equal(
     app.listRawEvents({
@@ -1823,8 +1826,8 @@ test('CLI ingests Claude Code JSONL transcripts with agent provenance', async ()
   );
   const firstResult = JSON.parse(first.stdout);
   assert.equal(firstResult.filesScanned, 1);
-  assert.equal(firstResult.parsedEvents, 4);
-  assert.equal(firstResult.appendedEvents, 4);
+  assert.equal(firstResult.parsedEvents, 2);
+  assert.equal(firstResult.appendedEvents, 2);
   assert.equal(firstResult.fileResults[0].sessionId, 'claude_code:claude-native-session');
   assert.equal(firstResult.fileResults[0].warnings.length, 1);
 
@@ -1846,7 +1849,7 @@ test('CLI ingests Claude Code JSONL transcripts with agent provenance', async ()
   );
   const secondResult = JSON.parse(second.stdout);
   assert.equal(secondResult.appendedEvents, 0);
-  assert.equal(secondResult.skippedEvents, 4);
+  assert.equal(secondResult.skippedEvents, 2);
 
   const rawEvents = await execFileAsync(
     'node',
@@ -1865,7 +1868,11 @@ test('CLI ingests Claude Code JSONL transcripts with agent provenance', async ()
   const events = JSON.parse(rawEvents.stdout);
   assert.deepEqual(
     events.map((event) => event.role),
-    ['user', 'tool_call', 'tool_result', 'assistant'],
+    ['user', 'assistant'],
+  );
+  assert.deepEqual(
+    events.map((event) => event.content),
+    ['Continue the ContextForge Claude Code ingest work.', 'I added Claude Code transcript ingestion.'],
   );
   assert.ok(events.every((event) => event.metadata.sourceAgent === 'claude_code'));
   assert.ok(events.every((event) => event.metadata.sourceAdapter === 'claude_code_jsonl'));
@@ -1955,7 +1962,7 @@ test('CLI routes Claude Code global transcripts through a repo registry', async 
   assert.equal(parsed.filesScanned, 4);
   assert.equal(parsed.routedFiles, 3);
   assert.equal(parsed.skippedFiles, 1);
-  assert.equal(parsed.appendedEvents, 12);
+  assert.equal(parsed.appendedEvents, 6);
   assert.deepEqual(
     parsed.fileResults
       .filter((item) => item.matchedRepo)
@@ -1977,7 +1984,7 @@ test('CLI routes Claude Code global transcripts through a repo registry', async 
       scopeKey: 'github.com/example/frontend',
       sessionId: 'claude_code:claude-frontend',
     }).length,
-    4,
+    2,
   );
   assert.equal(
     app.listRawEvents({
@@ -2634,6 +2641,40 @@ test('appendRaw and mock distillCheckpoint preserve raw evidence', async () => {
   assert.equal(statusAfter.shouldDistill, false);
 });
 
+test('appendRaw accepts only user and assistant conversation evidence roles', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+
+  assert.throws(
+    () =>
+      app.appendRaw({
+        scope: 'repo',
+        scopeKey: 'repo-roles',
+        sessionId: 'role-session',
+        role: 'tool_result',
+        content: 'tool output belongs in the native transcript.',
+      }),
+    /role must be one of: user, assistant/,
+  );
+
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-roles',
+    sessionId: 'role-session',
+    role: 'assistant',
+    content: 'The assistant summarized the verification result.',
+  });
+
+  assert.equal(
+    app.listRawEvents({
+      scope: 'repo',
+      scopeKey: 'repo-roles',
+      sessionId: 'role-session',
+    }).length,
+    1,
+  );
+});
+
 test('bootstrapContext includes working summary and recent raw tail separately from search results', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({
@@ -3037,7 +3078,7 @@ test('sessionStatus continues after the last raw event covered by a checkpoint',
   assert.equal(status.distillWindow.firstRawEventId !== checkpoint.metadata.sourceRawEventIds[0], true);
 });
 
-test('distillCheckpoint uses a bounded recent raw-event window', async () => {
+test('distillCheckpoint drains bounded conversation windows oldest first', async () => {
   const dataDir = await makeTempDir();
   const seen = [];
   const app = createContextForge({
@@ -3053,7 +3094,7 @@ test('distillCheckpoint uses a bounded recent raw-event window', async () => {
         seen.push(input.rawEvents.map((event) => event.content));
         return {
           summaryShort: 'Window checkpoint.',
-          summaryText: 'The provider saw a bounded recent raw-event window.',
+          summaryText: 'The provider saw a bounded oldest-first conversation window.',
           decisions: [],
           todos: [],
           openQuestions: [],
@@ -3077,27 +3118,92 @@ test('distillCheckpoint uses a bounded recent raw-event window', async () => {
       content: `event-${index}`,
     });
   }
+  const rawBeforeLegacyTool = app.listRawEvents({
+    scope: 'repo',
+    scopeKey: 'repo-window',
+    sessionId: 'window-session',
+  });
+  const db = new Database(path.join(dataDir, 'contextforge.db'));
+  try {
+    const toolCreatedAt = new Date(Date.parse(rawBeforeLegacyTool[1].createdAt) + 1).toISOString();
+    db.prepare(
+      `INSERT INTO raw_events (
+        id, scope_type, scope_key, session_id, conversation_id,
+        role, content, metadata_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'legacy-tool-result',
+      'repo',
+      'repo-window',
+      'window-session',
+      null,
+      'tool_result',
+      'legacy tool output should not enter distillation',
+      '{}',
+      toolCreatedAt,
+    );
+  } finally {
+    db.close();
+  }
 
   const status = app.sessionStatus({
     scope: 'repo',
     scopeKey: 'repo-window',
     sessionId: 'window-session',
   });
-  assert.equal(status.rawEventCount, 6);
+  assert.equal(status.rawEventCount, 7);
   assert.equal(status.distillWindow.candidateEventCount, 6);
   assert.equal(status.distillWindow.selectedEventCount, 3);
   assert.equal(status.distillWindow.truncated, true);
 
-  const checkpoint = await app.distillCheckpoint({
+  const firstCheckpoint = await app.distillCheckpoint({
     scope: 'repo',
     scopeKey: 'repo-window',
     sessionId: 'window-session',
   });
-  assert.deepEqual(seen[0], ['event-3', 'event-4', 'event-5']);
-  assert.equal(checkpoint.sourceEventCount, 3);
-  assert.equal(checkpoint.metadata.sourceRawEventIds.length, 3);
-  assert.equal(checkpoint.metadata.sourceEventWindow.selectedEventCount, 3);
-  assert.equal(checkpoint.metadata.sourceEventWindow.truncated, true);
+  assert.deepEqual(seen[0], ['event-0', 'event-1', 'event-2']);
+  assert.equal(firstCheckpoint.sourceEventCount, 3);
+  assert.equal(firstCheckpoint.metadata.sourceRawEventIds.length, 3);
+  assert.equal(firstCheckpoint.metadata.sourceEventWindow.selectedEventCount, 3);
+  assert.equal(firstCheckpoint.metadata.sourceEventWindow.truncated, true);
+
+  const statusAfterFirst = app.sessionStatus({
+    scope: 'repo',
+    scopeKey: 'repo-window',
+    sessionId: 'window-session',
+  });
+  assert.equal(statusAfterFirst.eventsSinceLastCheckpoint, 3);
+  assert.equal(statusAfterFirst.distillWindow.selectedEventCount, 3);
+  assert.deepEqual(
+    app
+      .listRawEvents({
+        scope: 'repo',
+        scopeKey: 'repo-window',
+        sessionId: 'window-session',
+      })
+      .filter(
+        (event) =>
+          statusAfterFirst.distillWindow.firstRawEventId === event.id ||
+          statusAfterFirst.distillWindow.lastRawEventId === event.id,
+      )
+      .map((event) => event.content),
+    ['event-3', 'event-5'],
+  );
+
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'repo-window',
+    sessionId: 'window-session',
+  });
+  assert.deepEqual(seen[1], ['event-3', 'event-4', 'event-5']);
+
+  const statusAfterSecond = app.sessionStatus({
+    scope: 'repo',
+    scopeKey: 'repo-window',
+    sessionId: 'window-session',
+  });
+  assert.equal(statusAfterSecond.eventsSinceLastCheckpoint, 0);
+  assert.equal(statusAfterSecond.distillWindow.selectedEventCount, 0);
 
   const runs = app.listDistillRuns({
     scope: 'repo',
@@ -3105,7 +3211,8 @@ test('distillCheckpoint uses a bounded recent raw-event window', async () => {
     sessionId: 'window-session',
   });
   assert.equal(runs[0].inputMetadata.rawEventIds.length, 3);
-  assert.equal(runs[0].inputMetadata.sourceEventWindow.totalRawEventCount, 6);
+  assert.equal(runs[0].inputMetadata.sourceEventWindow.totalRawEventCount, 7);
+  assert.equal(runs[0].inputMetadata.sourceEventWindow.candidateEventCount, 6);
 });
 
 test('distillUsage summarizes estimated and actual provider usage', async () => {
@@ -3407,7 +3514,7 @@ test('codex_exec provider distills synthetic raw events through a runner', async
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.model, 'gpt-test');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.reasoningEffort, 'low');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.timeoutMs, 1234);
-  assert.equal(checkpoint.metadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v4');
+  assert.equal(checkpoint.metadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v5');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.outputSchemaVersion, 'contextforge.checkpoint.v4');
   assert.match(invocation.prompt, /Return exactly one JSON object/);
   assert.deepEqual(invocation.args.slice(0, 2), ['exec', '--skip-git-repo-check']);
@@ -3426,9 +3533,9 @@ test('codex_exec provider distills synthetic raw events through a runner', async
     sessionId: 'codex-session',
   });
   assert.equal(runs[0].status, 'succeeded');
-  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v4');
+  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v5');
   assert.equal(runs[0].inputMetadata.providerMetadata.outputSchemaVersion, 'contextforge.checkpoint.v4');
-  assert.equal(runs[0].outputMetadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v4');
+  assert.equal(runs[0].outputMetadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v5');
 });
 
 test('codex_exec records JSON brace fallback recovery metadata', async () => {
@@ -3632,8 +3739,8 @@ test('codex_exec parse failures preserve raw evidence', async () => {
   });
   assert.equal(runs[0].status, 'failed');
   assert.equal(runs[0].outputMetadata.providerFailed, true);
-  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v4');
-  assert.equal(runs[0].outputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v4');
+  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v5');
+  assert.equal(runs[0].outputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v5');
 });
 
 test('bootstrapContext returns semantic retrieval with trust and verification hints', async () => {
@@ -3927,6 +4034,8 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     const bootstrapTool = toolList.tools.find((tool) => tool.name === 'bootstrap_context');
     assert.ok(bootstrapTool.inputSchema.properties.sessionId);
     assert.ok(bootstrapTool.inputSchema.properties.rawTailLimit);
+    const appendRawTool = toolList.tools.find((tool) => tool.name === 'append_raw');
+    assert.deepEqual(appendRawTool.inputSchema.properties.role.enum, ['user', 'assistant']);
 
     const rememberResult = await client.callTool({
       name: 'remember',
@@ -3992,6 +4101,18 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
         content: 'Decision: MCP agents should inspect session status before distilling.',
       },
     });
+    const invalidAppendResult = await client.callTool({
+      name: 'append_raw',
+      arguments: {
+        scope: 'repo',
+        scopeKey: 'mcp-repo',
+        sessionId: 'mcp-session',
+        role: 'tool_result',
+        content: 'tool output stays in the native transcript.',
+      },
+    });
+    assert.equal(invalidAppendResult.isError, true);
+    assert.match(invalidAppendResult.content[0].text, /Invalid arguments|tool_result/);
 
     const statusResult = await client.callTool({
       name: 'session_status',
