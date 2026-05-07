@@ -699,11 +699,26 @@ node src/cli.js ingestCodexSessions \
   --intervalMs 30000
 ```
 
+Watch mode is incremental by default. It stores a local-only JSON cursor under
+`${XDG_STATE_HOME:-$HOME/.local/state}/contextforge/watch` so each polling
+iteration reads only bytes appended after the previous successful ingest. In
+remote storage mode this cursor still stays on the watcher machine; the remote
+database stores raw events, checkpoints, and durable memories, not local file
+offsets. Override the cursor location with `--watchStateDir <path>` or
+`CONTEXTFORGE_WATCH_STATE_DIR`.
+
+The cursor is separated by adapter, routed versus non-routed mode, source root,
+and registry or scope fingerprint. Deleting the matching state file is safe:
+on restart the watcher reboots from the `--sinceMinutes` discovery window and
+dedupes records already present in ContextForge. Use `--watchFullScan` to
+temporarily restore the older full-scan behavior for debugging or rollback.
+
 Watch mode emits one compact JSON object per scan iteration plus a final
-summary when it stops. Use `--iterations N` for bounded smoke checks or tests.
-Repeated watch scans do not spend model tokens while capturing raw evidence;
-model usage happens only when `--distill auto` decides to checkpoint or
-`--distill always` is set.
+summary when it stops. The default log omits per-file details; pass
+`--watchVerbose` to include `fileResults`. Use `--iterations N` for bounded
+smoke checks or tests. Repeated watch scans do not spend model tokens while
+capturing raw evidence; model usage happens only when `--distill auto` decides
+to checkpoint or `--distill always` is set.
 
 To install that Codex watch loop as a systemd user service:
 
