@@ -86,6 +86,7 @@ Type=simple
 WorkingDirectory=${repo_root}
 Environment=CONTEXTFORGE_STORAGE_MODE=remote
 Environment=CONTEXTFORGE_REMOTE_URL=${remote_url}
+Environment=CONTEXTFORGE_WATCH_STATE_DIR=%h/.local/state/contextforge/watch
 EnvironmentFile=-${token_env_file}
 ExecStart=${node_bin} ${repo_root}/src/cli.js ingestCodexRoutedSessions --sessionsDir ${sessions_dir} --repoRegistry ${repo_registry} --sinceMinutes ${since_minutes} --distill ${distill} --watch --intervalMs ${interval_ms}
 Restart=always

@@ -13,6 +13,7 @@ import { createContextForge } from '../src/core.js';
 import { validateDistillOutput } from '../src/distill/validate.js';
 import { createOpenAiEmbeddingProvider } from '../src/embeddings/index.js';
 import { createInterruptibleSleep, shouldSkipRecentFailedAutoDistill } from '../src/ingest/common.js';
+import { watchClaudeCodeSessions } from '../src/ingest/claude_code.js';
 import { ingestCodexRolloutFile, watchCodexSessions } from '../src/ingest/codex.js';
 import { searchMemories } from '../src/retrieval/search.js';
 import { startContextForgeServer } from '../src/server.js';
@@ -978,6 +979,7 @@ test('Codex watch service installer pins explicit repo scope key', async () => {
     'utf8',
   );
   assert.match(unit, /--repoPath \/work\/repo --scopeKey github\.com\/example\/repo/);
+  assert.match(unit, /Environment=CONTEXTFORGE_WATCH_STATE_DIR=%h\/\.local\/state\/contextforge\/watch/);
 });
 
 test('Codex watch service installer reports and pins inferred repo scope key', async () => {
@@ -1121,6 +1123,7 @@ test('Codex router service installer creates an agent-level router unit', async 
   assert.match(result.stdout, /Installed codex agent router unit:/);
   assert.match(result.stdout, /Enabled Codex repos: 1/);
   assert.match(unit, /ingestCodexRoutedSessions/);
+  assert.match(unit, /Environment=CONTEXTFORGE_WATCH_STATE_DIR=%h\/\.local\/state\/contextforge\/watch/);
   assert.match(unit, new RegExp(`--repoRegistry ${registryPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
   assert.doesNotMatch(unit, /--repoPath/);
 });
@@ -1187,6 +1190,7 @@ test('Claude Code router service installer creates an agent-level router unit', 
   assert.match(result.stdout, /Installed claude_code agent router unit:/);
   assert.match(result.stdout, /Enabled Claude Code repos: 1/);
   assert.match(unit, /ingestClaudeCodeRoutedSessions/);
+  assert.match(unit, /Environment=CONTEXTFORGE_WATCH_STATE_DIR=%h\/\.local\/state\/contextforge\/watch/);
   assert.match(unit, new RegExp(`--repoRegistry ${registryPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
   assert.doesNotMatch(unit, /--repoPath/);
 });
@@ -1609,6 +1613,7 @@ test('repoPath ingest skips Codex session files from other working directories',
 test('Codex sessions watch loop picks up new events without duplicates', async () => {
   const dataDir = await makeTempDir();
   const sessionsDir = await makeTempDir();
+  const watchStateDir = await makeTempDir();
   const rolloutDir = path.join(sessionsDir, '2026', '04', '25');
   const file = path.join(rolloutDir, 'rollout-watch.jsonl');
   await fs.mkdir(rolloutDir, { recursive: true });
@@ -1626,6 +1631,7 @@ test('Codex sessions watch loop picks up new events without duplicates', async (
     distill: 'never',
     iterations: 2,
     intervalMs: 1,
+    watchStateDir,
     onResult: async (iterationResult) => {
       iterationResults.push(iterationResult);
       if (iterationResult.iteration === 1) {
@@ -1638,7 +1644,10 @@ test('Codex sessions watch loop picks up new events without duplicates', async (
   assert.equal(result.totals.appendedEvents, 3);
   assert.equal(iterationResults[0].appendedEvents, 2);
   assert.equal(iterationResults[1].appendedEvents, 1);
-  assert.equal(iterationResults[1].skippedEvents, 2);
+  assert.equal(iterationResults[1].skippedEvents, 0);
+  assert.equal(iterationResults[1].filesChanged, 1);
+  assert.equal('fileResults' in iterationResults[0], false);
+  assert.ok(iterationResults[0].stateFile.startsWith(watchStateDir));
 
   const events = app.listRawEvents({
     scope: 'repo',
@@ -1647,6 +1656,59 @@ test('Codex sessions watch loop picks up new events without duplicates', async (
   });
   assert.equal(events.length, 3);
   assert.equal(events.at(-1).content, 'A new active TUI event arrived.');
+});
+
+test('Codex incremental watch keeps trailing partial JSON uncommitted until complete', async () => {
+  const dataDir = await makeTempDir();
+  const sessionsDir = await makeTempDir();
+  const watchStateDir = await makeTempDir();
+  const rolloutDir = path.join(sessionsDir, '2026', '04', '25');
+  const file = path.join(rolloutDir, 'rollout-partial.jsonl');
+  await fs.mkdir(rolloutDir, { recursive: true });
+  await writeSyntheticCodexRollout(file, 'codex-partial-session');
+  await fs.appendFile(
+    file,
+    '{"timestamp":"2026-04-25T00:00:06.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"partial append',
+  );
+  const app = createContextForge({
+    env: { CONTEXTFORGE_DATA_DIR: dataDir },
+    cwd: process.cwd(),
+  });
+
+  const first = await watchCodexSessions(app, {
+    sessionsDir,
+    scope: 'repo',
+    scopeKey: 'codex-partial-repo',
+    distill: 'never',
+    iterations: 1,
+    intervalMs: 1,
+    watchStateDir,
+    watchVerbose: true,
+  });
+  assert.equal(first.totals.appendedEvents, 2);
+  assert.equal(first.results[0].fileResults[0].warnings.length, 0);
+
+  await fs.appendFile(file, '"}]} }\n');
+  const second = await watchCodexSessions(app, {
+    sessionsDir,
+    scope: 'repo',
+    scopeKey: 'codex-partial-repo',
+    distill: 'never',
+    iterations: 1,
+    intervalMs: 1,
+    watchStateDir,
+    watchVerbose: true,
+  });
+  assert.equal(second.totals.appendedEvents, 1);
+  assert.equal(second.results[0].fileResults[0].parsedEvents, 1);
+
+  const events = app.listRawEvents({
+    scope: 'repo',
+    scopeKey: 'codex-partial-repo',
+    sessionId: 'codex:codex-partial-session',
+  });
+  assert.equal(events.length, 3);
+  assert.equal(events.at(-1).content, 'partial append');
 });
 
 test('CLI Codex sessions scan is not capped by search limit defaults', async () => {
@@ -1877,6 +1939,38 @@ test('CLI ingests Claude Code JSONL transcripts with agent provenance', async ()
   assert.ok(events.every((event) => event.metadata.sourceAgent === 'claude_code'));
   assert.ok(events.every((event) => event.metadata.sourceAdapter === 'claude_code_jsonl'));
   assert.ok(events.every((event) => event.metadata.nativeSessionId === 'claude-native-session'));
+});
+
+test('Claude Code incremental watch skips unchanged transcript bytes', async () => {
+  const dataDir = await makeTempDir();
+  const projectsDir = await makeTempDir();
+  const watchStateDir = await makeTempDir();
+  const file = path.join(projectsDir, 'project-a', 'claude-watch.jsonl');
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await writeSyntheticClaudeCodeTranscript(file, 'claude-watch-session');
+  const app = createContextForge({
+    env: { CONTEXTFORGE_DATA_DIR: dataDir },
+    cwd: process.cwd(),
+  });
+
+  const result = await watchClaudeCodeSessions(app, {
+    projectsDir,
+    scope: 'repo',
+    scopeKey: 'claude-watch-repo',
+    distill: 'never',
+    iterations: 2,
+    intervalMs: 1,
+    watchStateDir,
+  });
+
+  assert.equal(result.iterations, 2);
+  assert.equal(result.results[0].filesChanged, 1);
+  assert.equal(result.results[0].appendedEvents, 2);
+  assert.equal(result.results[1].filesChanged, 0);
+  assert.equal(result.results[1].parsedEvents, 0);
+  assert.equal(result.results[1].skippedEvents, 0);
+  assert.equal('fileResults' in result.results[0], false);
+  assert.ok(result.results[0].stateFile.startsWith(watchStateDir));
 });
 
 test('CLI routes Claude Code global transcripts through a repo registry', async () => {
