@@ -9,7 +9,6 @@ import {
   createWatchTotals,
   discoverFiles,
   ingestParsedSession,
-  isPathWithin,
   loadRepoRegistry,
   loadWatchState,
   matchRepoForCwd,

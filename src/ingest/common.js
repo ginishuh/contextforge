@@ -259,6 +259,7 @@ export async function buildWatchStateDescriptor({ adapter, routed = false, rootD
   const fingerprint = digest(JSON.stringify({ adapter, routed, root, scopeFingerprint })).slice(0, 24);
   const mode = routed ? 'routed' : 'direct';
   const fileName = `${adapter}-${mode}-${fingerprint}.json`;
+  const stateDir = resolveWatchStateDir(options);
   return {
     adapter,
     routed,
@@ -267,8 +268,8 @@ export async function buildWatchStateDescriptor({ adapter, routed = false, rootD
     registry: registryFingerprint,
     scopeFingerprint,
     fingerprint,
-    stateDir: resolveWatchStateDir(options),
-    stateFile: path.join(resolveWatchStateDir(options), fileName),
+    stateDir,
+    stateFile: path.join(stateDir, fileName),
   };
 }
 
@@ -344,7 +345,7 @@ export async function saveWatchState(descriptor, state) {
   const tempFile = `${descriptor.stateFile}.${process.pid}.${Date.now()}.tmp`;
   await fs.writeFile(tempFile, `${JSON.stringify(updated, null, 2)}\n`);
   await fs.rename(tempFile, descriptor.stateFile);
-  Object.assign(state, updated);
+  state.updatedAt = updated.updatedAt;
 }
 
 export async function readIncrementalJsonl(file, stateEntry = {}) {
