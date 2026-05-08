@@ -4363,6 +4363,12 @@ test('suggestMemoryPromotions avoids scope fallback unless explicitly allowed', 
   });
   assert.deepEqual(noFallback.proposals, []);
   assert.equal(noFallback.source.mode, 'none');
+  assert.ok(noFallback.requestWarnings.some((warning) => warning.code === 'missing_closeout_source'));
+  assert.ok(
+    noFallback.nextActions.some((action) =>
+      action.includes('No current-session closeout candidates were reviewed'),
+    ),
+  );
 
   await assert.rejects(
     () =>
@@ -4587,6 +4593,12 @@ test('autoPromoteMemoryCandidates requires closeout scope and defaults to dry-ru
   assert.equal(noSource.kind, 'auto_memory_promotion_result');
   assert.deepEqual(noSource.wouldPromote, []);
   assert.equal(noSource.source.mode, 'none');
+  assert.ok(noSource.requestWarnings.some((warning) => warning.code === 'missing_closeout_source'));
+  assert.ok(
+    noSource.nextActions.some((action) =>
+      action.includes('No current-session closeout candidates were reviewed'),
+    ),
+  );
 
   const dryRun = await app.autoPromoteMemoryCandidates({
     scope: 'repo',
@@ -5594,6 +5606,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     const suggestTool = toolList.tools.find((tool) => tool.name === 'suggest_memory_promotions');
     assert.ok(suggestTool.inputSchema.properties.allowScopeFallback);
     assert.ok(suggestTool.inputSchema.properties.trigger);
+    assert.ok(suggestTool.description.includes('missing_closeout_source'));
     const preferenceOccurrencesTool = toolList.tools.find((tool) => tool.name === 'list_preference_occurrences');
     assert.ok(preferenceOccurrencesTool.inputSchema.properties.status);
     assert.ok(preferenceOccurrencesTool.inputSchema.properties.limit);
@@ -5611,6 +5624,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.ok(autoPromoteTool.inputSchema.properties.dryRun);
     assert.ok(autoPromoteTool.inputSchema.properties.minConfidence);
     assert.ok(autoPromoteTool.inputSchema.properties.allowedCategories);
+    assert.ok(autoPromoteTool.description.includes('missing_closeout_source'));
     const reconcileTool = toolList.tools.find((tool) => tool.name === 'reconcile_memory');
     assert.ok(reconcileTool.inputSchema.properties.correction);
     assert.ok(!reconcileTool.inputSchema.required?.includes('query'));

@@ -369,11 +369,15 @@ unavailable, call `list_memory_candidates` for the same `sessionId` or
 - repeated future work would benefit from a durable note
 
 The MCP result makes candidate discovery explicit. If `distill_checkpoint`
-returns `memoryCandidateCount > 0`, use `suggest_memory_promotions` before
-deciding what to propose. If `session_status` reports
+returns `memoryCandidateCount > 0`, keep its returned `checkpointId` and use
+`suggest_memory_promotions` with that `checkpointId` or the current `sessionId`
+before deciding what to propose. If `session_status` reports
 `latestCheckpointMemoryCandidateCount > 0`, use the latest checkpoint id or the
-session id to review those candidates. Do not review promotion candidates during
-start/resume sync.
+same session id to review those candidates. If `suggest_memory_promotions`
+returns `missing_closeout_source`, no current-session candidate review happened;
+provide `sessionId` or `checkpointId`, or use `allowScopeFallback=true` only for
+an intentional `manual_closeout` backlog review. Do not review promotion
+candidates during start/resume sync.
 
 Promote with `promote_memory_candidate` only after review. A good candidate is:
 
@@ -399,6 +403,9 @@ fallback, and category limited to `runbook`, `failure-mode`, `api-contract`,
 the normal auto-promotion path. Preference candidates are tracked separately as
 occurrences so repeated evidence, corrections, and future merge policy can be
 reviewed before any durable preference is created.
+If `auto_promote_memory_candidates` returns `missing_closeout_source`, it did
+not inspect or promote any candidates; rerun it only after providing the
+`checkpointId` returned by `distill_checkpoint` or the current `sessionId`.
 
 `auto_promote_memory_candidates` returns
 `kind: "auto_memory_promotion_result"` for both dry-run and real-promotion
@@ -525,7 +532,7 @@ Prefer distilling at meaningful boundaries:
 - `distill_usage`: summarize distillation run counts, selected input size,
   estimated input tokens, elapsed time, and actual provider usage when recorded.
 - `list_memory_candidates`: inspect checkpoint-generated durable-memory
-  candidates.
+  candidates. At closeout, filter by the same `sessionId` or `checkpointId`.
 - `list_preference_occurrences`: inspect merged preference evidence recorded
   from preference-like candidates.
 - `list_memory_update_candidates`: inspect proposed corrections,
@@ -537,10 +544,12 @@ Prefer distilling at meaningful boundaries:
 - `skip_memory_update_candidate`: mark a memory update candidate skipped
   without mutating durable memory.
 - `suggest_memory_promotions`: closeout-only selector that proposes at most one
-  to three durable memory promotions and never promotes automatically.
+  to three durable memory promotions and never promotes automatically. Use
+  `sessionId` or `checkpointId` for current closeout review.
 - `auto_promote_memory_candidates`: closeout-only strict automatic promotion
   selector. Defaults to dry-run; real promotion requires
-  `CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true` plus `dryRun=false`.
+  `CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true` plus `dryRun=false`. Requires
+  `sessionId` or `checkpointId` and never scans the scope backlog.
 - `reconcile_memory`: reconcile user corrections against durable memories,
   checkpoints, and memory candidates.
 - `promote_memory_candidate`: promote a reviewed candidate by candidate id.

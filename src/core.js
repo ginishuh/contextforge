@@ -567,6 +567,13 @@ const CLOSEOUT_TRIGGERS = new Set([
   'manual_closeout',
 ]);
 
+function missingCloseoutSourceWarning(toolName) {
+  return {
+    code: 'missing_closeout_source',
+    message: `${toolName} requires sessionId or checkpointId for current-session closeout review; no candidates were scanned.`,
+  };
+}
+
 const AUTO_SKIP_WARNING_CODES = new Set([
   'duplicate_key',
   'existing_key_conflict',
@@ -1934,7 +1941,7 @@ export function createContextForge(options = {}) {
       }
       const requestedLimit = positiveNumber(options.limit == null ? 3 : Number(options.limit), 'limit');
       const limit = Math.min(3, requestedLimit);
-      const warnings =
+      const requestWarnings =
         requestedLimit > 3
           ? [
               {
@@ -1971,8 +1978,16 @@ export function createContextForge(options = {}) {
             },
             proposals: [],
             skipped: [],
-            requestWarnings: warnings,
+            requestWarnings: [
+              ...requestWarnings,
+              {
+                ...missingCloseoutSourceWarning('suggest_memory_promotions'),
+                detail:
+                  'Pass the checkpointId returned by distill_checkpoint, pass the current sessionId, or explicitly set allowScopeFallback=true only for trigger=manual_closeout backlog review.',
+              },
+            ],
             nextActions: [
+              'No current-session closeout candidates were reviewed because sessionId/checkpointId was missing.',
               'Provide sessionId or checkpointId to review current closeout candidates.',
               'Use allowScopeFallback=true only with trigger=manual_closeout when intentionally reviewing the scope backlog.',
               'Do not promote automatically.',
@@ -1992,7 +2007,7 @@ export function createContextForge(options = {}) {
             },
             proposals: [],
             skipped: [],
-            requestWarnings: warnings,
+            requestWarnings: requestWarnings,
             nextActions: [
               'No latest checkpoint was found for this session; distill a checkpoint before reviewing promotions.',
               'Do not promote automatically.',
@@ -2035,7 +2050,7 @@ export function createContextForge(options = {}) {
               candidateId: item.candidate.id,
               reason: candidateWarningReason(item.warnings) || 'low_score',
             })),
-          requestWarnings: warnings,
+          requestWarnings,
           nextActions: [
             'Ask the user to choose: promote, edit then promote, skip, or reject.',
             'Do not promote automatically.',
@@ -2104,8 +2119,16 @@ export function createContextForge(options = {}) {
           wouldPromote: [],
           promoted: [],
           skipped: [],
-          requestWarnings,
+          requestWarnings: [
+            ...requestWarnings,
+            {
+              ...missingCloseoutSourceWarning('auto_promote_memory_candidates'),
+              detail:
+                'Auto-promotion never uses scope fallback. Pass the checkpointId returned by distill_checkpoint or the current sessionId.',
+            },
+          ],
           nextActions: [
+            'No current-session closeout candidates were reviewed because sessionId/checkpointId was missing.',
             'Provide sessionId or checkpointId; auto-promotion dry-run never scans the scope backlog.',
             'No memory candidates were promoted.',
           ],

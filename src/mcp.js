@@ -28,8 +28,8 @@ const MCP_INSTRUCTIONS = [
   'If db_info shows remote storage, treat results as shared canonical ContextForge state for the configured scope. If it shows local or project-local storage, treat results as machine-local context unless the user confirms that store is authoritative.',
   'Search result types have different trust roles: memory is reviewed durable fact or decision; checkpoint is credible recent handoff state for continuity, planning, prior intent, recent decisions, and unfinished work, but mutable live-state claims must be verified with git/GitHub/CI/runtime/migrations before acting; memory_candidate is unreviewed promotion material and not durable truth.',
   'For start/resume requests such as "지난 환경 작업과 동기화", "어제 하던 거 이어서", "previous work", or "continue", call sync_resume_context. Use checkpoints actively as handoff notes, then verify mutable state with git/GitHub/CI/runtime/migrations. Do not propose memory promotions during resume sync.',
-  'For closeout triggers only, call suggest_memory_promotions: after this agent merges a PR, after the user says they merged and the agent syncs main/cleans branches, or when the user explicitly says today\'s work is done. Suggest at most 1-3 durable memory promotions and never promote automatically.',
-  'For strict closeout-scoped safe automatic promotion, call auto_promote_memory_candidates only when the user wants automatic promotion. By default use dryRun=true. Use dryRun=false only when CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true is intentionally configured; never use scope-wide backlog fallback and never auto-promote preference candidates.',
+  'For closeout triggers only, call suggest_memory_promotions with the current sessionId or the checkpointId returned by distill_checkpoint: after this agent merges a PR, after the user says they merged and the agent syncs main/cleans branches, or when the user explicitly says today\'s work is done. Suggest at most 1-3 durable memory promotions and never promote automatically.',
+  'For strict closeout-scoped safe automatic promotion, call auto_promote_memory_candidates only when the user wants automatic promotion and always include sessionId or checkpointId. By default use dryRun=true. Use dryRun=false only when CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true is intentionally configured; never use scope-wide backlog fallback and never auto-promote preference candidates.',
   'Preference-like candidates are tracked as merged occurrences; use list_preference_occurrences to review repeated evidence and weakened corrections, but do not treat occurrence evidence alone as durable preference truth.',
   'For user corrections such as "너 잘못 알고 있잖아", "그거 아니야", "그건 X가 아니라 Y야", or "기억 수정해", call reconcile_memory. Show the basis for prior knowledge, assess conflicts, and only apply safe corrections when the user explicitly asks to fix memory.',
   'Use list_memory_update_candidates to review proposed durable-memory corrections, deactivations, duplicate merges, or corrective notes. reconcile_memory propose mode is read-only by default; pass createUpdateCandidates=true only when persistent review proposals are wanted. Apply or reject update candidates only after explicit user approval.',
@@ -38,8 +38,8 @@ const MCP_INSTRUCTIONS = [
   'If working on a repository while the MCP process cwd is elsewhere, pass repoPath or cwd so repo scope resolves to that checkout; repoPath takes precedence when both are provided.',
   'Treat scopeKey as the canonical repo memory key; pass an explicit normalized GitHub key when local paths differ across machines or the checkout cannot infer the right remote.',
   'Use remember for reviewed durable facts the user or assistant intentionally wants saved.',
-  'At closeout after distill_checkpoint, check memoryCandidateCount; if it is greater than zero, prefer suggest_memory_promotions and promote only reviewed durable facts with promote_memory_candidate or reject unsuitable candidates with reject_memory_candidate.',
-  'When session_status reports latestCheckpointMemoryCandidateCount at closeout, use suggest_memory_promotions or list_memory_candidates before deciding what should become durable memory.',
+  'At closeout after distill_checkpoint, keep the returned checkpointId and check memoryCandidateCount; if it is greater than zero, prefer suggest_memory_promotions with that checkpointId or the current sessionId, then promote only reviewed durable facts with promote_memory_candidate or reject unsuitable candidates with reject_memory_candidate.',
+  'When session_status reports latestCheckpointMemoryCandidateCount at closeout, use suggest_memory_promotions or list_memory_candidates with the latest checkpoint id or same sessionId before deciding what should become durable memory.',
   'Keep local scope opt-in.',
 ].join(' ');
 
@@ -622,7 +622,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Suggest Memory Promotions',
       description:
-        'Suggest at most 1-3 high-signal durable memory promotion candidates at closeout triggers only. Review only the current session or latest checkpoint candidate set by default. Never promote automatically.',
+        'Suggest at most 1-3 high-signal durable memory promotion candidates at closeout triggers only. Provide sessionId or checkpointId for current-session review; without them the tool returns a missing_closeout_source warning unless allowScopeFallback=true is intentionally used with trigger=manual_closeout. Never promote automatically.',
       inputSchema: {
         ...scopedSchema,
         sessionId: z.string().optional(),
@@ -653,7 +653,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Auto Promote Memory Candidates',
       description:
-        'Dry-run or, when CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true and dryRun=false, automatically promote only strict closeout-scoped safe memory candidates. Requires sessionId or checkpointId and never scans the scope backlog.',
+        'Dry-run or, when CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true and dryRun=false, automatically promote only strict closeout-scoped safe memory candidates. Requires sessionId or checkpointId; returns missing_closeout_source without one and never scans the scope backlog.',
       inputSchema: {
         ...scopedSchema,
         sessionId: z.string().optional(),
