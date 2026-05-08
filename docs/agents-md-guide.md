@@ -66,16 +66,16 @@ of pasting the full local/server/remote setup guide.
 ## Runtime Mode Section Pattern
 
 Runtime mode is checkout-local. Keep tracked `AGENTS.md` clone-safe and prefer
-live `connection.mode`.
+live `connection.summary` or `connection.accessMode`.
 
 ```text
 ## Runtime Mode
 
 Runtime mode is checkout-local. Do not assume a clone is the live server.
 
-At task start, check `connection.mode` with `db_info` or `bootstrap_context`.
-Verify `/healthz`, the service manager, and current git state before making
-live runtime claims.
+At task start, check `connection.summary` or `connection.accessMode` with
+`db_info` or `bootstrap_context`. Verify `/healthz`, the service manager, and
+current git state before making live runtime claims.
 
 Keep env files, tokens, API keys, DB files, and raw runtime data out of git and
 reports. For local all-in-one, HTTP server, and external remote client

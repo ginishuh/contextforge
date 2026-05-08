@@ -59,9 +59,9 @@ Do not recommend git as the live storage backend for SQLite or raw runtime data.
 ## Runtime Mode
 Runtime mode is checkout-local. Do not assume a clone is the live server.
 
-At task start, check `connection.mode` with `node src/cli.js dbInfo` or
-`bootstrap_context`. Verify `/healthz`, the service manager, and current git
-state before making live runtime claims.
+At task start, check `connection.summary` or `connection.accessMode` with
+`node src/cli.js dbInfo` or `bootstrap_context`. Verify `/healthz`, the service
+manager, and current git state before making live runtime claims.
 
 Keep env files, tokens, API keys, DB files, and raw runtime data out of git and
 reports. For local all-in-one, HTTP server, and external remote client

@@ -35,6 +35,10 @@ Always set scope intentionally:
 
 Before relying on results, check connection metadata and storage authority from `bootstrap_context` or `db_info`:
 
+- `connection.summary`: quickest human-readable access/process summary.
+- `connection.accessMode`: how this caller reached ContextForge: `direct-local`, `server-process`, or `remote-client`.
+- `connection.accessPath`: concrete path such as `direct-local`, `http-api`, or `http-mcp`.
+- `connection.serverRole`: server process role behind a remote call, when present.
 - `connection.mode: "remote-client"`: this agent reaches ContextForge through HTTP or a remote wrapper.
 - `connection.mode: "http-server"`: the tool is running inside the ContextForge HTTP server process.
 - `connection.mode: "direct-local"`: the tool is running as a local ContextForge process.

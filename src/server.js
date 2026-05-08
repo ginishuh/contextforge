@@ -90,15 +90,24 @@ function isAuthorized(request, token) {
   return timingSafeStringEqual(request.headers.authorization, `Bearer ${token}`);
 }
 
+function connectionServerRole(connection) {
+  return connection?.serverRole || connection?.server?.processRole || connection?.processRole || connection?.mode || null;
+}
+
 function remoteAccessConnection(serverConnection, transport) {
+  const serverRole = connectionServerRole(serverConnection);
   return {
     mode: 'remote-client',
+    accessMode: 'remote-client',
+    accessPath: transport,
     transport,
     viewpoint: 'this caller reaches ContextForge through a remote HTTP endpoint',
     storageMode: 'remote',
     storageAuthority: 'canonical',
+    serverRole,
     server: serverConnection || null,
     note: 'This response crossed a ContextForge HTTP boundary. server.storageMode describes the server-owned store.',
+    summary: `remote-client over ${transport}${serverRole ? ` to ${serverRole}` : ''}`,
   };
 }
 
