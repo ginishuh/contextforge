@@ -251,7 +251,7 @@ function hydrateMemoryUpdateCandidate(row) {
     sourceCheckpointId: row.source_checkpoint_id,
     sourceCandidateId: row.source_candidate_id,
     correction: row.correction,
-    basisJson: parseJson(row.basis_json, []),
+    basis: parseJson(row.basis_json, []),
     reviewReason: row.review_reason,
     reviewMetadata: parseJson(row.review_metadata_json, {}),
     appliedMemoryId: row.applied_memory_id,
@@ -1969,8 +1969,55 @@ export class ContextForgeStore {
     correction = null,
     basis = [],
   }) {
+    const existing = this.findPendingMemoryUpdateCandidate({
+      scopeType,
+      scopeKey,
+      action,
+      targetMemoryId,
+      targetMemoryKey,
+      sourceCheckpointId,
+      proposedKey,
+      correction,
+    });
     const id = randomUUID();
     const timestamp = nowIso();
+    if (existing) {
+      this.db
+        .prepare(`
+          UPDATE memory_update_candidates
+          SET proposed_key = ?,
+              proposed_content = ?,
+              proposed_category = ?,
+              proposed_tags_json = ?,
+              proposed_importance = ?,
+              reason = ?,
+              confidence = ?,
+              source_session_id = COALESCE(?, source_session_id),
+              source_checkpoint_id = COALESCE(?, source_checkpoint_id),
+              source_candidate_id = COALESCE(?, source_candidate_id),
+              correction = ?,
+              basis_json = ?,
+              created_at = ?
+          WHERE id = ?
+        `)
+        .run(
+          proposedKey,
+          proposedContent,
+          proposedCategory,
+          json(proposedTags, []),
+          proposedImportance,
+          reason,
+          confidence,
+          sourceSessionId,
+          sourceCheckpointId,
+          sourceCandidateId,
+          correction,
+          json(basis, []),
+          timestamp,
+          existing.id,
+        );
+      return this.getMemoryUpdateCandidate({ scopeType, scopeKey, candidateId: existing.id });
+    }
     this.db
       .prepare(`
         INSERT INTO memory_update_candidates (
@@ -2003,6 +2050,47 @@ export class ContextForgeStore {
         timestamp,
       );
     return this.getMemoryUpdateCandidate({ scopeType, scopeKey, candidateId: id });
+  }
+
+  findPendingMemoryUpdateCandidate({
+    scopeType,
+    scopeKey,
+    action,
+    targetMemoryId = null,
+    targetMemoryKey = null,
+    sourceCheckpointId = null,
+    proposedKey = null,
+    correction = null,
+  }) {
+    const conditions = ['scope_type = ?', 'scope_key = ?', "status = 'pending'", 'action = ?'];
+    const values = [scopeType, scopeKey, action];
+    if (targetMemoryId) {
+      conditions.push('target_memory_id = ?');
+      values.push(targetMemoryId);
+    } else if (targetMemoryKey) {
+      conditions.push('target_memory_key = ?');
+      values.push(targetMemoryKey);
+    } else if (sourceCheckpointId) {
+      conditions.push('source_checkpoint_id = ?');
+      values.push(sourceCheckpointId);
+    } else if (proposedKey) {
+      conditions.push('proposed_key = ?');
+      values.push(proposedKey);
+    } else if (correction) {
+      conditions.push('correction = ?');
+      values.push(correction);
+    } else {
+      return null;
+    }
+    const row = this.db
+      .prepare(`
+        SELECT * FROM memory_update_candidates
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+      `)
+      .get(...values);
+    return hydrateMemoryUpdateCandidate(row);
   }
 
   listMemoryUpdateCandidates({ scopeType, scopeKey, status = null, action = null, limit = null }) {

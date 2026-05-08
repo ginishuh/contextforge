@@ -4960,6 +4960,31 @@ test('reconcileMemory proposes by default and apply_safe only changes unambiguou
   assert.ok(proposed.proposedActions.some((item) => item.action === 'reject_memory_candidate'));
   assert.ok(proposed.updateCandidates.some((item) => item.action === 'correct_memory'));
   assert.ok(proposed.updateCandidates.some((item) => item.action === 'add_corrective_note'));
+  assert.equal(
+    app.listMemoryUpdateCandidates({
+      scope: 'repo',
+      scopeKey: 'reconcile-repo',
+      status: 'pending',
+    }).length,
+    0,
+  );
+  const persisted = await app.reconcileMemory({
+    scope: 'repo',
+    scopeKey: 'reconcile-repo',
+    sessionId: 'reconcile-session',
+    query: 'API REST only transport',
+    correction: 'The API supports REST and GraphQL.',
+    createUpdateCandidates: true,
+  });
+  assert.ok(persisted.updateCandidates.every((item) => item.status === 'pending'));
+  await app.reconcileMemory({
+    scope: 'repo',
+    scopeKey: 'reconcile-repo',
+    sessionId: 'reconcile-session',
+    query: 'API REST only transport',
+    correction: 'The API supports REST and GraphQL.',
+    createUpdateCandidates: true,
+  });
   const pendingUpdates = app.listMemoryUpdateCandidates({
     scope: 'repo',
     scopeKey: 'reconcile-repo',
@@ -5081,6 +5106,80 @@ test('memory update candidates can be rejected without mutating memory', async (
     candidateId: skippedCandidate.id,
   });
   assert.equal(skipped.status, 'skipped');
+});
+
+test('memory update candidates apply deactivation and duplicate merge actions', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+  const stale = app.remember({
+    scope: 'repo',
+    scopeKey: 'update-apply-repo',
+    key: 'stale-runbook',
+    content: 'This runbook is stale.',
+    category: 'runbook',
+  });
+  const canonical = app.remember({
+    scope: 'repo',
+    scopeKey: 'update-apply-repo',
+    key: 'canonical-runbook',
+    content: 'This runbook is canonical.',
+    category: 'runbook',
+  });
+  const duplicate = app.remember({
+    scope: 'repo',
+    scopeKey: 'update-apply-repo',
+    key: 'duplicate-runbook',
+    content: 'Duplicate runbook.',
+    category: 'runbook',
+  });
+  const store = new ContextForgeStore({ dataDir });
+  try {
+    store.createMemoryUpdateCandidate({
+      scopeType: 'repo',
+      scopeKey: 'update-apply-repo',
+      action: 'deactivate_memory',
+      targetMemoryId: stale.id,
+      targetMemoryKey: stale.key,
+      reason: 'Stale after product change.',
+    });
+    store.createMemoryUpdateCandidate({
+      scopeType: 'repo',
+      scopeKey: 'update-apply-repo',
+      action: 'merge_duplicate_memories',
+      targetMemoryId: duplicate.id,
+      targetMemoryKey: duplicate.key,
+      proposedKey: canonical.key,
+      reason: 'Duplicate durable memory.',
+    });
+  } finally {
+    store.close();
+  }
+
+  const updates = app.listMemoryUpdateCandidates({
+    scope: 'repo',
+    scopeKey: 'update-apply-repo',
+    status: 'pending',
+  });
+  const deactivate = updates.find((item) => item.action === 'deactivate_memory');
+  const merge = updates.find((item) => item.action === 'merge_duplicate_memories');
+
+  const deactivated = app.applyMemoryUpdateCandidate({
+    scope: 'repo',
+    scopeKey: 'update-apply-repo',
+    candidateId: deactivate.id,
+  });
+  assert.equal(deactivated.candidate.status, 'applied');
+  assert.equal(app.getMemory({ scope: 'repo', scopeKey: 'update-apply-repo', key: stale.key }).status, 'inactive');
+
+  const merged = app.applyMemoryUpdateCandidate({
+    scope: 'repo',
+    scopeKey: 'update-apply-repo',
+    candidateId: merge.id,
+  });
+  assert.equal(merged.candidate.status, 'applied');
+  assert.equal(merged.candidate.reviewMetadata.mergedIntoKey, canonical.key);
+  assert.equal(app.getMemory({ scope: 'repo', scopeKey: 'update-apply-repo', key: duplicate.key }).status, 'inactive');
+  assert.equal(app.getMemory({ scope: 'repo', scopeKey: 'update-apply-repo', key: canonical.key }).status, 'active');
 });
 
 test('reconcileMemory apply_safe rejects matching candidates when no durable memory matches', async () => {
@@ -5372,6 +5471,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.ok(updateCandidatesTool.inputSchema.properties.action);
     const applyUpdateTool = toolList.tools.find((tool) => tool.name === 'apply_memory_update_candidate');
     assert.ok(applyUpdateTool.inputSchema.properties.candidateId);
+    assert.ok(applyUpdateTool.inputSchema.properties.mergeTargetKey);
     const rejectUpdateTool = toolList.tools.find((tool) => tool.name === 'reject_memory_update_candidate');
     assert.ok(rejectUpdateTool.inputSchema.properties.reason);
     const skipUpdateTool = toolList.tools.find((tool) => tool.name === 'skip_memory_update_candidate');
@@ -5383,6 +5483,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     const reconcileTool = toolList.tools.find((tool) => tool.name === 'reconcile_memory');
     assert.ok(reconcileTool.inputSchema.properties.correction);
     assert.ok(reconcileTool.inputSchema.properties.mode);
+    assert.ok(reconcileTool.inputSchema.properties.createUpdateCandidates);
     const appendRawTool = toolList.tools.find((tool) => tool.name === 'append_raw');
     assert.deepEqual(appendRawTool.inputSchema.properties.role.enum, ['user', 'assistant']);
 

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { loadConfig } from './config/index.js';
 import { createDistillProvider } from './distill/index.js';
 import { checkCodexExecProvider } from './distill/providers/codex_exec.js';
@@ -173,6 +173,10 @@ function truncateText(value, maxChars = 280) {
     return text;
   }
   return `${text.slice(0, maxChars)}...`;
+}
+
+function contentHash(value) {
+  return createHash('sha256').update(String(value || '')).digest('hex');
 }
 
 function resultTextForVerification(result) {
@@ -509,6 +513,10 @@ const DURABLE_PROPOSAL_CATEGORIES = new Set([
 
 const SAFE_AUTO_PROMOTE_CATEGORIES = new Set(['runbook', 'failure-mode', 'api-contract', 'environment', 'decision']);
 const CHECKPOINT_SOURCES = new Set(['distill', 'daily_consolidation', 'weekly_consolidation', 'topic_batch', 'manual']);
+const RECONCILE_UPDATE_CONFIDENCE = {
+  durableMemory: 0.7,
+  checkpointNote: 0.55,
+};
 
 function normalizeCheckpointSource(source) {
   const value = source ?? 'distill';
@@ -697,7 +705,7 @@ function promotionProposal(indexedCandidate, warnings, rank) {
 }
 
 function memoryUpdateCandidateProposal(candidate) {
-  return {
+  const proposal = {
     candidateId: candidate.id,
     action: candidate.action,
     status: candidate.status,
@@ -708,7 +716,6 @@ function memoryUpdateCandidateProposal(candidate) {
     proposedTags: candidate.proposedTags,
     proposedImportance: candidate.proposedImportance,
     reason: candidate.reason,
-    correction: candidate.correction,
     source: {
       sessionId: candidate.sourceSessionId,
       checkpointId: candidate.sourceCheckpointId,
@@ -716,12 +723,33 @@ function memoryUpdateCandidateProposal(candidate) {
     },
     recommendedAction: 'ask_user',
   };
+  if (candidate.correction) {
+    proposal.correction = candidate.correction;
+  }
+  return proposal;
 }
 
 function memoryUpdateActionForReconcile(item, liveState) {
+  // Checkpoints are immutable handoff evidence; corrective notes do not edit mutable live state.
   if (item.type === 'checkpoint') return 'add_corrective_note';
   if (liveState) return null;
   return 'correct_memory';
+}
+
+function slugForKey(value) {
+  const text = String(value || '').trim();
+  const slug = text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
+  return slug || contentHash(text).slice(0, 12);
+}
+
+function correctiveNoteKey(candidate) {
+  if (candidate.proposedKey) return candidate.proposedKey;
+  if (candidate.targetMemoryKey) return `${candidate.targetMemoryKey}-correction`;
+  return `corrective-note-${slugForKey(candidate.proposedContent || candidate.correction || candidate.id)}`;
 }
 
 function normalizeAllowedCategories(value, defaultCategories = SAFE_AUTO_PROMOTE_CATEGORIES) {
@@ -1595,98 +1623,118 @@ export function createContextForge(options = {}) {
       requireOption(options.candidateId, 'candidateId');
       return useStore((store) =>
         store.withTransaction(() => {
-        const candidate = store.getMemoryUpdateCandidate({
-          ...scope,
-          candidateId: options.candidateId,
-        });
-        if (!candidate) {
-          throw new Error(`Memory update candidate not found: ${options.candidateId}`);
-        }
-        if (candidate.status !== 'pending' && !truthyOption(options.allowStatusOverride)) {
-          throw new Error(
-            `Memory update candidate ${candidate.id} is ${candidate.status}; expected pending. Pass allowStatusOverride to change it anyway.`,
-          );
-        }
-        let memory = null;
-        const reason = options.reason || candidate.reason || 'Applied reviewed memory update candidate.';
-        if (candidate.action === 'correct_memory') {
-          const key = options.key || candidate.targetMemoryKey || candidate.proposedKey;
-          requireOption(key, 'key');
-          const previous = store.getMemory({ ...scope, key });
-          if (!previous) {
-            throw new Error(`Memory not found: ${key}`);
+          const candidate = store.getMemoryUpdateCandidate({
+            ...scope,
+            candidateId: options.candidateId,
+          });
+          if (!candidate) {
+            throw new Error(`Memory update candidate not found: ${options.candidateId}`);
           }
-          memory = store.rememberMemory({
-            ...scope,
-            key,
-            content: options.content || candidate.proposedContent,
-            category: options.category || candidate.proposedCategory || previous.category,
-            tags: options.tags?.length
-              ? options.tags
-              : candidate.proposedTags?.length
-                ? candidate.proposedTags
-                : previous.tags,
-            importance:
-              options.importance == null
-                ? candidate.proposedImportance == null
-                  ? previous.importance
-                  : candidate.proposedImportance
-                : options.importance,
-            supersedesMemoryId: previous.id,
-            eventType: 'correct',
-            eventMetadata: {
-              sourceUpdateCandidateId: candidate.id,
-              previousMemoryId: previous.id,
-              previousContent: previous.content,
-              correction: candidate.correction,
+          if (candidate.status !== 'pending' && !truthyOption(options.allowStatusOverride)) {
+            throw new Error(
+              `Memory update candidate ${candidate.id} is ${candidate.status}; expected pending. Pass allowStatusOverride to change it anyway.`,
+            );
+          }
+          let memory = null;
+          let reviewMetadata = {};
+          const reason = options.reason || candidate.reason || 'Applied reviewed memory update candidate.';
+          if (candidate.action === 'correct_memory') {
+            const key = options.key || candidate.targetMemoryKey || candidate.proposedKey;
+            requireOption(key, 'key');
+            const previous = store.getMemory({ ...scope, key });
+            if (!previous) {
+              throw new Error(`Memory not found: ${key}`);
+            }
+            memory = store.rememberMemory({
+              ...scope,
+              key,
+              content: options.content || candidate.proposedContent,
+              category: options.category || candidate.proposedCategory || previous.category,
+              tags: options.tags?.length
+                ? options.tags
+                : candidate.proposedTags?.length
+                  ? candidate.proposedTags
+                  : previous.tags,
+              importance:
+                options.importance == null
+                  ? candidate.proposedImportance == null
+                    ? previous.importance
+                    : candidate.proposedImportance
+                  : options.importance,
+              supersedesMemoryId: previous.id,
+              eventType: 'correct',
+              eventMetadata: {
+                sourceUpdateCandidateId: candidate.id,
+                previousMemoryId: previous.id,
+                previousContent: previous.content,
+                correction: candidate.correction,
+                reason,
+              },
+            });
+          } else if (candidate.action === 'deactivate_memory') {
+            const key = options.key || candidate.targetMemoryKey;
+            requireOption(key, 'key');
+            memory = store.deactivateMemory({
+              ...scope,
+              key,
               reason,
-            },
-          });
-        } else if (candidate.action === 'deactivate_memory') {
-          const key = options.key || candidate.targetMemoryKey;
-          requireOption(key, 'key');
-          memory = store.deactivateMemory({
+            });
+          } else if (candidate.action === 'merge_duplicate_memories') {
+            const key = options.key || candidate.targetMemoryKey;
+            const mergedIntoKey = options.mergeTargetKey || candidate.proposedKey;
+            requireOption(key, 'key');
+            requireOption(mergedIntoKey, 'proposedKey');
+            const survivor = store.getMemory({ ...scope, key: mergedIntoKey });
+            if (!survivor) {
+              throw new Error(`Merge target memory not found: ${mergedIntoKey}`);
+            }
+            memory = store.deactivateMemory({
+              ...scope,
+              key,
+              reason: `${reason} Merged into ${mergedIntoKey}.`,
+            });
+            reviewMetadata = {
+              mergedIntoMemoryId: survivor.id,
+              mergedIntoKey,
+            };
+          } else if (candidate.action === 'add_corrective_note') {
+            const key = options.key || correctiveNoteKey(candidate);
+            memory = store.rememberMemory({
+              ...scope,
+              key,
+              content: options.content || candidate.proposedContent,
+              category: options.category || candidate.proposedCategory || 'note',
+              tags: options.tags || candidate.proposedTags || [],
+              importance: options.importance == null ? candidate.proposedImportance || 0 : options.importance,
+              eventType: 'promote',
+              eventMetadata: {
+                sourceUpdateCandidateId: candidate.id,
+                sourceCheckpointId: candidate.sourceCheckpointId,
+                correction: candidate.correction,
+                reason,
+              },
+            });
+          } else {
+            throw new Error(`Unsupported memory update candidate action: ${candidate.action}`);
+          }
+          const reviewed = store.markMemoryUpdateCandidateReviewed({
             ...scope,
-            key,
+            candidateId: candidate.id,
+            status: 'applied',
             reason,
-          });
-        } else if (candidate.action === 'add_corrective_note') {
-          const key = options.key || candidate.proposedKey || `corrective-note-${candidate.id}`;
-          memory = store.rememberMemory({
-            ...scope,
-            key,
-            content: options.content || candidate.proposedContent,
-            category: options.category || candidate.proposedCategory || 'note',
-            tags: options.tags || candidate.proposedTags || [],
-            importance: options.importance == null ? candidate.proposedImportance || 0 : options.importance,
-            eventType: 'promote',
-            eventMetadata: {
-              sourceUpdateCandidateId: candidate.id,
-              sourceCheckpointId: candidate.sourceCheckpointId,
-              correction: candidate.correction,
-              reason,
+            appliedMemoryId: memory?.id || null,
+            allowStatusOverride: truthyOption(options.allowStatusOverride),
+            metadata: {
+              memoryId: memory?.id || null,
+              memoryKey: memory?.key || null,
+              ...reviewMetadata,
             },
           });
-        } else {
-          throw new Error(`Unsupported memory update candidate action: ${candidate.action}`);
-        }
-        const reviewed = store.markMemoryUpdateCandidateReviewed({
-          ...scope,
-          candidateId: candidate.id,
-          status: 'applied',
-          reason,
-          appliedMemoryId: memory?.id || null,
-          allowStatusOverride: truthyOption(options.allowStatusOverride),
-          metadata: {
-            memoryId: memory?.id || null,
-            memoryKey: memory?.key || null,
-          },
-        });
-        return {
-          kind: 'memory_update_candidate_apply_result',
-          candidate: reviewed,
-          memory,
-        };
+          return {
+            kind: 'memory_update_candidate_apply_result',
+            candidate: reviewed,
+            memory,
+          };
         }),
       );
     },
@@ -2006,6 +2054,7 @@ export function createContextForge(options = {}) {
         'candidateLimit',
       );
       const includeShared = truthyOption(options.includeShared);
+      const createUpdateCandidates = truthyOption(options.createUpdateCandidates);
       const reconciliationQuery = `${options.query}\n${options.correction}`;
       const bootstrap = await this.bootstrapContext({
         ...options,
@@ -2083,25 +2132,36 @@ export function createContextForge(options = {}) {
             if (!action) {
               continue;
             }
-            const updateCandidate = store.createMemoryUpdateCandidate({
+            const draft = {
+              id: null,
+              status: createUpdateCandidates ? 'pending' : 'proposed',
+              scopeType: scope.scopeType,
+              scopeKey: scope.scopeKey,
               ...scope,
               action,
               targetMemoryId: item.memoryId || null,
               targetMemoryKey: item.type === 'memory' ? item.key : null,
-              proposedKey: item.type === 'memory' ? item.key : null,
+              proposedKey:
+                item.type === 'memory' ? item.key : `corrective-note-${slugForKey(options.correction)}`,
               proposedContent: options.correction,
               proposedCategory: item.category || 'note',
               reason:
                 item.type === 'checkpoint'
                   ? 'Checkpoint is immutable; propose a corrective durable note instead.'
                   : 'User correction may require updating existing durable memory.',
-              confidence: item.type === 'memory' ? 0.7 : 0.55,
+              confidence:
+                item.type === 'memory'
+                  ? RECONCILE_UPDATE_CONFIDENCE.durableMemory
+                  : RECONCILE_UPDATE_CONFIDENCE.checkpointNote,
               sourceSessionId: options.sessionId || item.sessionId || null,
               sourceCheckpointId: item.checkpointId || null,
               sourceCandidateId: item.candidateId || null,
               correction: options.correction,
               basis: [item],
-            });
+            };
+            const updateCandidate = createUpdateCandidates
+              ? store.createMemoryUpdateCandidate(draft)
+              : draft;
             updateCandidates.push(memoryUpdateCandidateProposal(updateCandidate));
           }
         }
@@ -2217,6 +2277,9 @@ export function createContextForge(options = {}) {
             mode === 'apply_safe'
               ? ['Review appliedActions and warnings.', 'Verify mutable live state before making further memory changes.']
               : [
+                  createUpdateCandidates
+                    ? 'Review updateCandidates, then ask the user whether to apply, edit then apply, skip, or reject them.'
+                    : 'Review updateCandidates. Pass createUpdateCandidates=true to persist them for later approval.',
                   'Ask the user whether to apply a correction, deactivate stale durable memory, reject candidates, or add a corrective note.',
                   'Verify mutable live state before changing memory for git/GitHub/CI/runtime/migration claims.',
                 ],

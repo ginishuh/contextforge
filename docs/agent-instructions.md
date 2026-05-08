@@ -423,6 +423,9 @@ review proposals until the user approves. Use `apply_memory_update_candidate`
 only after explicit approval; use `reject_memory_update_candidate` when the
 candidate should not mutate durable memory, or `skip_memory_update_candidate`
 when it should remain non-applied without being treated as wrong.
+`reconcile_memory` propose mode is read-only by default; pass
+`createUpdateCandidates=true` only when the user wants persistent review
+proposals saved to the update-candidate lane.
 
 If a candidate key looks wrong, too broad, or belongs to the wrong repo, do not
 promote it as-is. Use `remember` with a corrected key/content or leave it as a

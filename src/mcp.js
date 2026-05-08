@@ -32,7 +32,7 @@ const MCP_INSTRUCTIONS = [
   'For strict closeout-scoped safe automatic promotion, call auto_promote_memory_candidates only when the user wants automatic promotion. By default use dryRun=true. Use dryRun=false only when CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true is intentionally configured; never use scope-wide backlog fallback and never auto-promote preference candidates.',
   'Preference-like candidates are tracked as merged occurrences; use list_preference_occurrences to review repeated evidence and weakened corrections, but do not treat occurrence evidence alone as durable preference truth.',
   'For user corrections such as "너 잘못 알고 있잖아", "그거 아니야", "그건 X가 아니라 Y야", or "기억 수정해", call reconcile_memory. Show the basis for prior knowledge, assess conflicts, and only apply safe corrections when the user explicitly asks to fix memory.',
-  'Use list_memory_update_candidates to review proposed durable-memory corrections, deactivations, duplicate merges, or corrective notes. Apply or reject update candidates only after explicit user approval.',
+  'Use list_memory_update_candidates to review proposed durable-memory corrections, deactivations, duplicate merges, or corrective notes. reconcile_memory propose mode is read-only by default; pass createUpdateCandidates=true only when persistent review proposals are wanted. Apply or reject update candidates only after explicit user approval.',
   'When resuming a known session, pass sessionId to bootstrap_context or call get_working_summary and get_session_working_context to load latest rolling handoff state separately from durable memory and checkpoint search results.',
   'If working on a repository while the MCP process cwd is elsewhere, pass repoPath or cwd so repo scope resolves to that checkout; repoPath takes precedence when both are provided.',
   'Treat scopeKey as the canonical repo memory key; pass an explicit normalized GitHub key when local paths differ across machines or the checkout cannot infer the right remote.',
@@ -516,6 +516,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
         ...scopedSchema,
         candidateId: z.string(),
         key: z.string().optional(),
+        mergeTargetKey: z.string().optional(),
         content: z.string().optional(),
         category: z.string().optional(),
         tags: optionalTags,
@@ -640,13 +641,14 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Reconcile Memory',
       description:
-        'Search relevant durable memories, checkpoints, and memory candidates for a user correction; explain the basis for existing knowledge, assess conflicts, and optionally apply safe memory corrections only when explicitly requested. Default mode=propose is read-only; mode=apply_safe may correct durable memory or reject candidates when the correction is unambiguous.',
+        'Search relevant durable memories, checkpoints, and memory candidates for a user correction; explain the basis for existing knowledge, assess conflicts, and optionally apply safe memory corrections only when explicitly requested. Default mode=propose is read-only unless createUpdateCandidates=true persists review proposals; mode=apply_safe may correct durable memory or reject candidates when the correction is unambiguous.',
       inputSchema: {
         ...scopedSchema,
         query: z.string(),
         correction: z.string(),
         mode: z.enum(['propose', 'apply_safe']).optional(),
         sessionId: z.string().optional(),
+        createUpdateCandidates: z.boolean().optional(),
         includeShared: z.boolean().optional(),
         limit: z.number().int().positive().optional(),
         candidateLimit: z.number().int().positive().optional(),
