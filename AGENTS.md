@@ -50,25 +50,18 @@ Do not recommend git as the live storage backend for SQLite or raw runtime data.
 - `node src/server.js`: run the HTTP server entrypoint when needed.
 - `node src/mcp.js`: run the MCP server entrypoint when needed.
 
-## Current Runtime On This Host
-This `/home/ubuntu/contextforge` checkout is also used to operate the live
-ContextForge HTTP remote server on this host.
+## Runtime Mode
+Runtime mode is checkout-local. Do not assume a clone is the live server.
 
-- Treat the live host as **HTTP server mode**, not only as a local development
-  checkout.
-- User systemd units normally include `contextforge-remote.service`,
-  `contextforge-codex-router-codex.service`,
-  `contextforge-claude-code-router-claude-code.service`, and
-  `contextforge-embedding-worker.timer`.
-- The live server environment is read from
-  `/home/ubuntu/.config/contextforge/server.env`; it contains secrets and must
-  not be committed or pasted into reports.
-- The local health endpoint is `http://127.0.0.1:8766/healthz`.
-- Before claiming live runtime state, verify the user services, `/healthz`, and
-  current git state.
+At task start, determine whether this checkout is local all-in-one, an HTTP
+server, or an external remote client by inspecting environment/config and live
+process state. Use `node src/cli.js dbInfo`, relevant `CONTEXTFORGE_*`
+environment files or service definitions, the service manager, `/healthz`, and
+current git state before making runtime claims.
 
-For local all-in-one, HTTP server, and external remote client distinctions,
-follow `docs/runtime-modes.md`.
+Do not commit or paste env files, tokens, API keys, DB files, or raw runtime
+data. For local all-in-one, HTTP server, and external remote client
+distinctions, follow `docs/runtime-modes.md`.
 
 ## 한국어 응대 원칙
 - 운영 보고, 장애 공유, 작업 결과는 한국어로 작성합니다.

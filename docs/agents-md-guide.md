@@ -64,26 +64,32 @@ repo-specific but long, move it into a repo doc and link to that doc.
 For ContextForge deployment topology, link to `docs/runtime-modes.md` instead
 of pasting the full local/server/remote setup guide.
 
-## Current Runtime Section Pattern
+## Runtime Mode Section Pattern
 
-If a checkout is also used to operate a live service, include a short current
-runtime section. Keep it factual and secret-free:
+Runtime mode is checkout-local. Do not bake one host's current state into a
+tracked `AGENTS.md` that will be cloned elsewhere. Instead, include a short
+runtime mode section that tells agents how to determine the current checkout's
+role from env/config and live process state.
 
 ```text
-## Current Runtime On This Host
+## Runtime Mode
 
-This checkout is also used to operate the live ContextForge HTTP remote server.
+Runtime mode is checkout-local. Do not assume a clone is the live server.
 
-- Treat this host as HTTP server mode, not only as a local development checkout.
-- The server environment file contains secrets and must not be committed or
-  pasted into reports.
-- Before claiming live runtime state, verify the service manager, health
-  endpoint, and current git state.
-- For runtime mode distinctions, follow `docs/runtime-modes.md`.
+At task start, determine whether this checkout is local all-in-one, an HTTP
+server, or an external remote client by inspecting environment/config and live
+process state. Use `node src/cli.js dbInfo`, relevant `CONTEXTFORGE_*`
+environment files or service definitions, the service manager, `/healthz`, and
+current git state before making runtime claims.
+
+Do not commit or paste env files, tokens, API keys, DB files, or raw runtime
+data. For local all-in-one, HTTP server, and external remote client
+distinctions, follow `docs/runtime-modes.md`.
 ```
 
-Do not include token values, API keys, private customer data, or full env-file
-contents.
+Do not include token values, API keys, private customer data, full env-file
+contents, host-specific ports, or service names unless they are stable product
+documentation rather than one deployment's current state.
 
 ## ContextForge Section Pattern
 

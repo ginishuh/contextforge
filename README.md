@@ -1229,7 +1229,8 @@ ContextForge bootstrap snippet, the critical session invariant, and a direction
 to use the installed `contextforge-memory` skill instead of copying every MCP
 rule into each project.
 If a checkout is also a live server or remote client, include a short
-secret-free current runtime section and link to
+secret-free runtime mode section that tells agents to inspect env/config and
+live process state instead of assuming the clone is the server. Link to
 [ContextForge Runtime Modes](docs/runtime-modes.md).
 For loose continuation prompts like "yesterday", "continue", "previous work",
 issue/PR follow-up, or cross-agent handoff, agents should call
