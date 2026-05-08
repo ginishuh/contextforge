@@ -242,6 +242,11 @@ export class ContextForgeStore {
     this.db.close();
   }
 
+  // Runs fn inside an implicit transaction; rolls back on throw; returns fn's return value.
+  withTransaction(fn) {
+    return this.db.transaction(fn)();
+  }
+
   ensureColumn(table, column, definition) {
     const columns = this.db.prepare(`PRAGMA table_info(${table})`).all();
     if (!columns.some((item) => item.name === column)) {

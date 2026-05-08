@@ -705,7 +705,7 @@ function autoPromotionWouldPromote(indexedCandidate, warnings, rank) {
 
 function autoPromoteIndexedCandidate(store, scope, indexedCandidate, warnings, reason) {
   const candidate = indexedCandidate.candidate || {};
-  return store.db.transaction(() => {
+  return store.withTransaction(() => {
     const memory = store.rememberMemory({
       ...scope,
       key: candidate.key,
@@ -739,7 +739,7 @@ function autoPromoteIndexedCandidate(store, scope, indexedCandidate, warnings, r
       },
     });
     return memory;
-  })();
+  });
 }
 
 function summarizeBasisResult(result) {
