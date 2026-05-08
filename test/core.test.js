@@ -2825,12 +2825,14 @@ test('appendRaw and mock distillCheckpoint preserve raw evidence', async () => {
 
 test('distillCheckpoint records checkpoint level and coverage metadata', async () => {
   const dataDir = await makeTempDir();
+  const store = new ContextForgeStore({ dataDir });
   const app = createContextForge({
     env: {
       CONTEXTFORGE_DATA_DIR: dataDir,
       CONTEXTFORGE_DISTILL_PROVIDER: 'level_provider',
     },
     cwd: process.cwd(),
+    store,
     distillProviders: {
       level_provider: async () => ({
         summaryShort: 'Daily checkpoint.',
@@ -2861,6 +2863,19 @@ test('distillCheckpoint records checkpoint level and coverage metadata', async (
     content: 'Second level event.',
   });
 
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'repo-level',
+    sessionId: 'level-session',
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-level',
+    sessionId: 'level-session',
+    role: 'assistant',
+    content: 'Third level event.',
+  });
+
   const checkpoint = await app.distillCheckpoint({
     scope: 'repo',
     scopeKey: 'repo-level',
@@ -2876,7 +2891,13 @@ test('distillCheckpoint records checkpoint level and coverage metadata', async (
   assert.equal(checkpoint.source, 'daily_consolidation');
   assert.equal(checkpoint.sourceRef, '2026-05-08');
   assert.equal(app.listCheckpoints({ scope: 'repo', scopeKey: 'repo-level', level: 1 }).length, 1);
-  assert.equal(app.listCheckpoints({ scope: 'repo', scopeKey: 'repo-level', level: 0 }).length, 0);
+  assert.equal(app.listCheckpoints({ scope: 'repo', scopeKey: 'repo-level', level: 0 }).length, 1);
+  assert.equal(store.getLatestCheckpoint({ scopeType: 'repo', scopeKey: 'repo-level', sessionId: 'level-session' }).level, 1);
+  assert.equal(
+    store.getLatestCheckpoint({ scopeType: 'repo', scopeKey: 'repo-level', sessionId: 'level-session', level: 0 })
+      .level,
+    0,
+  );
 });
 
 test('appendRaw accepts only user and assistant conversation evidence roles', async () => {
