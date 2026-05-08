@@ -355,7 +355,7 @@ jobs:
           path.write_text(
               json.dumps(
                   {
-                      "zai": {
+                      "zai-coding-plan": {
                           "type": "api",
                           "key": os.environ["ZAI_API_KEY"],
                       }
@@ -396,7 +396,7 @@ jobs:
           set +e
           run_builtin_smoke() {
             "$OPENCODE_BIN" run \
-              --model zai/glm-5.1 \
+              --model zai-coding-plan/glm-5.1 \
               --dir "$REVIEW_DIR" \
               "Reply exactly with ZAI_BUILTIN_READY." \
               > "$REVIEW_DIR/opencode-zai-builtin-smoke.md" \
@@ -405,7 +405,7 @@ jobs:
 
           run_builtin_json_smoke() {
             "$OPENCODE_BIN" run \
-              --model zai/glm-5.1 \
+              --model zai-coding-plan/glm-5.1 \
               --dir "$REVIEW_DIR" \
               --format json \
               --thinking \
@@ -650,7 +650,7 @@ jobs:
 
           run_opencode_builtin_model_review() {
             "$OPENCODE_BIN" run "$(cat "$REVIEW_DIR/review_prompt.md")" \
-              --model zai/glm-5.1 \
+              --model zai-coding-plan/glm-5.1 \
               --dir "$CODE_DIR" \
               --file "$REVIEW_DIR/context.md" \
               --file "$REVIEW_DIR/pr.diff"
