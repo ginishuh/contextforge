@@ -31,6 +31,10 @@ function parseOptionalPositiveInteger(value, name) {
   return parsed;
 }
 
+function parseBoolean(value) {
+  return value === true || value === 'true' || value === '1' || value === 1;
+}
+
 function findGitRoot(cwd) {
   let current = path.resolve(cwd);
   while (true) {
@@ -216,6 +220,9 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
         'CONTEXTFORGE_REMOTE_TIMEOUT_MS',
         30000,
       ),
+    },
+    autoPromote: {
+      enabled: parseBoolean(env.CONTEXTFORGE_AUTO_PROMOTE_ENABLED),
     },
     codexExec: {
       command: env.CONTEXTFORGE_CODEX_EXEC_COMMAND || 'codex',

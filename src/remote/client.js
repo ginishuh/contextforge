@@ -16,6 +16,7 @@ const REMOTE_METHODS = [
   'listMemoryEvents',
   'listMemoryCandidates',
   'suggestMemoryPromotions',
+  'autoPromoteMemoryCandidates',
   'reconcileMemory',
   'getMemory',
   'search',

@@ -91,6 +91,16 @@ function toCoreOptions(options) {
     status: options.status,
     candidateType: options.candidateType,
     promotionRecommendation: options.promotionRecommendation,
+    trigger: options.trigger,
+    dryRun: options.dryRun == null ? undefined : options.dryRun === true || options.dryRun === 'true',
+    minConfidence: options.minConfidence == null ? undefined : Number(options.minConfidence),
+    minStability: options.minStability == null ? undefined : Number(options.minStability),
+    allowedCategories: options.allowedCategories
+      ? String(options.allowedCategories)
+          .split(',')
+          .map((item) => item.trim())
+          .filter(Boolean)
+      : undefined,
     sort: options.sort,
     allowWarnings: options.allowWarnings === true || options.allowWarnings === 'true',
     allowStatusOverride: options.allowStatusOverride === true || options.allowStatusOverride === 'true',
@@ -144,6 +154,7 @@ async function main() {
     deactivateMemory: (app, coreOptions) => app.deactivateMemory(coreOptions),
     listMemoryEvents: (app, coreOptions) => app.listMemoryEvents(coreOptions),
     listMemoryCandidates: (app, coreOptions) => app.listMemoryCandidates(coreOptions),
+    autoPromoteMemoryCandidates: (app, coreOptions) => app.autoPromoteMemoryCandidates(coreOptions),
     search: (app, coreOptions) => app.search(coreOptions),
     rebuildEmbeddings: (app, coreOptions) => app.rebuildEmbeddings(coreOptions),
     getMemory: (app, coreOptions) => app.getMemory(coreOptions),

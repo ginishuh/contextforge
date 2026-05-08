@@ -29,6 +29,7 @@ const MCP_INSTRUCTIONS = [
   'Search result types have different trust roles: memory is reviewed durable fact or decision; checkpoint is credible recent handoff state for continuity, planning, prior intent, recent decisions, and unfinished work, but mutable live-state claims must be verified with git/GitHub/CI/runtime/migrations before acting; memory_candidate is unreviewed promotion material and not durable truth.',
   'For start/resume requests such as "지난 환경 작업과 동기화", "어제 하던 거 이어서", "previous work", or "continue", call sync_resume_context. Use checkpoints actively as handoff notes, then verify mutable state with git/GitHub/CI/runtime/migrations. Do not propose memory promotions during resume sync.',
   'For closeout triggers only, call suggest_memory_promotions: after this agent merges a PR, after the user says they merged and the agent syncs main/cleans branches, or when the user explicitly says today\'s work is done. Suggest at most 1-3 durable memory promotions and never promote automatically.',
+  'For strict closeout-scoped safe automatic promotion, call auto_promote_memory_candidates only when the user wants automatic promotion. By default use dryRun=true. Use dryRun=false only when CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true is intentionally configured; never use scope-wide backlog fallback and never auto-promote preference candidates.',
   'For user corrections such as "너 잘못 알고 있잖아", "그거 아니야", "그건 X가 아니라 Y야", or "기억 수정해", call reconcile_memory. Show the basis for prior knowledge, assess conflicts, and only apply safe corrections when the user explicitly asks to fix memory.',
   'When resuming a known session, pass sessionId to bootstrap_context or call get_working_summary to load latest rolling handoff state separately from durable memory and checkpoint search results.',
   'If working on a repository while the MCP process cwd is elsewhere, pass repoPath or cwd so repo scope resolves to that checkout; repoPath takes precedence when both are provided.',
@@ -413,6 +414,38 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
       },
     },
     async (args) => jsonResult(await app.suggestMemoryPromotions(args)),
+  );
+
+  server.registerTool(
+    'auto_promote_memory_candidates',
+    {
+      title: 'Auto Promote Memory Candidates',
+      description:
+        'Dry-run or, when CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true and dryRun=false, automatically promote only strict closeout-scoped safe memory candidates. Requires sessionId or checkpointId and never scans the scope backlog.',
+      inputSchema: {
+        ...scopedSchema,
+        sessionId: z.string().optional(),
+        checkpointId: z.string().optional(),
+        trigger: z.enum([
+          'agent_merged_pr',
+          'user_merged_then_synced',
+          'user_declared_work_done',
+          'manual_closeout',
+        ]),
+        dryRun: z.boolean().optional(),
+        limit: z.number().int().positive().optional(),
+        scanLimit: z.number().int().positive().optional(),
+        minConfidence: z.number().optional(),
+        minStability: z.number().optional(),
+        allowedCategories: z.array(z.string()).optional(),
+      },
+      annotations: {
+        title: 'Auto Promote Memory Candidates',
+        readOnlyHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.autoPromoteMemoryCandidates(args)),
   );
 
   server.registerTool(
