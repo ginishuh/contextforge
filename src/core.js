@@ -254,6 +254,7 @@ function bootstrapResultSummary(result) {
       category: 'checkpoint',
       content: truncateText(result.checkpoint.summaryText || result.checkpoint.summaryShort),
       sessionId: result.checkpoint.sessionId,
+      level: result.checkpoint.level,
       createdAt: result.checkpoint.createdAt,
     };
   }
@@ -358,6 +359,7 @@ function bootstrapResult(result, group) {
     source: result.source,
     retrieval: result.retrieval,
     ...(summary.sessionId ? { sessionId: summary.sessionId } : {}),
+    ...(summary.level != null ? { level: summary.level } : {}),
     ...(summary.createdAt ? { createdAt: summary.createdAt } : {}),
     ...(summary.candidateId ? { candidateId: summary.candidateId } : {}),
     ...(summary.status ? { status: summary.status } : {}),
@@ -506,6 +508,15 @@ const DURABLE_PROPOSAL_CATEGORIES = new Set([
 ]);
 
 const SAFE_AUTO_PROMOTE_CATEGORIES = new Set(['runbook', 'failure-mode', 'api-contract', 'environment', 'decision']);
+const CHECKPOINT_SOURCES = new Set(['distill', 'daily_consolidation', 'weekly_consolidation', 'topic_batch', 'manual']);
+
+function normalizeCheckpointSource(source) {
+  const value = source ?? 'distill';
+  if (!CHECKPOINT_SOURCES.has(value)) {
+    throw new Error(`source must be one of: ${Array.from(CHECKPOINT_SOURCES).join(', ')}.`);
+  }
+  return value;
+}
 
 function compactBootstrapCandidate(result) {
   return {
@@ -566,6 +577,11 @@ function checkpointHandoffResult(checkpoint, group = 'session') {
       vectorDimensions: null,
     },
     sessionId: checkpoint.sessionId,
+    level: checkpoint.level,
+    coversFrom: checkpoint.coversFrom,
+    coversTo: checkpoint.coversTo,
+    checkpointSource: checkpoint.source,
+    sourceRef: checkpoint.sourceRef,
     createdAt: checkpoint.createdAt,
   });
 }
@@ -593,6 +609,11 @@ function checkpointBasisResult(checkpoint) {
     },
     checkpointId: checkpoint.id,
     sessionId: checkpoint.sessionId,
+    level: checkpoint.level,
+    coversFrom: checkpoint.coversFrom,
+    coversTo: checkpoint.coversTo,
+    checkpointSource: checkpoint.source,
+    sourceRef: checkpoint.sourceRef,
   };
 }
 
@@ -830,6 +851,11 @@ function summarizeBasisResult(result) {
     checkpointId: result.checkpointId || (result.type === 'checkpoint' ? result.key : null),
     candidateId: result.candidateId || null,
     sessionId: result.sessionId || null,
+    level: result.level ?? null,
+    coversFrom: result.coversFrom || null,
+    coversTo: result.coversTo || null,
+    checkpointSource: result.checkpointSource || null,
+    sourceRef: result.sourceRef || null,
     status: result.status || null,
   };
 }
@@ -908,6 +934,13 @@ function selectDistillWindow(rawEvents, latestCheckpoint, policy) {
       firstRawEventId: selected[0]?.id || null,
       lastRawEventId: selected.at(-1)?.id || null,
     },
+  };
+}
+
+function coverageFromEvents(events) {
+  return {
+    coversFrom: events[0]?.createdAt || null,
+    coversTo: events.at(-1)?.createdAt || null,
   };
 }
 
@@ -1235,7 +1268,7 @@ export function createContextForge(options = {}) {
       const recentCheckpoints = [];
       const memoryCandidateResults = [];
       const latestCheckpoint = bootstrap.sessionId
-        ? useStore((store) => store.getLatestCheckpoint({ ...bootstrap.scope, sessionId: bootstrap.sessionId }))
+        ? useStore((store) => store.getLatestCheckpoint({ ...bootstrap.scope, sessionId: bootstrap.sessionId, level: 0 }))
         : null;
 
       for (const result of bootstrap.results || []) {
@@ -1362,7 +1395,7 @@ export function createContextForge(options = {}) {
           scope,
           sessionId: options.sessionId,
           rawEvents: store.listRawEvents({ ...scope, sessionId: options.sessionId }),
-          latestCheckpoint: store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId }),
+          latestCheckpoint: store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId, level: 0 }),
           policy,
         }),
       );
@@ -1509,7 +1542,7 @@ export function createContextForge(options = {}) {
         if (checkpointId) {
           sourceMode = 'checkpoint';
         } else if (options.sessionId) {
-          const latestCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId });
+          const latestCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId, level: 0 });
           checkpointId = latestCheckpoint?.id || null;
           sourceMode = 'latest_checkpoint';
         } else if (allowScopeFallback) {
@@ -1673,7 +1706,7 @@ export function createContextForge(options = {}) {
         if (checkpointId) {
           sourceMode = 'checkpoint';
         } else {
-          const latestCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId });
+          const latestCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId, level: 0 });
           checkpointId = latestCheckpoint?.id || null;
           sourceMode = 'latest_checkpoint';
         }
@@ -1803,7 +1836,7 @@ export function createContextForge(options = {}) {
       return useStore((store) => {
         const basis = (bootstrap.results || []).slice(0, limit).map(summarizeBasisResult);
         const latestCheckpoint = options.sessionId
-          ? store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId })
+          ? store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId, level: 0 })
           : null;
         if (latestCheckpoint && !basis.some((item) => item.type === 'checkpoint')) {
           basis.push(checkpointBasisResult(latestCheckpoint));
@@ -2169,6 +2202,17 @@ export function createContextForge(options = {}) {
       return useStore((store) => store.listRawEvents({ ...scope, sessionId: options.sessionId }));
     },
 
+    listCheckpoints(options) {
+      const scope = normalizeScopeOptions(options, config);
+      return useStore((store) =>
+        store.listCheckpoints({
+          ...scope,
+          sessionId: options.sessionId || null,
+          level: options.level == null ? null : Number(options.level),
+        }),
+      );
+    },
+
     getWorkingSummary(options) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.sessionId, 'sessionId');
@@ -2221,7 +2265,7 @@ export function createContextForge(options = {}) {
 
       return useStore(async (store) => {
         const rawEvents = store.listRawEvents({ ...scope, sessionId: options.sessionId });
-        const previousCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId });
+        const previousCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId, level: 0 });
         const previousWorkingSummary = store.getWorkingSummary({ ...scope, sessionId: options.sessionId });
         const previousSessionWorkingContext = store.getSessionWorkingContext({ ...scope, sessionId: options.sessionId });
         const policy = {
@@ -2236,9 +2280,14 @@ export function createContextForge(options = {}) {
         };
         const distillWindow = selectDistillWindow(rawEvents, previousCheckpoint, policy);
         const selectedRawEvents = distillWindow.events;
+        const coverage = coverageFromEvents(selectedRawEvents);
         const sourceProvenance = sourceProvenanceFromEvents(selectedRawEvents);
         const conversationId =
           options.conversationId || rawEvents.find((event) => event.conversationId)?.conversationId || null;
+        const checkpointLevel = options.level == null ? 0 : Number(options.level);
+        if (!Number.isInteger(checkpointLevel) || checkpointLevel < 0) {
+          throw new Error('level must be a non-negative integer.');
+        }
         const requestedOutputSchema = {
           summaryShort: 'string',
           summaryText: 'string',
@@ -2324,6 +2373,11 @@ export function createContextForge(options = {}) {
           sourceEventCount: output.sourceEventCount ?? selectedRawEvents.length,
           provider: output.provider || provider.name,
           distillRunId: distillRun.id,
+          level: checkpointLevel,
+          coversFrom: options.coversFrom ?? coverage.coversFrom,
+          coversTo: options.coversTo ?? coverage.coversTo,
+          source: normalizeCheckpointSource(options.source),
+          sourceRef: options.sourceRef ?? distillRun.id,
           metadata: {
             providerMetadata: output.metadata,
             memoryCandidates: output.memoryCandidates,

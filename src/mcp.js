@@ -302,6 +302,26 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
   );
 
   server.registerTool(
+    'list_checkpoints',
+    {
+      title: 'List Checkpoints',
+      description:
+        'List scoped checkpoints, optionally filtered by sessionId and checkpoint level. Level 0 is the default session distill level.',
+      inputSchema: {
+        ...scopedSchema,
+        sessionId: z.string().optional(),
+        level: z.number().int().nonnegative().optional(),
+      },
+      annotations: {
+        title: 'List Checkpoints',
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.listCheckpoints(args)),
+  );
+
+  server.registerTool(
     'get_session_working_context',
     {
       title: 'Get Session Working Context',
@@ -355,7 +375,8 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     'distill_checkpoint',
     {
       title: 'Distill Checkpoint',
-      description: 'Distill raw session evidence into a checkpoint with the configured provider.',
+      description:
+        'Distill raw session evidence into a checkpoint with the configured provider. level defaults to 0 for session distills; higher levels are reserved for later daily/weekly consolidation.',
       inputSchema: {
         ...scopedSchema,
         sessionId: z.string(),
@@ -363,6 +384,11 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
         provider: z.string().optional(),
         maxEvents: z.number().int().positive().optional(),
         maxChars: z.number().int().positive().optional(),
+        level: z.number().int().nonnegative().optional(),
+        coversFrom: z.string().optional(),
+        coversTo: z.string().optional(),
+        source: z.enum(['distill', 'daily_consolidation', 'weekly_consolidation', 'topic_batch', 'manual']).optional(),
+        sourceRef: z.string().optional(),
       },
       annotations: {
         title: 'Distill Checkpoint',

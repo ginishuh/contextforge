@@ -23,6 +23,7 @@ const REMOTE_METHODS = [
   'rebuildEmbeddings',
   'appendRaw',
   'listRawEvents',
+  'listCheckpoints',
   'getWorkingSummary',
   'getSessionWorkingContext',
   'upsertSessionWorkingContext',

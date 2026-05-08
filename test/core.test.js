@@ -2823,6 +2823,83 @@ test('appendRaw and mock distillCheckpoint preserve raw evidence', async () => {
   assert.equal(statusAfter.shouldDistill, false);
 });
 
+test('distillCheckpoint records checkpoint level and coverage metadata', async () => {
+  const dataDir = await makeTempDir();
+  const store = new ContextForgeStore({ dataDir });
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'level_provider',
+    },
+    cwd: process.cwd(),
+    store,
+    distillProviders: {
+      level_provider: async () => ({
+        summaryShort: 'Daily checkpoint.',
+        summaryText: 'Consolidated daily checkpoint state.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        workingSummary: 'Daily working summary.',
+        memoryCandidates: [],
+        sourceEventCount: 2,
+        metadata: {},
+      }),
+    },
+  });
+
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-level',
+    sessionId: 'level-session',
+    role: 'user',
+    content: 'First level event.',
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-level',
+    sessionId: 'level-session',
+    role: 'assistant',
+    content: 'Second level event.',
+  });
+
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'repo-level',
+    sessionId: 'level-session',
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-level',
+    sessionId: 'level-session',
+    role: 'assistant',
+    content: 'Third level event.',
+  });
+
+  const checkpoint = await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'repo-level',
+    sessionId: 'level-session',
+    level: 1,
+    source: 'daily_consolidation',
+    sourceRef: '2026-05-08',
+  });
+
+  assert.equal(checkpoint.level, 1);
+  assert.ok(checkpoint.coversFrom);
+  assert.ok(checkpoint.coversTo);
+  assert.equal(checkpoint.source, 'daily_consolidation');
+  assert.equal(checkpoint.sourceRef, '2026-05-08');
+  assert.equal(app.listCheckpoints({ scope: 'repo', scopeKey: 'repo-level', level: 1 }).length, 1);
+  assert.equal(app.listCheckpoints({ scope: 'repo', scopeKey: 'repo-level', level: 0 }).length, 1);
+  assert.equal(store.getLatestCheckpoint({ scopeType: 'repo', scopeKey: 'repo-level', sessionId: 'level-session' }).level, 1);
+  assert.equal(
+    store.getLatestCheckpoint({ scopeType: 'repo', scopeKey: 'repo-level', sessionId: 'level-session', level: 0 })
+      .level,
+    0,
+  );
+});
+
 test('appendRaw accepts only user and assistant conversation evidence roles', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
@@ -4779,6 +4856,7 @@ test('REMOTE_METHODS exposes resume, suggestion, auto-promotion, and reconciliat
   assert.ok(REMOTE_METHODS.includes('suggestMemoryPromotions'));
   assert.ok(REMOTE_METHODS.includes('autoPromoteMemoryCandidates'));
   assert.ok(REMOTE_METHODS.includes('reconcileMemory'));
+  assert.ok(REMOTE_METHODS.includes('listCheckpoints'));
   assert.ok(REMOTE_METHODS.includes('getSessionWorkingContext'));
   assert.ok(REMOTE_METHODS.includes('upsertSessionWorkingContext'));
 });
@@ -4941,6 +5019,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'get_memory',
       'get_session_working_context',
       'get_working_summary',
+      'list_checkpoints',
       'list_memory_candidates',
       'list_memory_events',
       'promote_memory',
@@ -4965,6 +5044,9 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     const distillTool = toolList.tools.find((tool) => tool.name === 'distill_checkpoint');
     assert.ok(distillTool.inputSchema.properties.maxEvents);
     assert.ok(distillTool.inputSchema.properties.maxChars);
+    assert.ok(distillTool.inputSchema.properties.level);
+    const listCheckpointsTool = toolList.tools.find((tool) => tool.name === 'list_checkpoints');
+    assert.ok(listCheckpointsTool.inputSchema.properties.level);
     const distillUsageTool = toolList.tools.find((tool) => tool.name === 'distill_usage');
     assert.ok(distillUsageTool.inputSchema.properties.charsPerToken);
     const bootstrapTool = toolList.tools.find((tool) => tool.name === 'bootstrap_context');
