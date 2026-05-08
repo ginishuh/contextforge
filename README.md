@@ -1208,21 +1208,26 @@ deleting their history. `distill_checkpoint` returns `memoryCandidateCount`,
 and `session_status` reports `latestCheckpointMemoryCandidateCount`; agents
 should call `list_memory_candidates` when either count is greater than zero.
 
-For agent prompt or `AGENTS.md` guidance, see
-[ContextForge Agent Instructions](docs/agent-instructions.md). That guide
-covers startup bootstrap, retrieval order, repo scope keys, checkpoint
-candidate review, durable memory promotion, raw evidence retention, and
-distillation cost discipline. It also includes separate `AGENTS.md` snippets
-for remote-canonical deployments and local/project-local stores. Keep
-repository `AGENTS.md` files short: include only a small ContextForge bootstrap
-snippet and link to the longer guide instead of copying every MCP rule into
-each project. For loose continuation prompts like "yesterday", "continue",
-"previous work", issue/PR follow-up, or cross-agent handoff, agents should call
-`bootstrap_context` or `bootstrapContext` early. The bootstrap response reviews
-repo-scoped `memory`, `checkpoint`, and `memory_candidate` hits as context
-candidates, optionally includes up to three shared-scope hits, then reminds the
-agent to verify current branch, issue/PR, CI, migration, and runtime state
-against live sources before acting.
+For agent runtime workflow guidance, use the portable
+[ContextForge Memory skill/guide](docs/skills/contextforge-memory/SKILL.md).
+It is written as an agent-neutral reusable guide for ContextForge MCP startup,
+storage authority, scopes, resume/handoff, session IDs, evidence capture,
+distillation, checkpoint candidates, closeout promotion, correction, and
+embedding maintenance. Agent-specific systems such as Codex skills may install
+or mirror that guide, but the repository copy is the source of truth.
+
+For copyable prompt or `AGENTS.md` snippets, see
+[ContextForge Agent Instructions](docs/agent-instructions.md). Keep repository
+`AGENTS.md` files short: include only a small ContextForge bootstrap snippet,
+the critical session invariant, and a link to the portable skill/guide instead
+of copying every MCP rule into each project. For loose continuation prompts
+like "yesterday", "continue", "previous work", issue/PR follow-up, or
+cross-agent handoff, agents should call `bootstrap_context` or
+`bootstrapContext` early. The bootstrap response reviews repo-scoped `memory`,
+`checkpoint`, and `memory_candidate` hits as context candidates, optionally
+includes up to three shared-scope hits, then reminds the agent to verify
+current branch, issue/PR, CI, migration, and runtime state against live sources
+before acting.
 
 When resuming a known session, pass `sessionId` to `bootstrap_context` or
 `bootstrapContext`. ContextForge will include the session's latest

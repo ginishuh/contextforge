@@ -78,7 +78,7 @@ A good `AGENTS.md` should contain only:
 - the repository's own build/test/release rules
 - the canonical ContextForge `scopeKey`, if it cannot be inferred reliably
 - a short ContextForge bootstrap instruction
-- a link or reference to the longer ContextForge agent guide
+- a link or reference to the portable ContextForge memory skill/guide
 
 Recommended minimal `AGENTS.md` snippet:
 
@@ -103,12 +103,13 @@ for prior intent, recent decisions, and unfinished work, then verify current
 state in git/GitHub/CI/runtime/migrations. Do not propose memory promotions
 during resume sync.
 
-Keep durable memory intentional. At closeout triggers only, call
-suggest_memory_promotions when available and propose at most one to three
-stable, reviewed facts. Promote durable lessons, not whole worklogs.
+Keep durable memory intentional. At closeout triggers only, review candidates
+from the current session or latest checkpoint. Promote durable lessons, not
+whole worklogs.
 
-For full ContextForge MCP usage rules, follow docs/agent-instructions.md from
-the ContextForge repo or the equivalent shared memory guide.
+For full ContextForge MCP usage rules, follow the portable skill/guide at
+docs/skills/contextforge-memory/SKILL.md from the ContextForge repo, or the
+equivalent installed copy for your agent runtime.
 ```
 
 If an agent environment supports external instruction references, prefer a link

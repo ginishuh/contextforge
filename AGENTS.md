@@ -96,10 +96,12 @@ search shared memory only when cross-repo or user-wide policy may matter. Use
 the inferred repo scope key, or an explicit `github.com/owner/repo` key when
 cross-machine continuity matters.
 
-Use the `contextforge-memory` skill for full ContextForge MCP workflow details:
-storage authority, scopes, bootstrap/search, resume, session IDs, raw evidence,
-distillation, checkpoint candidates, closeout promotion, correction, and
-embedding maintenance.
+Use the portable ContextForge memory skill/guide at
+`docs/skills/contextforge-memory/SKILL.md` for full ContextForge MCP workflow
+details: storage authority, scopes, bootstrap/search, resume, session IDs, raw
+evidence, distillation, checkpoint candidates, closeout promotion, correction,
+and embedding maintenance. Agent-specific skill systems may install or mirror
+that same guide, but the repo copy is the source of truth.
 
 Critical session invariant: `bootstrap_context` does not create a session. In
 Codex/Claude auto-ingest flows, use the adapter session id such as
@@ -127,10 +129,9 @@ corrections when available, `correct_memory` for changed durable facts,
 `deactivate_memory` for stale facts, and `reject_memory_candidate` for
 incorrect candidates.
 
-For full ContextForge MCP usage rules, follow
-`docs/agent-instructions.md`. That guide covers startup bootstrap, retrieval
-order, repo scope keys, checkpoint candidate review, durable memory promotion,
-raw evidence retention, and distillation cost discipline.
+For full ContextForge MCP workflow rules, follow the portable guide at
+`docs/skills/contextforge-memory/SKILL.md`. For copyable prompt snippets and
+repo `AGENTS.md` templates, see `docs/agent-instructions.md`.
 
 ## JavaScript REPL (Node)
 
