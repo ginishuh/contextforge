@@ -197,15 +197,10 @@ This repo uses ContextForge as an external remote memory service.
 - Use the installed `contextforge-memory` skill.
 - At task start, call `bootstrap_context` with this repo's canonical scope key:
   `github.com/owner/repo`.
-- Use `db_info` or the storage block returned by `bootstrap_context` only to
-  inspect the connected ContextForge process. Remote MCP endpoints may report
-  the server's own storage as `local`; that does not mean this repo is
-  local-only.
-- Prefer `connection.mode` when present. `remote-client` means this repo is
-  delegating to a remote server; `http-server` means the tool is running on the
-  server process itself; `direct-local` means a local ContextForge process is
-  answering.
-- Do not infer runtime mode from local `.contextforge/` files in this checkout.
+- Use `connection.mode` from `db_info` or `bootstrap_context` when present:
+  `remote-client`, `http-server`, or `direct-local`.
+- Treat local `.contextforge/` state as relevant only for local/project-local
+  modes.
 ```
 
 ## Agent Guidance
@@ -216,8 +211,7 @@ storage or deployment claims:
 1. Inspect declared repo guidance, then `db_info` or `bootstrap_context`
    `connection.mode` when available.
 2. Check whether this process is talking to local/project-local storage or a
-   remote server. Do not use server `storageMode: local` by itself to conclude
-   that a downstream repo is local-only.
+   remote server.
 3. If operating a server, verify `/healthz` and recent server logs before
    claiming the runtime is healthy.
 4. If acting as a remote client, verify the configured remote URL instead of
