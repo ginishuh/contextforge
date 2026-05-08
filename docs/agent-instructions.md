@@ -391,6 +391,12 @@ fallback, and category limited to `runbook`, `failure-mode`, `api-contract`,
 `environment`, or `decision`. Do not auto-promote `preference` candidates until
 occurrence/merge tracking exists.
 
+`auto_promote_memory_candidates` returns
+`kind: "auto_memory_promotion_result"` for both dry-run and real-promotion
+modes. Older experimental builds returned
+`kind: "auto_memory_promotion_dry_run"`; callers should use the `dryRun`
+boolean to distinguish behavior.
+
 Candidate records may include review signals such as `candidateType`,
 `confidence`, `stability`, `sensitivity`, `promotionRecommendation`, and
 `sourceEventIds`. Use those fields to prioritize review. Treat `ignore`,

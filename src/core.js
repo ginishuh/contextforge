@@ -1564,7 +1564,7 @@ export function createContextForge(options = {}) {
       const scanLimit = positiveNumber(options.scanLimit == null ? 10 : Number(options.scanLimit), 'scanLimit');
       if (!options.sessionId && !options.checkpointId) {
         return {
-          kind: 'auto_memory_promotion_dry_run',
+          kind: 'auto_memory_promotion_result',
           trigger,
           dryRun,
           source: {
@@ -1602,7 +1602,7 @@ export function createContextForge(options = {}) {
         }
         if (options.sessionId && !checkpointId) {
           return {
-            kind: 'auto_memory_promotion_dry_run',
+            kind: 'auto_memory_promotion_result',
             trigger,
             dryRun,
             source: {
@@ -1649,7 +1649,7 @@ export function createContextForge(options = {}) {
           .slice(0, limit);
 
         return {
-          kind: 'auto_memory_promotion_dry_run',
+          kind: 'auto_memory_promotion_result',
           trigger,
           dryRun,
           source: {

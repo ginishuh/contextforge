@@ -4343,6 +4343,7 @@ test('autoPromoteMemoryCandidates requires closeout scope and defaults to dry-ru
     scopeKey: 'auto-repo',
     trigger: 'manual_closeout',
   });
+  assert.equal(noSource.kind, 'auto_memory_promotion_result');
   assert.deepEqual(noSource.wouldPromote, []);
   assert.equal(noSource.source.mode, 'none');
 
@@ -4353,6 +4354,7 @@ test('autoPromoteMemoryCandidates requires closeout scope and defaults to dry-ru
     trigger: 'user_declared_work_done',
     limit: 5,
   });
+  assert.equal(dryRun.kind, 'auto_memory_promotion_result');
   assert.equal(dryRun.dryRun, true);
   assert.equal(dryRun.wouldPromote.length, 1);
   assert.deepEqual(dryRun.promoted, []);
@@ -4445,6 +4447,7 @@ test('autoPromoteMemoryCandidates returns stable empty arrays and preference inp
     trigger: 'manual_closeout',
     allowedCategories: ['preference'],
   });
+  assert.equal(result.kind, 'auto_memory_promotion_result');
 
   assert.deepEqual(result.wouldPromote, []);
   assert.deepEqual(result.promoted, []);
@@ -4524,6 +4527,7 @@ test('autoPromoteMemoryCandidates promotes only strict safe candidates when enab
     dryRun: false,
   });
 
+  assert.equal(result.kind, 'auto_memory_promotion_result');
   assert.equal(result.dryRun, false);
   assert.deepEqual(result.wouldPromote, []);
   assert.deepEqual(
