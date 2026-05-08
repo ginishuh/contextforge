@@ -198,6 +198,11 @@ test('dbInfo initializes a fresh SQLite store', async () => {
   assert.equal(info.embeddings.degraded, true);
   assert.deepEqual(info.embeddings.jobs, { pending: 0, processing: 0, completed: 0, failed: 0 });
   assert.equal(info.connection.mode, 'direct-local');
+  assert.equal(info.connection.accessMode, 'direct-local');
+  assert.equal(info.connection.accessPath, 'direct-local');
+  assert.equal(info.connection.processRole, 'local-process');
+  assert.equal(info.connection.serverRole, null);
+  assert.equal(info.connection.summary, 'direct-local local-process');
   assert.equal(info.connection.storageMode, 'project-local');
   assert.match(info.dbPath, /contextforge\.db$/);
 });
@@ -5806,7 +5811,11 @@ test('MCP streamable HTTP endpoint exposes core tools with bearer auth', async (
 
     const infoResult = await client.callTool({ name: 'db_info', arguments: {} });
     assert.equal(infoResult.structuredContent.result.connection.mode, 'remote-client');
+    assert.equal(infoResult.structuredContent.result.connection.accessMode, 'remote-client');
+    assert.equal(infoResult.structuredContent.result.connection.accessPath, 'http-mcp');
     assert.equal(infoResult.structuredContent.result.connection.transport, 'http-mcp');
+    assert.equal(infoResult.structuredContent.result.connection.serverRole, 'local-process');
+    assert.equal(infoResult.structuredContent.result.connection.summary, 'remote-client over http-mcp to local-process');
     assert.equal(infoResult.structuredContent.result.connection.server.mode, 'direct-local');
 
     const remembered = await client.callTool({
@@ -5839,7 +5848,10 @@ test('MCP streamable HTTP endpoint exposes core tools with bearer auth', async (
       },
     });
     assert.equal(bootstrap.structuredContent.result.storage.connection.mode, 'remote-client');
+    assert.equal(bootstrap.structuredContent.result.storage.connection.accessMode, 'remote-client');
+    assert.equal(bootstrap.structuredContent.result.storage.connection.accessPath, 'http-mcp');
     assert.equal(bootstrap.structuredContent.result.storage.connection.transport, 'http-mcp');
+    assert.equal(bootstrap.structuredContent.result.storage.connection.serverRole, 'local-process');
     assert.equal(bootstrap.structuredContent.result.storage.connection.server.mode, 'direct-local');
 
     const syncResume = await client.callTool({
@@ -5851,7 +5863,10 @@ test('MCP streamable HTTP endpoint exposes core tools with bearer auth', async (
       },
     });
     assert.equal(syncResume.structuredContent.result.storage.connection.mode, 'remote-client');
+    assert.equal(syncResume.structuredContent.result.storage.connection.accessMode, 'remote-client');
+    assert.equal(syncResume.structuredContent.result.storage.connection.accessPath, 'http-mcp');
     assert.equal(syncResume.structuredContent.result.storage.connection.transport, 'http-mcp');
+    assert.equal(syncResume.structuredContent.result.storage.connection.serverRole, 'local-process');
     assert.equal(syncResume.structuredContent.result.storage.connection.server.mode, 'direct-local');
 
     await client.callTool({
@@ -5912,8 +5927,15 @@ test('MCP streamable HTTP db_info reports remote-client for HTTP callers', async
     await client.connect(transport);
     const info = await client.callTool({ name: 'db_info', arguments: {} });
     assert.equal(info.structuredContent.result.connection.mode, 'remote-client');
+    assert.equal(info.structuredContent.result.connection.accessMode, 'remote-client');
+    assert.equal(info.structuredContent.result.connection.accessPath, 'http-mcp');
     assert.equal(info.structuredContent.result.connection.transport, 'http-mcp');
+    assert.equal(info.structuredContent.result.connection.serverRole, 'http-server');
+    assert.equal(info.structuredContent.result.connection.summary, 'remote-client over http-mcp to http-server');
     assert.equal(info.structuredContent.result.connection.server.mode, 'http-server');
+    assert.equal(info.structuredContent.result.connection.server.accessMode, 'server-process');
+    assert.equal(info.structuredContent.result.connection.server.accessPath, 'in-process');
+    assert.equal(info.structuredContent.result.connection.server.serverRole, 'http-server');
     assert.equal(info.structuredContent.result.connection.server.storageMode, 'project-local');
   } finally {
     await client.close();
@@ -5943,8 +5965,15 @@ test('HTTP v0 callers see remote-client connection metadata', async () => {
     assert.equal(response.status, 200);
     const body = await response.json();
     assert.equal(body.result.connection.mode, 'remote-client');
+    assert.equal(body.result.connection.accessMode, 'remote-client');
+    assert.equal(body.result.connection.accessPath, 'http-api');
     assert.equal(body.result.connection.transport, 'http-api');
+    assert.equal(body.result.connection.serverRole, 'http-server');
+    assert.equal(body.result.connection.summary, 'remote-client over http-api to http-server');
     assert.equal(body.result.connection.server.mode, 'http-server');
+    assert.equal(body.result.connection.server.accessMode, 'server-process');
+    assert.equal(body.result.connection.server.accessPath, 'in-process');
+    assert.equal(body.result.connection.server.serverRole, 'http-server');
     assert.equal(body.result.connection.server.storageMode, 'project-local');
 
     const resumeResponse = await fetch(`${remote.url}/v0/syncResumeContext`, {
@@ -5962,7 +5991,10 @@ test('HTTP v0 callers see remote-client connection metadata', async () => {
     assert.equal(resumeResponse.status, 200);
     const resumeBody = await resumeResponse.json();
     assert.equal(resumeBody.result.storage.connection.mode, 'remote-client');
+    assert.equal(resumeBody.result.storage.connection.accessMode, 'remote-client');
+    assert.equal(resumeBody.result.storage.connection.accessPath, 'http-api');
     assert.equal(resumeBody.result.storage.connection.transport, 'http-api');
+    assert.equal(resumeBody.result.storage.connection.serverRole, 'http-server');
     assert.equal(resumeBody.result.storage.connection.server.mode, 'http-server');
   } finally {
     await remote.close();
@@ -6055,6 +6087,9 @@ test('remote storage mode delegates core calls and preserves scope semantics', a
     });
     assert.equal(bootstrap.scope.scopeKey, 'repo-remote');
     assert.equal(bootstrap.connection.mode, 'remote-client');
+    assert.equal(bootstrap.connection.accessMode, 'remote-client');
+    assert.equal(bootstrap.connection.accessPath, 'http-api');
+    assert.equal(bootstrap.connection.serverRole, 'http-server');
     assert.equal(bootstrap.storage.mode, 'remote');
     assert.equal(bootstrap.storage.authority, 'canonical');
     assert.equal(bootstrap.storage.serverMode, 'project-local');
@@ -6081,7 +6116,11 @@ test('remote storage mode delegates core calls and preserves scope semantics', a
     const info = await app.dbInfo();
     assert.equal(info.tables.memories, 2);
     assert.equal(info.connection.mode, 'remote-client');
+    assert.equal(info.connection.accessMode, 'remote-client');
+    assert.equal(info.connection.accessPath, 'http-api');
+    assert.equal(info.connection.serverRole, 'http-server');
     assert.equal(info.connection.clientStorageMode, 'remote');
+    assert.equal(info.connection.summary, 'remote-client over http-api to http-server');
     assert.equal(info.connection.server.mode, 'http-server');
     assert.equal(info.connection.server.storageMode, 'project-local');
   } finally {

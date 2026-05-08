@@ -1203,6 +1203,10 @@ export function createContextForge(options = {}) {
   function buildDbInfo(store) {
     const storeInfo = store.dbInfo();
     const jobs = store.countEmbeddingJobs();
+    const processConnectionMode = config.runtime.role === 'http-server' ? 'http-server' : 'direct-local';
+    const accessMode = config.runtime.role === 'http-server' ? 'server-process' : 'direct-local';
+    const accessPath = config.runtime.role === 'http-server' ? 'in-process' : 'direct-local';
+    const serverRole = config.runtime.role === 'http-server' ? 'http-server' : null;
     const coverage =
       embeddingProvider && storeInfo.vector.sqliteVecAvailable
         ? store.embeddingCoverage({
@@ -1214,8 +1218,11 @@ export function createContextForge(options = {}) {
       ...storeInfo,
       storageMode: config.storageMode,
       connection: {
-        mode: config.runtime.role === 'http-server' ? 'http-server' : 'direct-local',
+        mode: processConnectionMode,
+        accessMode,
+        accessPath,
         processRole: config.runtime.role,
+        serverRole,
         viewpoint: 'this ContextForge process',
         storageMode: config.storageMode,
         storageAuthority:
@@ -1228,6 +1235,7 @@ export function createContextForge(options = {}) {
           config.runtime.role === 'http-server'
             ? 'This response is from the ContextForge HTTP server process. Its storageMode describes the server-owned store.'
             : 'This response is from a local ContextForge process. Its storageMode describes this process.',
+        summary: serverRole ? `${accessPath} ${serverRole}` : `${accessPath} ${config.runtime.role}`,
       },
       embeddings: {
         provider: config.embeddings.provider,

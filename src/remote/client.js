@@ -114,22 +114,39 @@ export function createRemoteContextForge(config, options = {}) {
   const api = { config };
 
   function remoteClientConnection(serverConnection) {
+    const serverRole =
+      serverConnection?.serverRole ||
+      serverConnection?.server?.processRole ||
+      serverConnection?.processRole ||
+      serverConnection?.mode ||
+      null;
+    const accessPath = serverConnection?.accessPath || serverConnection?.transport || 'http-api';
     if (serverConnection?.mode === 'remote-client') {
       return {
         ...serverConnection,
+        accessMode: serverConnection.accessMode || 'remote-client',
+        accessPath,
+        serverRole,
         viewpoint: 'this client delegates to a remote ContextForge server',
         remoteUrl: config.remote.url,
         clientStorageMode: config.storageMode,
+        summary: serverConnection.summary || `remote-client over ${accessPath}${serverRole ? ` to ${serverRole}` : ''}`,
       };
     }
     return {
       mode: 'remote-client',
+      accessMode: 'remote-client',
+      accessPath: 'http-api',
       viewpoint: 'this client delegates to a remote ContextForge server',
       remoteUrl: config.remote.url,
       clientStorageMode: config.storageMode,
+      storageMode: 'remote',
+      storageAuthority: 'canonical',
+      serverRole,
       server: serverConnection || null,
       note:
         'This client is configured with CONTEXTFORGE_STORAGE_MODE=remote. The server may report its own storageMode as local because it owns the canonical SQLite store.',
+      summary: `remote-client over http-api${serverRole ? ` to ${serverRole}` : ''}`,
     };
   }
 

@@ -91,14 +91,19 @@ function isAuthorized(request, token) {
 }
 
 function remoteAccessConnection(serverConnection, transport) {
+  const serverRole = serverConnection?.processRole || serverConnection?.mode || null;
   return {
     mode: 'remote-client',
+    accessMode: 'remote-client',
+    accessPath: transport,
     transport,
     viewpoint: 'this caller reaches ContextForge through a remote HTTP endpoint',
     storageMode: 'remote',
     storageAuthority: 'canonical',
+    serverRole,
     server: serverConnection || null,
     note: 'This response crossed a ContextForge HTTP boundary. server.storageMode describes the server-owned store.',
+    summary: `remote-client over ${transport}${serverRole ? ` to ${serverRole}` : ''}`,
   };
 }
 

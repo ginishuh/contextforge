@@ -197,8 +197,8 @@ This repo uses ContextForge as an external remote memory service.
 - Use the installed `contextforge-memory` skill.
 - At task start, call `bootstrap_context` with this repo's canonical scope key:
   `github.com/owner/repo`.
-- Use `connection.mode` from `db_info` or `bootstrap_context` when present:
-  `remote-client`, `http-server`, or `direct-local`.
+- Use `connection.summary` or `connection.accessMode` from `db_info` or
+  `bootstrap_context` when present.
 - Treat local `.contextforge/` state as relevant only for local/project-local
   modes.
 ```
@@ -209,7 +209,7 @@ At task start, agents should identify which mode they are in before making
 storage or deployment claims:
 
 1. Inspect declared repo guidance, then `db_info` or `bootstrap_context`
-   `connection.mode` when available.
+   `connection.summary` or `connection.accessMode` when available.
 2. Check whether this process is talking to local/project-local storage or a
    remote server.
 3. If operating a server, verify `/healthz` and recent server logs before
