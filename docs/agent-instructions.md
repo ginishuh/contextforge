@@ -292,6 +292,15 @@ token only; embedding provider credentials belong to the remote server process.
 Vector-backed checkpoint and candidate hits are useful for "what happened last
 time?" queries. They are intentionally not a replacement for durable memory.
 
+Embeddings are required for normal high-quality ContextForge retrieval. Lexical
+fallback is Unicode-aware for Korean and mixed Korean/English/dev strings, and
+can scan durable memories, checkpoints, and memory candidates using Hangul
+bigram/trigram-style tokens plus existing English/code tokens. Treat this as a
+degraded-mode safety net and supplemental ranking signal, not as an acceptable
+replacement for embeddings on canonical remote storage. It avoids extra storage
+tables for now, trading lower storage cost for broader scope scans if embeddings
+are unavailable during diagnostics or local fallback.
+
 Vector matches are context candidates, not live truth. Always verify
 time-sensitive or externally mutable state against the current source of truth:
 

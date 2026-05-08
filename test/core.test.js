@@ -705,8 +705,7 @@ test('memory candidates require explicit promotion and can be corrected or deact
     scopeKey: 'repo-promote',
     query: 'human agent review',
   });
-  assert.equal(searchBeforeDeactivate.length, 1);
-  assert.equal(searchBeforeDeactivate[0].memory.key, 'candidate-rule');
+  assert.equal(searchBeforeDeactivate.find((result) => result.memory?.key === 'candidate-rule').type, 'memory');
 
   const inactive = app.deactivateMemory({
     scope: 'repo',
@@ -730,7 +729,7 @@ test('memory candidates require explicit promotion and can be corrected or deact
     scopeKey: 'repo-promote',
     query: 'agent review',
   });
-  assert.deepEqual(searchAfterDeactivate, []);
+  assert.equal(searchAfterDeactivate.some((result) => result.memory?.key === 'candidate-rule'), false);
 });
 
 test('CLI supports promoteMemory', async () => {
@@ -2412,7 +2411,7 @@ test('embedding rebuild populates sqlite-vec index for hybrid retrieval', async 
   assert.equal(info.vector.dimensions, 3);
 });
 
-test('vector search still runs for Korean queries that have no lexical tokens', () => {
+test('vector search still runs for Korean queries with lexical tokens', () => {
   const memory = {
     id: 'memory-korean',
     key: 'korean-memory',
@@ -2426,9 +2425,7 @@ test('vector search still runs for Korean queries that have no lexical tokens', 
   const results = searchMemories(
     {
       searchMemoryVectorIndex: () => [{ memory, distance: 0, model: 'test-embedding', dimensions: 3 }],
-      listMemories: () => {
-        throw new Error('listMemories should not be called when the query has no lexical tokens.');
-      },
+      listMemories: () => [],
     },
     {
       scopeType: 'repo',
@@ -2441,6 +2438,65 @@ test('vector search still runs for Korean queries that have no lexical tokens', 
   assert.equal(results.length, 1);
   assert.equal(results[0].memory.key, 'korean-memory');
   assert.equal(results[0].retrieval.method, 'vector');
+});
+
+test('Korean lexical safety net retrieves checkpoints and candidates in degraded no-embedding mode', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'korean_fallback_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      korean_fallback_provider: async () => ({
+        summaryShort: '지난 환경 동기화 작업',
+        summaryText: '사용자는 지난 환경 작업과 동기화한 뒤 체크포인트 인수인계를 이어가기로 했다.',
+        decisions: ['한국어 재개 쿼리는 임베딩이 없어도 최근 체크포인트를 찾아야 한다.'],
+        todos: ['다음 작업에서 런타임 상태를 확인한다.'],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'korean-resume-runbook',
+            content: '한국어 재개 요청은 체크포인트와 후보를 fallback 검색으로도 찾을 수 있어야 한다.',
+            reason: '지난 환경 작업과 동기화 요청에서 필요했다.',
+            category: 'runbook',
+            tags: ['한국어', '재개', '동기화'],
+            importance: 0,
+            candidateType: 'runbook',
+            confidence: 0.9,
+            stability: 0.9,
+            sensitivity: 'low',
+            promotionRecommendation: 'review',
+            sourceEventIds: [],
+          },
+        ],
+      }),
+    },
+  });
+
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'korean-fallback-repo',
+    sessionId: 'korean-fallback-session',
+    role: 'assistant',
+    content: '지난 환경 작업과 동기화 후 재개한다.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'korean-fallback-repo',
+    sessionId: 'korean-fallback-session',
+  });
+
+  const results = app.search({
+    scope: 'repo',
+    scopeKey: 'korean-fallback-repo',
+    query: '지난 환경 작업 동기화 재개',
+    limit: 5,
+  });
+
+  assert.ok(results.some((result) => result.type === 'checkpoint' && result.retrieval.method === 'lexical'));
+  assert.ok(results.some((result) => result.type === 'memory_candidate' && result.retrieval.method === 'lexical'));
 });
 
 test('hybrid ranking keeps strong lexical matches ahead of weak vector-only matches', () => {
@@ -2557,7 +2613,7 @@ test('distillCheckpoint embeds the new checkpoint and candidates when embeddings
   });
   assert.equal(checkpointResults[0].type, 'checkpoint');
   assert.equal(checkpointResults[0].checkpoint.id, checkpoint.id);
-  assert.equal(checkpointResults[0].retrieval.method, 'vector');
+  assert.equal(checkpointResults[0].retrieval.method, 'hybrid:vector+lexical');
 
   const candidateResults = await app.search({
     scope: 'repo',
