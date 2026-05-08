@@ -1121,8 +1121,8 @@ export class ContextForgeStore {
           checkpoints.created_at AS checkpoint_created_at
         FROM memory_candidate_index
         JOIN checkpoints ON checkpoints.id = memory_candidate_index.checkpoint_id
-        WHERE memory_candidate_index.category = 'preference'
-           OR memory_candidate_index.candidate_type = 'preference'
+        WHERE LOWER(COALESCE(memory_candidate_index.category, '')) = 'preference'
+           OR LOWER(COALESCE(memory_candidate_index.candidate_type, '')) = 'preference'
         ORDER BY memory_candidate_index.created_at ASC, memory_candidate_index.id ASC
       `)
       .all();

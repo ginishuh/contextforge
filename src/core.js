@@ -15,6 +15,85 @@ function requireOption(value, name) {
   }
 }
 
+function ownValue(source, keys) {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(source, key) && source[key] !== undefined) {
+      return source[key];
+    }
+  }
+  return undefined;
+}
+
+function mergedContextValue(source, previous, outputKey, inputKeys, fallback) {
+  const value = ownValue(source || {}, inputKeys);
+  if (value !== undefined) {
+    return value;
+  }
+  if (previous && previous[outputKey] !== undefined) {
+    return previous[outputKey];
+  }
+  return fallback;
+}
+
+function sessionWorkingContextInput(source = {}, previous = null) {
+  return {
+    conversationId: mergedContextValue(source, previous, 'conversationId', ['conversationId', 'conversation_id'], null),
+    mode: mergedContextValue(source, previous, 'mode', ['mode'], 'task_execution'),
+    currentTask: mergedContextValue(source, previous, 'currentTask', ['currentTask', 'current_task'], ''),
+    currentUserIntent: mergedContextValue(
+      source,
+      previous,
+      'currentUserIntent',
+      ['currentUserIntent', 'current_user_intent'],
+      '',
+    ),
+    targetSubject: mergedContextValue(source, previous, 'targetSubject', ['targetSubject', 'target_subject'], null),
+    sourceSubject: mergedContextValue(source, previous, 'sourceSubject', ['sourceSubject', 'source_subject'], null),
+    lastUserCorrection: mergedContextValue(
+      source,
+      previous,
+      'lastUserCorrection',
+      ['lastUserCorrection', 'last_user_correction'],
+      null,
+    ),
+    openQuestion: mergedContextValue(source, previous, 'openQuestion', ['openQuestion', 'open_question'], null),
+    nonGoals: mergedContextValue(
+      source,
+      previous,
+      'nonGoals',
+      ['nonGoals', 'non_goals', 'nonGoalsJson', 'non_goals_json'],
+      [],
+    ),
+    avoidMisreadings: mergedContextValue(
+      source,
+      previous,
+      'avoidMisreadings',
+      ['avoidMisreadings', 'avoid_misreadings', 'avoidMisreadingsJson', 'avoid_misreadings_json'],
+      [],
+    ),
+    confidence: mergedContextValue(source, previous, 'confidence', ['confidence'], 0),
+    sourceCheckpointId: mergedContextValue(
+      source,
+      previous,
+      'sourceCheckpointId',
+      ['sourceCheckpointId', 'source_checkpoint_id'],
+      null,
+    ),
+    distillRunId: mergedContextValue(source, previous, 'distillRunId', ['distillRunId', 'distill_run_id'], null),
+    metadata: mergedContextValue(source, previous, 'metadata', ['metadata'], {}),
+  };
+}
+
+function normalizeToken(value) {
+  return String(value || '')
+    .toLowerCase()
+    .trim();
+}
+
+function isPreferenceLike(candidate = {}) {
+  return [candidate.category, candidate.candidateType].some((value) => normalizeToken(value) === 'preference');
+}
+
 function positiveNumber(value, name) {
   if (!Number.isFinite(value) || value <= 0) {
     throw new Error(`${name} must be a positive number.`);
@@ -761,9 +840,10 @@ function normalizeAllowedCategories(value, defaultCategories = SAFE_AUTO_PROMOTE
           .map((item) => item.trim())
           .filter(Boolean)
       : Array.from(defaultCategories);
+  const normalized = raw.map((category) => normalizeToken(category)).filter(Boolean);
   return {
-    allowedCategories: new Set(raw.filter((category) => category !== 'preference')),
-    strippedPreference: raw.includes('preference'),
+    allowedCategories: new Set(normalized.filter((category) => category !== 'preference')),
+    strippedPreference: normalized.includes('preference'),
   };
 }
 
@@ -786,11 +866,12 @@ function autoPromotionWarnings(store, scope, indexedCandidate, policy) {
       minStability: policy.minStability,
     });
   }
-  if (!policy.allowedCategories.has(candidate.category)) {
+  const category = normalizeToken(candidate.category);
+  if (!policy.allowedCategories.has(category)) {
     warnings.push({
-      code: candidate.category === 'preference' ? 'preference_auto_excluded' : 'auto_disallowed_category',
+      code: category === 'preference' ? 'preference_auto_excluded' : 'auto_disallowed_category',
       message:
-        candidate.category === 'preference'
+        category === 'preference'
           ? 'Preference candidates are excluded from auto-promotion until occurrence/merge tracking exists.'
           : `Candidate category "${candidate.category}" is not allowed for auto-promotion.`,
       category: candidate.category || null,
@@ -2103,7 +2184,7 @@ export function createContextForge(options = {}) {
           })),
           ...candidateBasis.map((item) => ({
             action:
-              item.category === 'preference'
+              normalizeToken(item.category) === 'preference'
                 ? 'reject_memory_candidate_and_weaken_preference_occurrence'
                 : 'reject_memory_candidate',
             candidateId: item.candidateId,
@@ -2231,7 +2312,7 @@ export function createContextForge(options = {}) {
                   action: 'reject_memory_candidate',
                   candidateId: rejected.id,
                 });
-                if (candidate.candidate?.category === 'preference' || candidate.candidate?.candidateType === 'preference') {
+                if (isPreferenceLike(candidate.candidate)) {
                   const weakened = store.weakenPreferenceOccurrenceForCandidate({
                     ...scope,
                     candidateId: item.candidateId,
@@ -2523,31 +2604,14 @@ export function createContextForge(options = {}) {
     upsertSessionWorkingContext(options) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.sessionId, 'sessionId');
-      return useStore((store) =>
-        store.upsertSessionWorkingContext({
+      return useStore((store) => {
+        const previous = store.getSessionWorkingContext({ ...scope, sessionId: options.sessionId });
+        return store.upsertSessionWorkingContext({
           ...scope,
           sessionId: options.sessionId,
-          conversationId: options.conversationId || null,
-          mode: options.mode || 'task_execution',
-          currentTask: options.currentTask || options.current_task || '',
-          currentUserIntent: options.currentUserIntent || options.current_user_intent || '',
-          targetSubject: options.targetSubject ?? options.target_subject ?? null,
-          sourceSubject: options.sourceSubject ?? options.source_subject ?? null,
-          lastUserCorrection: options.lastUserCorrection ?? options.last_user_correction ?? null,
-          openQuestion: options.openQuestion ?? options.open_question ?? null,
-          nonGoals: options.nonGoals || options.non_goals || options.nonGoalsJson || options.non_goals_json || [],
-          avoidMisreadings:
-            options.avoidMisreadings ||
-            options.avoid_misreadings ||
-            options.avoidMisreadingsJson ||
-            options.avoid_misreadings_json ||
-            [],
-          confidence: options.confidence ?? 0,
-          sourceCheckpointId: options.sourceCheckpointId || options.source_checkpoint_id || null,
-          distillRunId: options.distillRunId || options.distill_run_id || null,
-          metadata: options.metadata || {},
-        }),
-      );
+          ...sessionWorkingContextInput(options, previous),
+        });
+      });
     },
 
     async distillCheckpoint(options) {
@@ -2723,27 +2787,23 @@ export function createContextForge(options = {}) {
             sessionWorkingContext = store.upsertSessionWorkingContext({
               ...scope,
               sessionId: options.sessionId,
-              conversationId,
-              mode: context.mode || 'task_execution',
-              currentTask: context.currentTask || context.current_task || '',
-              currentUserIntent: context.currentUserIntent || context.current_user_intent || '',
-              targetSubject: context.targetSubject ?? context.target_subject ?? null,
-              sourceSubject: context.sourceSubject ?? context.source_subject ?? null,
-              lastUserCorrection: context.lastUserCorrection ?? context.last_user_correction ?? null,
-              openQuestion: context.openQuestion ?? context.open_question ?? null,
-              nonGoals: context.nonGoals || context.non_goals || [],
-              avoidMisreadings: context.avoidMisreadings || context.avoid_misreadings || [],
-              confidence: context.confidence ?? 0,
-              sourceCheckpointId: checkpoint?.id || null,
-              distillRunId: distillRun.id,
-              metadata: {
-                providerMetadata: output.metadata,
-                sourceProvenance,
-                sourceRawEventIds: selectedRawEvents.map((event) => event.id),
-                sourceEventWindow: distillWindow.metadata,
-                checkpointId: checkpoint?.id || null,
-                checkpointInsertFailed: Boolean(checkpointError),
-              },
+              ...sessionWorkingContextInput(
+                {
+                  ...context,
+                  conversationId,
+                  sourceCheckpointId: checkpoint?.id || null,
+                  distillRunId: distillRun.id,
+                  metadata: {
+                    providerMetadata: output.metadata,
+                    sourceProvenance,
+                    sourceRawEventIds: selectedRawEvents.map((event) => event.id),
+                    sourceEventWindow: distillWindow.metadata,
+                    checkpointId: checkpoint?.id || null,
+                    checkpointInsertFailed: Boolean(checkpointError),
+                  },
+                },
+                previousSessionWorkingContext,
+              ),
             });
           } catch (error) {
             sessionWorkingContextError = error;

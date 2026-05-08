@@ -272,6 +272,10 @@ test('session working context is mutable scoped session state', async () => {
   });
   assert.equal(updated.id, context.id);
   assert.equal(updated.currentTask, 'Update structured resume handoff tests.');
+  assert.equal(updated.currentUserIntent, 'Continue design follow-up work.');
+  assert.equal(updated.targetSubject, 'session_working_context');
+  assert.deepEqual(updated.nonGoals, ['durable memory promotion']);
+  assert.deepEqual(updated.avoidMisreadings, ['structured context is canonical memory']);
   assert.equal(updated.confidence, 1);
 
   const otherSession = app.getSessionWorkingContext({
@@ -4780,7 +4784,7 @@ test('preference occurrence backfill covers existing preference candidates', asy
         {
           key: 'review-style',
           content: 'The user prefers review comments grouped by severity.',
-          category: 'preference',
+          category: 'Preference',
           candidateType: 'preference',
           confidence: 0.88,
           stability: 0.82,
@@ -4842,7 +4846,7 @@ test('reconcileMemory apply_safe weakens preference occurrences when rejecting c
           {
             key: 'summary-style',
             content: 'The user always wants long exhaustive closeout summaries.',
-            category: 'preference',
+            category: 'Preference',
             candidateType: 'preference',
             confidence: 0.95,
             stability: 0.95,
