@@ -34,10 +34,7 @@ Include only guidance that an agent must know before touching this repository:
 - source/privacy boundaries
 - build, test, lint, release, or deploy commands for this repo
 - files or data that must not be committed
-- the current operating mode when this checkout is also a live server,
-  deployment host, or external remote client
-- the expected ContextForge usage mode for this repository when it consumes an
-  external ContextForge service
+- short runtime-mode guidance when ContextForge state affects work
 - repo-specific coding and documentation style
 - language or reporting expectations when they are part of the repo workflow
 - a short ContextForge bootstrap snippet
@@ -68,61 +65,26 @@ of pasting the full local/server/remote setup guide.
 
 ## Runtime Mode Section Pattern
 
-Runtime mode is checkout-local. Do not bake one host's current state into a
-tracked `AGENTS.md` that will be cloned elsewhere. Instead, include a short
-runtime mode section that tells agents how to determine the current checkout's
-role from env/config and live process state.
+Runtime mode is checkout-local. Keep tracked `AGENTS.md` clone-safe and prefer
+live `connection.mode`.
 
 ```text
 ## Runtime Mode
 
 Runtime mode is checkout-local. Do not assume a clone is the live server.
 
-At task start, determine whether this checkout is local all-in-one, an HTTP
-server, or an external remote client by inspecting environment/config and live
-process state. Use `node src/cli.js dbInfo`, relevant `CONTEXTFORGE_*`
-environment files or service definitions, the service manager, `/healthz`, and
-current git state before making runtime claims.
+At task start, check `connection.mode` with `db_info` or `bootstrap_context`.
+Verify `/healthz`, the service manager, and current git state before making
+live runtime claims.
 
-Do not commit or paste env files, tokens, API keys, DB files, or raw runtime
-data. For local all-in-one, HTTP server, and external remote client
+Keep env files, tokens, API keys, DB files, and raw runtime data out of git and
+reports. For local all-in-one, HTTP server, and external remote client
 distinctions, follow `docs/runtime-modes.md`.
 ```
 
-Do not include token values, API keys, private customer data, full env-file
-contents, host-specific ports, or service names unless they are stable product
-documentation rather than one deployment's current state.
-
-## Consumer Repository Pattern
-
-When a repository consumes ContextForge as an external service, prefer an
-explicit expected-state section over asking agents to inspect the server host.
-Sandboxed agents may not be able to read ContextForge server env files,
-systemd units, local databases, or process state.
-
-```text
-## ContextForge Memory
-
-This repo uses ContextForge as an external remote memory service.
-
-- Connection mode: external remote client.
-- Storage authority: remote canonical ContextForge.
-- Agents may be sandboxed and may not be able to inspect the ContextForge
-  server env files, service manager, or local database.
-- Use the installed `contextforge-memory` skill.
-- At task start, call `bootstrap_context` with this repo's canonical scope key:
-  `github.com/owner/repo`.
-- Use `connection.mode` from `db_info` or `bootstrap_context` when present:
-  `remote-client`, `http-server`, or `direct-local`.
-- Treat local `.contextforge/` state as relevant only for local/project-local
-  modes.
-```
-
-For local/project-local consumer repositories, state that retrieval is
-machine-local or checkout-local and must not be treated as shared canonical
-memory. For server checkouts, state that the checkout operates the HTTP server
-and that health must be verified through `/healthz` and the service manager
-before making live runtime claims.
+Keep token values, API keys, private customer data, full env-file contents,
+host-specific ports, and service names out of tracked `AGENTS.md` unless they
+are stable product documentation.
 
 ## ContextForge Section Pattern
 
