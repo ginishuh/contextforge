@@ -4158,7 +4158,7 @@ test('suggestMemoryPromotions honors scanLimit and reports capped proposal limit
   });
 
   assert.equal(result.proposals.length, 2);
-  assert.ok(result.warnings.some((warning) => warning.code === 'limit_capped'));
+  assert.ok(result.requestWarnings.some((warning) => warning.code === 'limit_capped'));
 });
 
 test('suggestMemoryPromotions uses only latest checkpoint for a session and skips risky candidates', async () => {
@@ -4353,7 +4353,7 @@ test('reconcileMemory proposes by default and apply_safe only changes unambiguou
   assert.equal(live.appliedActions.length, 0);
 });
 
-test('reconcileMemory apply_safe does not mutate when no durable memory matches', async () => {
+test('reconcileMemory apply_safe rejects matching candidates when no durable memory matches', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({
     env: {
@@ -4403,11 +4403,14 @@ test('reconcileMemory apply_safe does not mutate when no durable memory matches'
     correction: 'Candidate-only claim is wrong.',
     mode: 'apply_safe',
   });
-  assert.deepEqual(result.appliedActions, []);
+  assert.deepEqual(
+    result.appliedActions.map((action) => action.action),
+    ['reject_memory_candidate'],
+  );
   const candidates = app.listMemoryCandidates({
     scope: 'repo',
     scopeKey: 'candidate-only-repo',
-    status: 'pending',
+    status: 'rejected',
   });
   assert.equal(candidates.length, 1);
 });

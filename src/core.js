@@ -1052,6 +1052,9 @@ export function createContextForge(options = {}) {
       const durableMemories = [];
       const recentCheckpoints = [];
       const memoryCandidateResults = [];
+      const latestCheckpoint = bootstrap.sessionId
+        ? useStore((store) => store.getLatestCheckpoint({ ...bootstrap.scope, sessionId: bootstrap.sessionId }))
+        : null;
 
       for (const result of bootstrap.results || []) {
         if (result.type === 'memory') {
@@ -1062,29 +1065,18 @@ export function createContextForge(options = {}) {
           memoryCandidateResults.push(result);
         }
       }
-      if (bootstrap.sessionId && recentCheckpoints.length === 0) {
-        const latestCheckpoint = useStore((store) =>
-          store.getLatestCheckpoint({ ...bootstrap.scope, sessionId: bootstrap.sessionId }),
-        );
-        if (latestCheckpoint) {
-          recentCheckpoints.push(checkpointHandoffResult(latestCheckpoint));
-        }
+      if (latestCheckpoint && recentCheckpoints.length === 0) {
+        recentCheckpoints.push(checkpointHandoffResult(latestCheckpoint));
       }
-      if (bootstrap.sessionId && memoryCandidateResults.length === 0) {
+      if (latestCheckpoint && memoryCandidateResults.length === 0) {
         const latestCandidates = useStore((store) => {
-          const latestCheckpoint =
-            recentCheckpoints[0]?.key && recentCheckpoints[0]?.retrieval?.method === 'latest_checkpoint'
-              ? { id: recentCheckpoints[0].key }
-              : store.getLatestCheckpoint({ ...bootstrap.scope, sessionId: bootstrap.sessionId });
-          return latestCheckpoint?.id
-            ? store.listMemoryCandidates({
-                ...bootstrap.scope,
-                checkpointId: latestCheckpoint.id,
-                status: 'pending',
-                sort: 'recommendation',
-                limit: 3,
-              })
-            : [];
+          return store.listMemoryCandidates({
+            ...bootstrap.scope,
+            checkpointId: latestCheckpoint.id,
+            status: 'pending',
+            sort: 'recommendation',
+            limit: 3,
+          });
         });
         memoryCandidateResults.push(...latestCandidates);
       }
@@ -1351,7 +1343,7 @@ export function createContextForge(options = {}) {
             },
             proposals: [],
             skipped: [],
-            warnings,
+            requestWarnings: warnings,
             nextActions: [
               'Provide sessionId or checkpointId to review current closeout candidates.',
               'Use allowScopeFallback=true only with trigger=manual_closeout when intentionally reviewing the scope backlog.',
@@ -1372,7 +1364,7 @@ export function createContextForge(options = {}) {
             },
             proposals: [],
             skipped: [],
-            warnings,
+            requestWarnings: warnings,
             nextActions: [
               'No latest checkpoint was found for this session; distill a checkpoint before reviewing promotions.',
               'Do not promote automatically.',
@@ -1415,7 +1407,7 @@ export function createContextForge(options = {}) {
               candidateId: item.candidate.id,
               reason: candidateWarningReason(item.warnings) || 'low_score',
             })),
-          warnings,
+          requestWarnings: warnings,
           nextActions: [
             'Ask the user to choose: promote, edit then promote, skip, or reject.',
             'Do not promote automatically.',
@@ -1549,7 +1541,7 @@ export function createContextForge(options = {}) {
             });
           }
 
-          if (!liveState && appliedActions.some((item) => item.action === 'correct_memory')) {
+          if (!liveState) {
             for (const item of candidateBasis) {
               const candidate = store.getMemoryCandidate({
                 ...scope,
