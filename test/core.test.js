@@ -3878,9 +3878,14 @@ test('codex_exec provider distills synthetic raw events through a runner', async
   assert.ok(invocation.args.includes('-c'));
   assert.ok(invocation.args.includes('model_reasoning_effort="low"'));
   assert.equal(invocation.timeoutMs, 1234);
+  assert.deepEqual(schema.required, Object.keys(schema.properties));
   const candidateSchema = schema.properties.memoryCandidates.items;
   assert.deepEqual(candidateSchema.required, Object.keys(candidateSchema.properties));
   assert.ok(schema.properties.sessionWorkingContext);
+  assert.deepEqual(
+    schema.properties.sessionWorkingContext.required,
+    Object.keys(schema.properties.sessionWorkingContext.properties),
+  );
   assert.deepEqual(schema.properties.metadata.required, ['providerNotes', 'retrievalHooks']);
 
   const runs = app.listDistillRuns({
