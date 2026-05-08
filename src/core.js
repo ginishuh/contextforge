@@ -1205,6 +1205,7 @@ export function createContextForge(options = {}) {
         provider: config.embeddings.provider,
         model: config.embeddings.model,
         dimensions: config.embeddings.dimensions,
+        staleAfterMs: config.embeddings.staleAfterMs,
         enabled: Boolean(embeddingProvider),
         requiredForQuality: true,
         degraded: !embeddingProvider || !storeInfo.vector.sqliteVecAvailable || Boolean(coverage?.staleSources) || Boolean(jobs.failed),
@@ -2660,7 +2661,9 @@ export function createContextForge(options = {}) {
       const batchSize = positiveNumber(options.batchSize == null ? 32 : Number(options.batchSize), 'batchSize');
       const limit = positiveNumber(options.limit == null ? 50 : Number(options.limit), 'limit');
       const staleAfterMs =
-        options.staleAfterMs == null ? 10 * 60 * 1000 : positiveNumber(Number(options.staleAfterMs), 'staleAfterMs');
+        options.staleAfterMs == null
+          ? config.embeddings.staleAfterMs
+          : positiveNumber(Number(options.staleAfterMs), 'staleAfterMs');
       return useStore(async (store) => {
         store.ensureEmbeddingIndex(embeddingProvider.dimensions, { resetOnDimensionChange: truthyOption(options.force) });
         const shouldNarrowScope = Boolean(options.scope || options.scopeKey || options.cwd || options.repoPath);

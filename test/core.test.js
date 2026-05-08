@@ -194,9 +194,23 @@ test('dbInfo initializes a fresh SQLite store', async () => {
   assert.equal(info.tables.memories, 0);
   assert.equal(info.tables.embeddingJobs, 0);
   assert.equal(info.embeddings.requiredForQuality, true);
+  assert.equal(info.embeddings.staleAfterMs, 10 * 60 * 1000);
   assert.equal(info.embeddings.degraded, true);
   assert.deepEqual(info.embeddings.jobs, { pending: 0, processing: 0, completed: 0, failed: 0 });
   assert.match(info.dbPath, /contextforge\.db$/);
+});
+
+test('dbInfo reports configured embedding stale timeout', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_EMBEDDINGS_STALE_AFTER_MS: '1234',
+    },
+    cwd: process.cwd(),
+  });
+
+  assert.equal(app.dbInfo().embeddings.staleAfterMs, 1234);
 });
 
 test('ContextForgeStore.withTransaction returns results and rolls back on throw', async () => {

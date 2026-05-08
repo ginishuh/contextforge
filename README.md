@@ -270,12 +270,15 @@ CONTEXTFORGE_OPENAI_API_KEY=sk-...
 CONTEXTFORGE_EMBEDDINGS_MODEL=text-embedding-3-small
 CONTEXTFORGE_EMBEDDINGS_DIMENSIONS=1536
 CONTEXTFORGE_EMBEDDINGS_TIMEOUT_MS=30000
+CONTEXTFORGE_EMBEDDINGS_STALE_AFTER_MS=600000
 ```
 
 The default and recommended embedding model is `text-embedding-3-small`.
 `CONTEXTFORGE_EMBEDDINGS_DIMENSIONS` is sent to OpenAI only for
 `text-embedding-3-*` models; legacy models such as `text-embedding-ada-002` do
 not support that request field and must return the configured dimension count.
+`CONTEXTFORGE_EMBEDDINGS_STALE_AFTER_MS` controls when a stuck `processing`
+embedding job is returned to `pending`; the default is 10 minutes.
 
 Use a long random token and store the same value on client machines as
 `CONTEXTFORGE_REMOTE_TOKEN`. Treat this token as an administrator credential:
