@@ -5804,6 +5804,11 @@ test('MCP streamable HTTP endpoint exposes core tools with bearer auth', async (
     const toolList = await client.listTools();
     assert.ok(toolList.tools.some((tool) => tool.name === 'remember'));
 
+    const infoResult = await client.callTool({ name: 'db_info', arguments: {} });
+    assert.equal(infoResult.structuredContent.result.connection.mode, 'remote-client');
+    assert.equal(infoResult.structuredContent.result.connection.transport, 'http-mcp');
+    assert.equal(infoResult.structuredContent.result.connection.server.mode, 'direct-local');
+
     const remembered = await client.callTool({
       name: 'remember',
       arguments: {
@@ -5824,6 +5829,18 @@ test('MCP streamable HTTP endpoint exposes core tools with bearer auth', async (
       },
     });
     assert.equal(searched.structuredContent.result[0].memory.key, 'http-mcp-rule');
+
+    const bootstrap = await client.callTool({
+      name: 'bootstrap_context',
+      arguments: {
+        scope: 'repo',
+        scopeKey: 'http-mcp-repo',
+        query: 'canonical remote',
+      },
+    });
+    assert.equal(bootstrap.structuredContent.result.storage.connection.mode, 'remote-client');
+    assert.equal(bootstrap.structuredContent.result.storage.connection.transport, 'http-mcp');
+    assert.equal(bootstrap.structuredContent.result.storage.connection.server.mode, 'direct-local');
 
     await client.callTool({
       name: 'append_raw',
@@ -5858,6 +5875,67 @@ test('MCP streamable HTTP endpoint exposes core tools with bearer auth', async (
     await client.close();
     await remote.close();
     app.close();
+  }
+});
+
+test('MCP streamable HTTP db_info reports remote-client for HTTP callers', async () => {
+  const dataDir = await makeTempDir();
+  const remote = await startContextForgeServer({
+    port: 0,
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+    },
+  });
+  const client = new Client({ name: 'contextforge-http-dbinfo-client', version: '0.0.0' }, { capabilities: {} });
+  const transport = new StreamableHTTPClientTransport(new URL(`${remote.url}/mcp`), {
+    requestInit: {
+      headers: {
+        authorization: 'Bearer test-token',
+      },
+    },
+  });
+
+  try {
+    await client.connect(transport);
+    const info = await client.callTool({ name: 'db_info', arguments: {} });
+    assert.equal(info.structuredContent.result.connection.mode, 'remote-client');
+    assert.equal(info.structuredContent.result.connection.transport, 'http-mcp');
+    assert.equal(info.structuredContent.result.connection.server.mode, 'http-server');
+    assert.equal(info.structuredContent.result.connection.server.storageMode, 'project-local');
+  } finally {
+    await client.close();
+    await remote.close();
+  }
+});
+
+test('HTTP v0 callers see remote-client connection metadata', async () => {
+  const dataDir = await makeTempDir();
+  const remote = await startContextForgeServer({
+    port: 0,
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+    },
+  });
+
+  try {
+    const response = await fetch(`${remote.url}/v0/dbInfo`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer test-token',
+        'content-type': 'application/json',
+      },
+      body: '{}',
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.result.connection.mode, 'remote-client');
+    assert.equal(body.result.connection.transport, 'http-api');
+    assert.equal(body.result.connection.server.mode, 'http-server');
+    assert.equal(body.result.connection.server.storageMode, 'project-local');
+  } finally {
+    await remote.close();
   }
 });
 

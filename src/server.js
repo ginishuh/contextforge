@@ -90,6 +90,52 @@ function isAuthorized(request, token) {
   return timingSafeStringEqual(request.headers.authorization, `Bearer ${token}`);
 }
 
+function remoteAccessConnection(serverConnection, transport) {
+  return {
+    mode: 'remote-client',
+    transport,
+    viewpoint: 'this caller reaches ContextForge through a remote HTTP endpoint',
+    storageMode: 'remote',
+    storageAuthority: 'canonical',
+    server: serverConnection || null,
+    note: 'This response crossed a ContextForge HTTP boundary. server.storageMode describes the server-owned store.',
+  };
+}
+
+function wrapRemoteAccessResult(result, transport) {
+  if (!result || typeof result !== 'object') {
+    return result;
+  }
+  if (result.connection) {
+    return {
+      ...result,
+      connection: remoteAccessConnection(result.connection, transport),
+    };
+  }
+  if (result.storage?.connection) {
+    return {
+      ...result,
+      storage: {
+        ...result.storage,
+        connection: remoteAccessConnection(result.storage.connection, transport),
+      },
+    };
+  }
+  return result;
+}
+
+function createRemoteAccessApp(app, transport) {
+  return new Proxy(app, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (!['dbInfo', 'bootstrapContext', 'syncResumeContext'].includes(property) || typeof value !== 'function') {
+        return value;
+      }
+      return async (...args) => wrapRemoteAccessResult(await value.apply(target, args), transport);
+    },
+  });
+}
+
 function serverStorageEnv(env) {
   const storageMode = env.CONTEXTFORGE_SERVER_STORAGE_MODE || env.CONTEXTFORGE_STORAGE_MODE;
   return {
@@ -117,7 +163,7 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
         sendJson(response, 401, { error: { message: 'Unauthorized.' } });
         return;
       }
-      const mcpServer = createContextForgeMcpServer({ app: serverApp });
+      const mcpServer = createContextForgeMcpServer({ app: createRemoteAccessApp(serverApp, 'http-mcp') });
       try {
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: undefined,
@@ -162,7 +208,7 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
     try {
       const options = await readJsonBody(request, { maxBodyBytes });
       const result = await serverApp[method](options);
-      sendJson(response, 200, { result });
+      sendJson(response, 200, { result: wrapRemoteAccessResult(result, 'http-api') });
     } catch (error) {
       sendJson(response, error.statusCode || 500, {
         error: {

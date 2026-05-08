@@ -114,6 +114,14 @@ export function createRemoteContextForge(config, options = {}) {
   const api = { config };
 
   function remoteClientConnection(serverConnection) {
+    if (serverConnection?.mode === 'remote-client') {
+      return {
+        ...serverConnection,
+        viewpoint: 'this client delegates to a remote ContextForge server',
+        remoteUrl: config.remote.url,
+        clientStorageMode: config.storageMode,
+      };
+    }
     return {
       mode: 'remote-client',
       viewpoint: 'this client delegates to a remote ContextForge server',
@@ -153,7 +161,7 @@ export function createRemoteContextForge(config, options = {}) {
         });
         return {
           ...result,
-          connection: remoteClientConnection(result.connection || null),
+          connection: remoteClientConnection(result.connection || result.storage?.connection || null),
           storage: {
             ...result.storage,
             mode: 'remote',
