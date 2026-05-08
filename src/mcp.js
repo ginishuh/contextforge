@@ -26,7 +26,10 @@ const MCP_INSTRUCTIONS = [
   'Use ContextForge for scoped memory retrieval on demand.',
   'At the start of non-trivial project work, call bootstrap_context with repoPath, cwd, or an explicit scopeKey. It summarizes storage authority, vector readiness, repo semantic retrieval results, and trust hints in one response.',
   'If db_info shows remote storage, treat results as shared canonical ContextForge state for the configured scope. If it shows local or project-local storage, treat results as machine-local context unless the user confirms that store is authoritative.',
-  'Search result types have different trust levels: memory is reviewed durable fact or decision; checkpoint is recent session continuity, not canonical truth; memory_candidate is an unreviewed promotion candidate for review.',
+  'Search result types have different trust roles: memory is reviewed durable fact or decision; checkpoint is credible recent handoff state for continuity, planning, prior intent, recent decisions, and unfinished work, but mutable live-state claims must be verified with git/GitHub/CI/runtime/migrations before acting; memory_candidate is unreviewed promotion material and not durable truth.',
+  'For start/resume requests such as "지난 환경 작업과 동기화", "어제 하던 거 이어서", "previous work", or "continue", call sync_resume_context. Use checkpoints actively as handoff notes, then verify mutable state with git/GitHub/CI/runtime/migrations. Do not propose memory promotions during resume sync.',
+  'For closeout triggers only, call suggest_memory_promotions: after this agent merges a PR, after the user says they merged and the agent syncs main/cleans branches, or when the user explicitly says today\'s work is done. Suggest at most 1-3 durable memory promotions and never promote automatically.',
+  'For user corrections such as "너 잘못 알고 있잖아", "그거 아니야", "그건 X가 아니라 Y야", or "기억 수정해", call reconcile_memory. Show the basis for prior knowledge, assess conflicts, and only apply safe corrections when the user explicitly asks to fix memory.',
   'When resuming a known session, pass sessionId to bootstrap_context or call get_working_summary to load latest rolling handoff state separately from durable memory and checkpoint search results.',
   'If working on a repository while the MCP process cwd is elsewhere, pass repoPath or cwd so repo scope resolves to that checkout; repoPath takes precedence when both are provided.',
   'Treat scopeKey as the canonical repo memory key; pass an explicit normalized GitHub key when local paths differ across machines or the checkout cannot infer the right remote.',
@@ -88,6 +91,30 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
   );
 
   server.registerTool(
+    'sync_resume_context',
+    {
+      title: 'Sync Resume Context',
+      description:
+        'Build a start/resume handoff package for continuing work across machines or agent environments. Use checkpoints as credible recent handoff notes, durable memories as canonical long-term context, and memory candidates only as review material. This tool must not propose or perform durable memory promotion.',
+      inputSchema: {
+        ...scopedSchema,
+        query: z.string(),
+        sessionId: z.string().optional(),
+        includeShared: z.boolean().optional(),
+        limit: z.number().int().positive().optional(),
+        rawTailLimit: z.number().int().positive().optional(),
+        sharedScopeKey: z.string().optional(),
+      },
+      annotations: {
+        title: 'Sync Resume Context',
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.syncResumeContext(args)),
+  );
+
+  server.registerTool(
     'begin_session',
     {
       title: 'Begin Session',
@@ -136,7 +163,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Search Memory',
       description:
-        'Search scoped ContextForge retrieval results. Results may include type=memory reviewed durable facts, type=checkpoint recent continuity, and type=memory_candidate unreviewed promotion candidates. Pass repoPath or cwd to retrieve repo results for a checkout outside the MCP process cwd; repoPath takes precedence. Pass scopeKey to pin the canonical repo memory key.',
+        'Search scoped ContextForge retrieval results. Results may include type=memory reviewed durable facts, type=checkpoint credible recent handoff state, and type=memory_candidate unreviewed promotion candidates. Pass repoPath or cwd to retrieve repo results for a checkout outside the MCP process cwd; repoPath takes precedence. Pass scopeKey to pin the canonical repo memory key.',
       inputSchema: {
         ...scopedSchema,
         query: z.string(),
@@ -355,6 +382,63 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
       },
     },
     async (args) => jsonResult(await app.listMemoryCandidates(args)),
+  );
+
+  server.registerTool(
+    'suggest_memory_promotions',
+    {
+      title: 'Suggest Memory Promotions',
+      description:
+        'Suggest at most 1-3 high-signal durable memory promotion candidates at closeout triggers only. Review only the current session or latest checkpoint candidate set by default. Never promote automatically.',
+      inputSchema: {
+        ...scopedSchema,
+        sessionId: z.string().optional(),
+        checkpointId: z.string().optional(),
+        trigger: z.enum([
+          'agent_merged_pr',
+          'user_merged_then_synced',
+          'user_declared_work_done',
+          'manual_closeout',
+        ]),
+        limit: z.number().int().positive().optional(),
+        scanLimit: z.number().int().positive().optional(),
+        promotionRecommendation: z.string().optional(),
+        includeWarnings: z.boolean().optional(),
+        allowScopeFallback: z.boolean().optional(),
+      },
+      annotations: {
+        title: 'Suggest Memory Promotions',
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.suggestMemoryPromotions(args)),
+  );
+
+  server.registerTool(
+    'reconcile_memory',
+    {
+      title: 'Reconcile Memory',
+      description:
+        'Search relevant durable memories, checkpoints, and memory candidates for a user correction; explain the basis for existing knowledge, assess conflicts, and optionally apply safe memory corrections only when explicitly requested. Default mode=propose is read-only; mode=apply_safe may correct durable memory or reject candidates when the correction is unambiguous.',
+      inputSchema: {
+        ...scopedSchema,
+        query: z.string(),
+        correction: z.string(),
+        mode: z.enum(['propose', 'apply_safe']).optional(),
+        sessionId: z.string().optional(),
+        includeShared: z.boolean().optional(),
+        limit: z.number().int().positive().optional(),
+        candidateLimit: z.number().int().positive().optional(),
+        sharedScopeKey: z.string().optional(),
+      },
+      annotations: {
+        title: 'Reconcile Memory',
+        readOnlyHint: false,
+        idempotentHint: false,
+      },
+    },
+    async (args) => jsonResult(await app.reconcileMemory(args)),
   );
 
   server.registerTool(

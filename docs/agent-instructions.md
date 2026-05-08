@@ -9,7 +9,9 @@ instruction file, or an MCP client system prompt.
 ```text
 Use ContextForge as a scoped memory sidecar.
 
-At the start of a project task, call bootstrap_context when available. Pass
+At the start of a project task, call bootstrap_context when available. For
+start/resume wording such as "continue", "previous work", "어제 하던 거 이어서",
+or "지난 환경 작업과 동기화", call sync_resume_context when available. Pass
 repoPath, cwd, or an explicit scopeKey so ContextForge can resolve the repo
 scope, then use the returned trust and verification hints. Prefer canonical
 GitHub scope keys such as github.com/owner/repo.
@@ -30,8 +32,11 @@ machine-local context unless the user says that store is authoritative.
 
 Interpret search result types carefully:
 - `memory`: reviewed durable fact, decision, preference, or runbook note.
-- `checkpoint`: recent session continuity, not canonical truth.
-- `memory_candidate`: unreviewed promotion candidate, useful for review.
+- `checkpoint`: credible recent handoff state for continuity, planning, prior
+  intent, recent decisions, and unfinished work; verify mutable live state with
+  git/GitHub/CI/runtime/migrations before acting.
+- `memory_candidate`: unreviewed promotion material, useful for review, not
+  durable truth.
 
 Use bootstrap_context first, then targeted search if more detail is needed. Use
 get_memory only when you know the exact key. Use local scope only when the
@@ -45,11 +50,18 @@ Capture important raw evidence with append_raw during long work. Distill raw
 evidence into checkpoints when a task reaches a meaningful boundary, when the
 session_status thresholds recommend it, or before handing off work.
 
-After distill_checkpoint, inspect list_memory_candidates. Promote candidates
-only when they are reviewed, clearly durable, and useful beyond the current
-checkpoint. Use promote_memory_candidate for a reviewed candidate, remember for
-new reviewed durable facts, correct_memory for changed facts, and
-deactivate_memory for stale facts.
+At closeout triggers only, inspect memory candidates with
+suggest_memory_promotions when available, otherwise list_memory_candidates for
+the current session/latest checkpoint. Promote candidates only when they are
+reviewed, clearly durable, and useful beyond the current checkpoint. Use
+promote_memory_candidate for a reviewed candidate, remember for new reviewed
+durable facts, correct_memory for changed facts, and deactivate_memory for
+stale facts.
+
+For user corrections such as "that is wrong", "그거 아니야", "그건 X가 아니라
+Y야", or "기억 수정해", call reconcile_memory when available. Show the basis
+for prior memory, treat user correction as strong evidence but not automatic
+truth, and verify mutable live state before changing memory.
 
 Do not automatically promote every candidate. Keep durable memory small,
 actionable, and scoped.
@@ -80,17 +92,20 @@ github.com/example/repo unless the user says otherwise.
 Check whether ContextForge is remote canonical storage or local/project-local
 storage before treating retrieval results as shared state.
 
-Interpret search result types by trust level: memory is reviewed durable state,
-checkpoint is recent continuity, and memory_candidate is review material.
+Interpret search result types by trust role: memory is reviewed durable state,
+checkpoint is credible recent handoff state for continuity and planning, and
+memory_candidate is review material.
 
 For loose continuation prompts like "yesterday", "continue", "previous work",
-issue/PR follow-up, or cross-agent handoff, search ContextForge before guessing
-from the current checkout. Review `checkpoint` and `memory_candidate` hits as
-context candidates, then verify current state in git/GitHub/runtime.
+issue/PR follow-up, or cross-agent handoff, call `sync_resume_context` when
+available before guessing from the current checkout. Use checkpoints actively
+for prior intent, recent decisions, and unfinished work, then verify current
+state in git/GitHub/CI/runtime/migrations. Do not propose memory promotions
+during resume sync.
 
-Keep durable memory intentional. After distilling a checkpoint, review
-list_memory_candidates and promote only stable, reviewed facts. Promote durable
-lessons, not whole worklogs.
+Keep durable memory intentional. At closeout triggers only, call
+suggest_memory_promotions when available and propose at most one to three
+stable, reviewed facts. Promote durable lessons, not whole worklogs.
 
 For full ContextForge MCP usage rules, follow docs/agent-instructions.md from
 the ContextForge repo or the equivalent shared memory guide.
@@ -179,9 +194,10 @@ trust levels.
 6. If the task needs live handoff state, pass `sessionId` to
    `bootstrap_context` or call `get_working_summary`. Treat the returned
    working summary as current session state, not durable truth.
-7. If the task depends on recent handoff state, call `list_memory_candidates`
-   for the relevant session or checkpoint and review candidates before
-   promoting anything.
+7. If the task depends on recent handoff state, call `sync_resume_context` when
+   available. Treat checkpoints as credible recent handoff state and memory
+   candidates as review material only. Do not propose promotions during resume
+   sync.
 
 Keep bootstrap small. Prefer one or two targeted `search` calls over loading all
 memory. Do not load raw evidence during bootstrap unless the user asks for
@@ -229,7 +245,9 @@ For most coding tasks, use this order:
    conventions.
 5. `get_memory` only for exact durable keys returned by search or supplied by
    the user.
-6. Use checkpoints for recent continuity, not canonical truth.
+6. Use checkpoints as credible recent handoff state for continuity, planning,
+   prior intent, recent decisions, and unfinished work; verify mutable live
+   state before acting.
 7. Use memory candidates only as review material, not as canonical memory.
 8. Avoid raw evidence unless debugging distillation, reconstructing provenance,
    or explicitly asked.
@@ -333,20 +351,22 @@ Distillation providers should populate `metadata.retrievalHooks` with concise
 future-search keywords. Those hooks are embedded with the checkpoint so later
 queries can find the right session even when the exact summary wording differs.
 
-After `distill_checkpoint`, call `list_memory_candidates` for the same
-`sessionId` or `checkpointId` when:
+At closeout triggers, call `suggest_memory_promotions` when available. If it is
+unavailable, call `list_memory_candidates` for the same `sessionId` or
+`checkpointId` when:
 
 - a long implementation thread ends
 - a PR or issue reaches a stable decision
 - the user asks what should be remembered
-- the agent is preparing a handoff
+- the user explicitly asks to stop here or wrap up
 - repeated future work would benefit from a durable note
 
 The MCP result makes candidate discovery explicit. If `distill_checkpoint`
-returns `memoryCandidateCount > 0`, call `list_memory_candidates` before ending
-the task or deciding what to promote. If `session_status` reports
+returns `memoryCandidateCount > 0`, use `suggest_memory_promotions` before
+deciding what to propose. If `session_status` reports
 `latestCheckpointMemoryCandidateCount > 0`, use the latest checkpoint id or the
-session id to review those candidates.
+session id to review those candidates. Do not review promotion candidates during
+start/resume sync.
 
 Promote with `promote_memory_candidate` only after review. A good candidate is:
 
@@ -389,6 +409,13 @@ Example corrected durable write instead of promoting a noisy candidate:
 { "tool": "remember", "args": { "scope": "repo", "scopeKey": "github.com/example/service", "key": "api-contract-widget-delete", "category": "decision", "content": "Widget delete endpoints must remain idempotent: missing widgets return 204 so retrying cleanup jobs is safe.", "tags": ["api-contract", "delete", "idempotency"], "importance": 4 } }
 ```
 
+For user corrections, use reconcile_memory before directly changing memory. It
+searches durable memories, checkpoints, and candidates, shows why prior agents
+may have believed the stale fact, and proposes correct/deactivate/reject
+actions. In `apply_safe` mode, only apply unambiguous durable corrections or
+candidate rejections; never edit checkpoints directly. Mutable live-state
+corrections still require git/GitHub/CI/runtime/migration verification first.
+
 ## Raw Evidence And Retention
 
 Raw evidence exists for auditability and future distillation. It should be
@@ -427,6 +454,8 @@ Prefer distilling at meaningful boundaries:
 - `bootstrap_context`: resolve scoped startup context in one call. It searches
   repo memory/checkpoints/candidates semantically, optionally includes up to
   three shared-scope results, and annotates trust plus verification hints.
+- `sync_resume_context`: build a start/resume handoff package. Checkpoints are
+  credible recent handoff state; candidates are review material only.
 - `search`: retrieve scoped results. Results can include reviewed durable
   `memory`, recent-continuity `checkpoint`, and unreviewed
   `memory_candidate` records.
@@ -445,6 +474,10 @@ Prefer distilling at meaningful boundaries:
   estimated input tokens, elapsed time, and actual provider usage when recorded.
 - `list_memory_candidates`: inspect checkpoint-generated durable-memory
   candidates.
+- `suggest_memory_promotions`: closeout-only selector that proposes at most one
+  to three durable memory promotions and never promotes automatically.
+- `reconcile_memory`: reconcile user corrections against durable memories,
+  checkpoints, and memory candidates.
 - `promote_memory_candidate`: promote a reviewed candidate by candidate id.
 - `reject_memory_candidate`: reject a reviewed candidate that should not become
   durable memory.

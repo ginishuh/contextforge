@@ -16,6 +16,7 @@ import { createInterruptibleSleep, shouldSkipRecentFailedAutoDistill } from '../
 import { watchClaudeCodeSessions } from '../src/ingest/claude_code.js';
 import { ingestCodexRolloutFile, watchCodexSessions } from '../src/ingest/codex.js';
 import { searchMemories } from '../src/retrieval/search.js';
+import { REMOTE_METHODS } from '../src/remote/client.js';
 import { startContextForgeServer } from '../src/server.js';
 import { ContextForgeStore, SCHEMA_VERSION } from '../src/storage/sqlite.js';
 
@@ -3947,6 +3948,479 @@ test('bootstrapContext reuses one query embedding across repo and shared retriev
   assert.ok(result.results.some((item) => item.group === 'shared'));
 });
 
+test('syncResumeContext returns handoff context without promotion proposals', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'resume_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      resume_provider: async () => ({
+        summaryShort: 'Resume handoff for usage observability.',
+        summaryText:
+          'Usage observability work left unfinished migration checks and PR verification for the next agent.',
+        decisions: ['Use checkpoint handoff for prior intent.'],
+        todos: ['Verify CI before acting.'],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'resume-candidate-runbook',
+            content: 'Review usage observability closeout candidates only at closeout.',
+            category: 'runbook',
+            candidateType: 'runbook',
+            confidence: 0.9,
+            stability: 0.9,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+        ],
+      }),
+    },
+  });
+
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'resume-repo',
+    key: 'resume-durable-rule',
+    content: 'Usage observability resume must verify CI live.',
+    category: 'runbook',
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'resume-repo',
+    sessionId: 'resume-session',
+    role: 'assistant',
+    content: 'Usage observability checkpoint should preserve unfinished work.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'resume-repo',
+    sessionId: 'resume-session',
+  });
+
+  const result = await app.syncResumeContext({
+    scope: 'repo',
+    scopeKey: 'resume-repo',
+    sessionId: 'resume-session',
+    query: 'usage observability resume unfinished work closeout candidates',
+  });
+
+  assert.equal(result.kind, 'resume_context');
+  assert.equal(result.handoff.recentCheckpoints[0].trust, 'credible_recent_handoff');
+  assert.match(result.handoff.recentCheckpoints[0].useHint, /Use actively/);
+  assert.equal(result.handoff.memoryCandidates.count, 1);
+  assert.equal(result.handoff.memoryCandidates.items[0].trust, 'review_material');
+  assert.equal(Object.hasOwn(result, 'proposals'), false);
+  assert.ok(result.nextActions.includes('Do not propose memory promotions during resume sync.'));
+});
+
+test('syncResumeContext handles empty bootstrap results without proposals', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+
+  const result = await app.syncResumeContext({
+    scope: 'repo',
+    scopeKey: 'empty-resume-repo',
+    query: 'no matching resume context',
+  });
+
+  assert.equal(result.kind, 'resume_context');
+  assert.deepEqual(result.handoff.durableMemories, []);
+  assert.deepEqual(result.handoff.recentCheckpoints, []);
+  assert.equal(result.handoff.memoryCandidates.count, 0);
+  assert.equal(Object.hasOwn(result, 'proposals'), false);
+});
+
+test('suggestMemoryPromotions avoids scope fallback unless explicitly allowed', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'suggest_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      suggest_provider: async () => ({
+        summaryShort: 'Promotion suggestion checkpoint.',
+        summaryText: 'Closeout produced a stable runbook candidate.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'closeout-runbook',
+            content: 'Closeout should verify branch parity before frontend follow-up.',
+            reason: 'PR #595 merge and main parity were verified.',
+            category: 'runbook',
+            candidateType: 'runbook',
+            confidence: 0.91,
+            stability: 0.92,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+        ],
+      }),
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'suggest-repo',
+    sessionId: 'suggest-session',
+    role: 'assistant',
+    content: 'Closeout candidate: branch parity runbook.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'suggest-repo',
+    sessionId: 'suggest-session',
+  });
+
+  const noFallback = await app.suggestMemoryPromotions({
+    scope: 'repo',
+    scopeKey: 'suggest-repo',
+    trigger: 'manual_closeout',
+  });
+  assert.deepEqual(noFallback.proposals, []);
+  assert.equal(noFallback.source.mode, 'none');
+
+  await assert.rejects(
+    () =>
+      app.suggestMemoryPromotions({
+        scope: 'repo',
+        scopeKey: 'suggest-repo',
+        trigger: 'agent_merged_pr',
+        allowScopeFallback: true,
+      }),
+    /allowScopeFallback/,
+  );
+
+  const fallback = await app.suggestMemoryPromotions({
+    scope: 'repo',
+    scopeKey: 'suggest-repo',
+    trigger: 'manual_closeout',
+    allowScopeFallback: true,
+  });
+  assert.equal(fallback.source.mode, 'scope_fallback');
+  assert.equal(fallback.proposals.length, 1);
+  assert.equal(fallback.proposals[0].key, 'closeout-runbook');
+});
+
+test('suggestMemoryPromotions honors scanLimit and reports capped proposal limits', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'scan_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      scan_provider: async () => ({
+        summaryShort: 'Many candidates.',
+        summaryText: 'Closeout produced many promotion candidates.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: Array.from({ length: 5 }, (_, index) => ({
+          key: `scan-runbook-${index + 1}`,
+          content: `Runbook candidate ${index + 1}.`,
+          category: 'runbook',
+          candidateType: 'runbook',
+          confidence: 0.9,
+          stability: 0.9,
+          sensitivity: 'low',
+          promotionRecommendation: 'promote',
+        })),
+      }),
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'scan-repo',
+    sessionId: 'scan-session',
+    role: 'assistant',
+    content: 'Many closeout candidates.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'scan-repo',
+    sessionId: 'scan-session',
+  });
+
+  const result = await app.suggestMemoryPromotions({
+    scope: 'repo',
+    scopeKey: 'scan-repo',
+    sessionId: 'scan-session',
+    trigger: 'manual_closeout',
+    scanLimit: 2,
+    limit: 5,
+  });
+
+  assert.equal(result.proposals.length, 2);
+  assert.ok(result.requestWarnings.some((warning) => warning.code === 'limit_capped'));
+});
+
+test('suggestMemoryPromotions uses only latest checkpoint for a session and skips risky candidates', async () => {
+  const dataDir = await makeTempDir();
+  let callCount = 0;
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'latest_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      latest_provider: async () => {
+        callCount += 1;
+        return {
+          summaryShort: `Checkpoint ${callCount}.`,
+          summaryText: `Checkpoint ${callCount} contains candidates.`,
+          decisions: [],
+          todos: [],
+          openQuestions: [],
+          memoryCandidates:
+            callCount === 1
+              ? [
+                  {
+                    key: 'old-runbook',
+                    content: 'Old checkpoint candidate should not be suggested from latest session closeout.',
+                    category: 'runbook',
+                    confidence: 0.95,
+                    stability: 0.95,
+                    sensitivity: 'low',
+                    promotionRecommendation: 'promote',
+                  },
+                ]
+              : [
+                  {
+                    key: 'latest-runbook',
+                    content: 'Latest checkpoint candidate should be suggested.',
+                    category: 'runbook',
+                    candidateType: 'runbook',
+                    confidence: 0.95,
+                    stability: 0.95,
+                    sensitivity: 'low',
+                    promotionRecommendation: 'promote',
+                  },
+                  {
+                    key: 'latest-secret',
+                    content: 'Risky candidate should not be suggested.',
+                    category: 'runbook',
+                    candidateType: 'runbook',
+                    confidence: 0.95,
+                    stability: 0.95,
+                    sensitivity: 'high',
+                    promotionRecommendation: 'promote',
+                  },
+                ],
+        };
+      },
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'latest-repo',
+    sessionId: 'latest-session',
+    role: 'assistant',
+    content: 'First checkpoint raw.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'latest-repo',
+    sessionId: 'latest-session',
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'latest-repo',
+    sessionId: 'latest-session',
+    role: 'assistant',
+    content: 'Second checkpoint raw.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'latest-repo',
+    sessionId: 'latest-session',
+  });
+
+  const result = await app.suggestMemoryPromotions({
+    scope: 'repo',
+    scopeKey: 'latest-repo',
+    sessionId: 'latest-session',
+    trigger: 'user_declared_work_done',
+  });
+
+  assert.deepEqual(
+    result.proposals.map((proposal) => proposal.key),
+    ['latest-runbook'],
+  );
+  assert.ok(result.skipped.some((item) => item.reason.includes('high_sensitivity')));
+});
+
+test('reconcileMemory proposes by default and apply_safe only changes unambiguous non-live memory', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'reconcile_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      reconcile_provider: async () => ({
+        summaryShort: 'Reconcile checkpoint.',
+        summaryText: 'Prior note incorrectly said the API uses REST only.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'api-rest-only-candidate',
+            content: 'The API uses REST only.',
+            category: 'api-contract',
+            confidence: 0.8,
+            stability: 0.8,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+        ],
+      }),
+    },
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'reconcile-repo',
+    key: 'api-transport',
+    content: 'The API uses REST only.',
+    category: 'api-contract',
+    tags: ['api', 'transport'],
+    importance: 6,
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'reconcile-repo',
+    sessionId: 'reconcile-session',
+    role: 'assistant',
+    content: 'The API uses REST only.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'reconcile-repo',
+    sessionId: 'reconcile-session',
+  });
+
+  const proposed = await app.reconcileMemory({
+    scope: 'repo',
+    scopeKey: 'reconcile-repo',
+    sessionId: 'reconcile-session',
+    query: 'API REST only transport',
+    correction: 'The API supports REST and GraphQL.',
+  });
+  assert.equal(proposed.mode, 'propose');
+  assert.ok(proposed.basis.some((item) => item.type === 'memory'));
+  assert.ok(proposed.basis.some((item) => item.type === 'checkpoint'));
+  assert.ok(proposed.basis.some((item) => item.type === 'memory_candidate'));
+  assert.ok(proposed.proposedActions.some((item) => item.action === 'correct_memory'));
+  assert.ok(proposed.proposedActions.some((item) => item.action === 'reject_memory_candidate'));
+  assert.equal(app.getMemory({ scope: 'repo', scopeKey: 'reconcile-repo', key: 'api-transport' }).content, 'The API uses REST only.');
+
+  const applied = await app.reconcileMemory({
+    scope: 'repo',
+    scopeKey: 'reconcile-repo',
+    sessionId: 'reconcile-session',
+    query: 'API REST only transport',
+    correction: 'The API supports REST and GraphQL.',
+    mode: 'apply_safe',
+  });
+  assert.ok(applied.appliedActions.some((item) => item.action === 'correct_memory'));
+  assert.ok(applied.appliedActions.some((item) => item.action === 'reject_memory_candidate'));
+  assert.equal(
+    app.getMemory({ scope: 'repo', scopeKey: 'reconcile-repo', key: 'api-transport' }).content,
+    'The API supports REST and GraphQL.',
+  );
+  const corrected = app.getMemory({ scope: 'repo', scopeKey: 'reconcile-repo', key: 'api-transport' });
+  assert.deepEqual(corrected.tags, ['api', 'transport']);
+  assert.equal(corrected.importance, 6);
+
+  const live = await app.reconcileMemory({
+    scope: 'repo',
+    scopeKey: 'reconcile-repo',
+    sessionId: 'reconcile-session',
+    query: 'PR status on main',
+    correction: 'PR #12 is not merged.',
+    mode: 'apply_safe',
+  });
+  assert.ok(live.warnings.some((warning) => warning.code === 'live_state_verification_required'));
+  assert.equal(live.appliedActions.length, 0);
+});
+
+test('reconcileMemory apply_safe rejects matching candidates when no durable memory matches', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'candidate_only_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      candidate_only_provider: async () => ({
+        summaryShort: 'Candidate only checkpoint.',
+        summaryText: 'Only a candidate exists for this correction.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'candidate-only',
+            content: 'Candidate-only stale claim.',
+            category: 'runbook',
+            confidence: 0.8,
+            stability: 0.8,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+        ],
+      }),
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'candidate-only-repo',
+    sessionId: 'candidate-only-session',
+    role: 'assistant',
+    content: 'Candidate-only stale claim.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'candidate-only-repo',
+    sessionId: 'candidate-only-session',
+  });
+
+  const result = await app.reconcileMemory({
+    scope: 'repo',
+    scopeKey: 'candidate-only-repo',
+    sessionId: 'candidate-only-session',
+    query: 'candidate-only stale claim',
+    correction: 'Candidate-only claim is wrong.',
+    mode: 'apply_safe',
+  });
+  assert.deepEqual(
+    result.appliedActions.map((action) => action.action),
+    ['reject_memory_candidate'],
+  );
+  const candidates = app.listMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'candidate-only-repo',
+    status: 'rejected',
+  });
+  assert.equal(candidates.length, 1);
+});
+
+test('REMOTE_METHODS exposes resume, suggestion, and reconciliation wrappers', () => {
+  assert.ok(REMOTE_METHODS.includes('syncResumeContext'));
+  assert.ok(REMOTE_METHODS.includes('suggestMemoryPromotions'));
+  assert.ok(REMOTE_METHODS.includes('reconcileMemory'));
+});
+
 test('CLI supports the v0 workflow with synthetic data', async () => {
   const dataDir = await makeTempDir();
   const env = { ...process.env, CONTEXTFORGE_DATA_DIR: dataDir };
@@ -4109,10 +4583,13 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'promote_memory_candidate',
       'prune_raw_events',
       'rebuild_embeddings',
+      'reconcile_memory',
       'reject_memory_candidate',
       'remember',
       'search',
       'session_status',
+      'suggest_memory_promotions',
+      'sync_resume_context',
     ]);
     const rememberTool = toolList.tools.find((tool) => tool.name === 'remember');
     assert.ok(rememberTool.inputSchema.properties.repoPath);
@@ -4128,6 +4605,14 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     const bootstrapTool = toolList.tools.find((tool) => tool.name === 'bootstrap_context');
     assert.ok(bootstrapTool.inputSchema.properties.sessionId);
     assert.ok(bootstrapTool.inputSchema.properties.rawTailLimit);
+    const syncResumeTool = toolList.tools.find((tool) => tool.name === 'sync_resume_context');
+    assert.ok(syncResumeTool.inputSchema.properties.sessionId);
+    const suggestTool = toolList.tools.find((tool) => tool.name === 'suggest_memory_promotions');
+    assert.ok(suggestTool.inputSchema.properties.allowScopeFallback);
+    assert.ok(suggestTool.inputSchema.properties.trigger);
+    const reconcileTool = toolList.tools.find((tool) => tool.name === 'reconcile_memory');
+    assert.ok(reconcileTool.inputSchema.properties.correction);
+    assert.ok(reconcileTool.inputSchema.properties.mode);
     const appendRawTool = toolList.tools.find((tool) => tool.name === 'append_raw');
     assert.deepEqual(appendRawTool.inputSchema.properties.role.enum, ['user', 'assistant']);
 
