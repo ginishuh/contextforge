@@ -3,6 +3,7 @@ import { normalizeScopeOptions } from '../scopes/index.js';
 const REMOTE_METHODS = [
   'dbInfo',
   'bootstrapContext',
+  'syncResumeContext',
   'checkCodexExec',
   'beginSession',
   'sessionStatus',
@@ -14,6 +15,8 @@ const REMOTE_METHODS = [
   'deactivateMemory',
   'listMemoryEvents',
   'listMemoryCandidates',
+  'suggestMemoryPromotions',
+  'reconcileMemory',
   'getMemory',
   'search',
   'rebuildEmbeddings',

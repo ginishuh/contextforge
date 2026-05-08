@@ -441,6 +441,260 @@ function candidatePromotionWarnings(store, scope, { key, content, candidate }) {
   return warnings;
 }
 
+const CLOSEOUT_TRIGGERS = new Set([
+  'agent_merged_pr',
+  'user_merged_then_synced',
+  'user_declared_work_done',
+  'manual_closeout',
+]);
+
+const AUTO_SKIP_WARNING_CODES = new Set([
+  'duplicate_key',
+  'existing_key_conflict',
+  'duplicate_content',
+  'high_sensitivity',
+  'recommendation_not_promote',
+  'low_confidence',
+  'low_stability',
+  'temporary_candidate',
+]);
+
+const DURABLE_PROPOSAL_CATEGORIES = new Set([
+  'decision',
+  'runbook',
+  'api-contract',
+  'failure-mode',
+  'preference',
+  'environment',
+]);
+
+function compactMemoryCandidate(candidate) {
+  return {
+    candidateId: candidate.candidateId || candidate.id,
+    key: candidate.key || candidate.candidate?.key || null,
+    category: candidate.category || candidate.candidate?.category || null,
+    content: truncateText(candidate.content || candidate.candidate?.content, 240),
+    status: candidate.status || null,
+    checkpointId: candidate.checkpointId || null,
+    trust: 'review_material',
+    useHint: 'Useful context and review material, not durable truth or a promotion proposal.',
+  };
+}
+
+function resumeCheckpoint(result) {
+  return {
+    ...result,
+    trust: 'credible_recent_handoff',
+    useHint:
+      'Use actively for continuity, planning, prior intent, recent decisions, and unfinished work. Verify only mutable live state such as git, GitHub, CI, runtime, and migrations before acting.',
+    whyUse:
+      'Credible recent handoff state for continuity and planning; verify mutable live state before acting.',
+  };
+}
+
+function checkpointHandoffResult(checkpoint, group = 'session') {
+  return resumeCheckpoint({
+    group,
+    type: 'checkpoint',
+    key: checkpoint.id,
+    category: 'checkpoint',
+    content: truncateText(checkpoint.summaryText || checkpoint.summaryShort),
+    verificationRequired: true,
+    why: [],
+    source: {
+      scopeType: checkpoint.scopeType,
+      scopeKey: checkpoint.scopeKey,
+      role: group,
+    },
+    retrieval: {
+      method: 'latest_checkpoint',
+      ftsRank: null,
+      vectorDistance: null,
+      vectorModel: null,
+      vectorDimensions: null,
+    },
+    sessionId: checkpoint.sessionId,
+    createdAt: checkpoint.createdAt,
+  });
+}
+
+function checkpointBasisResult(checkpoint) {
+  return {
+    type: 'checkpoint',
+    key: checkpoint.id,
+    category: 'checkpoint',
+    content: truncateText(checkpoint.summaryText || checkpoint.summaryShort, 500),
+    trust: 'credible_recent_handoff',
+    whyUse: 'Checkpoint basis explains why prior agents may have believed this; do not edit checkpoints directly.',
+    verificationRequired: true,
+    source: {
+      scopeType: checkpoint.scopeType,
+      scopeKey: checkpoint.scopeKey,
+      role: 'latest_checkpoint',
+    },
+    retrieval: {
+      method: 'latest_checkpoint',
+      ftsRank: null,
+      vectorDistance: null,
+      vectorModel: null,
+      vectorDimensions: null,
+    },
+    checkpointId: checkpoint.id,
+    sessionId: checkpoint.sessionId,
+  };
+}
+
+function indexedCandidateBasisResult(indexedCandidate) {
+  return {
+    type: 'memory_candidate',
+    key: indexedCandidate.candidate?.key || null,
+    category: indexedCandidate.candidate?.category || null,
+    content: truncateText(indexedCandidate.candidate?.content, 500),
+    trust: 'review_material',
+    whyUse: 'Unreviewed promotion material; useful context and review material, not durable truth.',
+    verificationRequired: true,
+    source: {
+      scopeType: indexedCandidate.scopeType,
+      scopeKey: indexedCandidate.scopeKey,
+      role: 'latest_checkpoint',
+    },
+    retrieval: {
+      method: 'latest_checkpoint_candidates',
+      ftsRank: null,
+      vectorDistance: null,
+      vectorModel: null,
+      vectorDimensions: null,
+    },
+    candidateId: indexedCandidate.id,
+    checkpointId: indexedCandidate.checkpointId,
+    status: indexedCandidate.status,
+  };
+}
+
+function promotionCandidateWarnings(store, scope, indexedCandidate) {
+  const candidate = indexedCandidate.candidate || {};
+  return candidatePromotionWarnings(store, scope, {
+    key: candidate.key,
+    content: candidate.content,
+    candidate,
+  });
+}
+
+function candidateWarningReason(warnings) {
+  if (!warnings.length) return null;
+  return warnings.map((warning) => warning.code).join(', ');
+}
+
+function scorePromotionCandidate(indexedCandidate, warnings, trigger) {
+  if (warnings.some((warning) => AUTO_SKIP_WARNING_CODES.has(warning.code))) {
+    return 0;
+  }
+  const candidate = indexedCandidate.candidate || {};
+  let score = 1;
+  if (candidate.promotionRecommendation === 'promote') score += 4;
+  if (Number(candidate.confidence) >= 0.7) score += 2;
+  if (Number(candidate.stability) >= 0.7) score += 2;
+  if (DURABLE_PROPOSAL_CATEGORIES.has(candidate.category)) score += 1;
+  if (/\b(pr|issue|ci|api|migration|deploy|rollback|command|test|runtime)\b/i.test(candidate.reason || candidate.content || '')) {
+    score += 1;
+  }
+  if (trigger === 'manual_closeout') score += 0.25;
+  return score;
+}
+
+function promotionProposal(indexedCandidate, warnings, rank) {
+  const candidate = indexedCandidate.candidate || {};
+  return {
+    rank,
+    candidateId: indexedCandidate.id,
+    scope: indexedCandidate.scopeType,
+    scopeKey: indexedCandidate.scopeKey,
+    key: candidate.key,
+    category: candidate.category,
+    content: candidate.content,
+    evidence: {
+      reason: candidate.reason || null,
+      sourceEventIds: candidate.sourceEventIds || [],
+      checkpointId: indexedCandidate.checkpointId,
+      sessionId: indexedCandidate.sessionId,
+    },
+    whyDurable: candidate.reason || 'Candidate appears stable and useful beyond the current checkpoint.',
+    warnings,
+    recommendedAction: 'ask_user',
+  };
+}
+
+function summarizeBasisResult(result) {
+  if (result.key != null && result.content != null && !result.memory && !result.checkpoint && !result.candidate) {
+    return {
+      type: result.type,
+      key: result.key,
+      category: result.category || null,
+      content: truncateText(result.content, 500),
+      trust: result.trust || bootstrapTrustForType(result.type),
+      whyUse: result.whyUse || bootstrapUseHint(result),
+      verificationRequired: Boolean(result.verificationRequired),
+      source: result.source || null,
+      retrieval: result.retrieval || null,
+      memoryId: result.memoryId || null,
+      checkpointId: result.checkpointId || (result.type === 'checkpoint' ? result.key : null),
+      candidateId: result.candidateId || null,
+      sessionId: result.sessionId || null,
+      status: result.status || null,
+    };
+  }
+  const base = {
+    type: result.type,
+    key: null,
+    content: '',
+    trust: bootstrapTrustForType(result.type),
+    whyUse: bootstrapUseHint(result),
+    verificationRequired: result.type !== 'memory' || requiresLiveStateVerification(result),
+    source: result.source || null,
+    retrieval: result.retrieval || null,
+  };
+  if (result.memory) {
+    return {
+      ...base,
+      key: result.memory.key,
+      category: result.memory.category,
+      content: truncateText(result.memory.content, 500),
+      memoryId: result.memory.id,
+    };
+  }
+  if (result.checkpoint) {
+    return {
+      ...base,
+      key: result.checkpoint.id,
+      category: 'checkpoint',
+      content: truncateText(result.checkpoint.summaryText || result.checkpoint.summaryShort, 500),
+      checkpointId: result.checkpoint.id,
+      sessionId: result.checkpoint.sessionId,
+      trust: 'credible_recent_handoff',
+      whyUse:
+        'Checkpoint basis explains why prior agents may have believed this; do not edit checkpoints directly.',
+    };
+  }
+  if (result.candidate) {
+    return {
+      ...base,
+      key: result.candidate.candidate.key,
+      category: result.candidate.candidate.category,
+      content: truncateText(result.candidate.candidate.content, 500),
+      candidateId: result.candidate.id,
+      checkpointId: result.candidate.checkpointId,
+      status: result.candidate.status,
+    };
+  }
+  return base;
+}
+
+function isLiveStateCorrection(text) {
+  return /\b(branch\w*|prs?|pull requests?|issues?|ci|checks?|runtimes?|deploy\w*|deployments?|migrations?|migrate\w*|servers?|services?|queues?|status|drafts?|merge\w*|merged|commits?|tags?|releases?|rollbacks?)\b/i.test(
+    String(text || ''),
+  );
+}
+
 function checkpointTimestamp(checkpoint) {
   return checkpoint?.createdAt ? Date.parse(checkpoint.createdAt) : null;
 }
@@ -816,6 +1070,91 @@ export function createContextForge(options = {}) {
       });
     },
 
+    async syncResumeContext(options = {}) {
+      requireOption(options.query, 'query');
+      const bootstrap = await this.bootstrapContext({
+        ...options,
+        limit: options.limit == null ? 8 : options.limit,
+      });
+      const durableMemories = [];
+      const recentCheckpoints = [];
+      const memoryCandidateResults = [];
+
+      for (const result of bootstrap.results || []) {
+        if (result.type === 'memory') {
+          durableMemories.push(result);
+        } else if (result.type === 'checkpoint') {
+          recentCheckpoints.push(resumeCheckpoint(result));
+        } else if (result.type === 'memory_candidate') {
+          memoryCandidateResults.push(result);
+        }
+      }
+      if (bootstrap.sessionId && recentCheckpoints.length === 0) {
+        const latestCheckpoint = useStore((store) =>
+          store.getLatestCheckpoint({ ...bootstrap.scope, sessionId: bootstrap.sessionId }),
+        );
+        if (latestCheckpoint) {
+          recentCheckpoints.push(checkpointHandoffResult(latestCheckpoint));
+        }
+      }
+      if (bootstrap.sessionId && memoryCandidateResults.length === 0) {
+        const latestCandidates = useStore((store) => {
+          const latestCheckpoint = store.getLatestCheckpoint({ ...bootstrap.scope, sessionId: bootstrap.sessionId });
+          return latestCheckpoint
+            ? store.listMemoryCandidates({
+                ...bootstrap.scope,
+                checkpointId: latestCheckpoint.id,
+                status: 'pending',
+                sort: 'recommendation',
+                limit: 3,
+              })
+            : [];
+        });
+        memoryCandidateResults.push(...latestCandidates);
+      }
+
+      return {
+        kind: 'resume_context',
+        scope: bootstrap.scope,
+        storage: bootstrap.storage,
+        query: bootstrap.query,
+        includeShared: bootstrap.includeShared,
+        ...(bootstrap.sessionId ? { sessionId: bootstrap.sessionId } : {}),
+        handoff: {
+          workingSummary: bootstrap.workingSummary || null,
+          rawTail: bootstrap.rawTail || [],
+          durableMemories,
+          recentCheckpoints,
+          memoryCandidates: {
+            count: memoryCandidateResults.length,
+            items: memoryCandidateResults.slice(0, 3).map(compactMemoryCandidate),
+            trust: 'review_material',
+            useHint: 'Review material only; do not turn these into promotion proposals during resume sync.',
+          },
+        },
+        trustPolicy: {
+          durableMemory: 'canonical long-term guidance when reviewed and active',
+          checkpoint:
+            'credible recent handoff state; use actively for continuity, planning, prior intent, recent decisions, and unfinished work',
+          memoryCandidate: 'review material only, not durable truth and not a resume-time promotion proposal',
+          liveState: 'final authority for mutable branch, PR, issue, CI, runtime, deployment, and migration state',
+        },
+        suggestedLiveChecks: [
+          'git status --short --branch',
+          'git remote -v',
+          'git rev-list --left-right --count HEAD...@{u}',
+          'gh pr view/list or gh issue view/list when ids are known',
+          'run project-specific CI/runtime/migration checks when relevant',
+        ],
+        nextActions: [
+          'Summarize the last known task state and safe next action.',
+          'Use checkpoint handoff actively for continuity, planning, prior intent, recent decisions, and unfinished work.',
+          'Verify only mutable live state such as git, GitHub, CI, runtime, and migrations before acting.',
+          'Do not propose memory promotions during resume sync.',
+        ],
+      };
+    },
+
     checkCodexExec(options = {}) {
       return checkCodexExecProvider({
         ...codexExec,
@@ -981,6 +1320,290 @@ export function createContextForge(options = {}) {
           limit: options.limit == null ? null : Number(options.limit),
         }),
       );
+    },
+
+    suggestMemoryPromotions(options = {}) {
+      const scope = normalizeScopeOptions(options, config);
+      const trigger = options.trigger;
+      if (!CLOSEOUT_TRIGGERS.has(trigger)) {
+        throw new Error('trigger must be a closeout trigger.');
+      }
+      const allowScopeFallback = truthyOption(options.allowScopeFallback);
+      if (allowScopeFallback && trigger !== 'manual_closeout') {
+        throw new Error('allowScopeFallback is only allowed with trigger=manual_closeout.');
+      }
+      const limit = Math.min(3, positiveNumber(options.limit == null ? 3 : Number(options.limit), 'limit'));
+      const scanLimit = positiveNumber(options.scanLimit == null ? 10 : Number(options.scanLimit), 'scanLimit');
+      const promotionRecommendation = options.promotionRecommendation || 'promote';
+
+      return useStore((store) => {
+        let checkpointId = options.checkpointId || null;
+        let sourceMode = null;
+        if (checkpointId) {
+          sourceMode = 'checkpoint';
+        } else if (options.sessionId) {
+          const latestCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId });
+          checkpointId = latestCheckpoint?.id || null;
+          sourceMode = 'latest_checkpoint';
+        } else if (allowScopeFallback) {
+          sourceMode = 'scope_fallback';
+        } else {
+          return {
+            kind: 'memory_promotion_suggestions',
+            trigger,
+            source: {
+              sessionId: null,
+              checkpointId: null,
+              mode: 'none',
+              allowScopeFallback: false,
+            },
+            proposals: [],
+            skipped: [],
+            nextActions: [
+              'Provide sessionId or checkpointId to review current closeout candidates.',
+              'Use allowScopeFallback=true only with trigger=manual_closeout when intentionally reviewing the scope backlog.',
+              'Do not promote automatically.',
+            ],
+          };
+        }
+
+        if (options.sessionId && !checkpointId) {
+          return {
+            kind: 'memory_promotion_suggestions',
+            trigger,
+            source: {
+              sessionId: options.sessionId,
+              checkpointId: null,
+              mode: sourceMode,
+              allowScopeFallback,
+            },
+            proposals: [],
+            skipped: [],
+            nextActions: [
+              'No latest checkpoint was found for this session; distill a checkpoint before reviewing promotions.',
+              'Do not promote automatically.',
+            ],
+          };
+        }
+
+        const candidates = store.listMemoryCandidates({
+          ...scope,
+          sessionId: sourceMode === 'scope_fallback' ? null : options.sessionId || null,
+          checkpointId: sourceMode === 'scope_fallback' ? null : checkpointId,
+          status: 'pending',
+          promotionRecommendation,
+          sort: 'recommendation',
+          limit: scanLimit,
+        });
+        const assessed = candidates.map((candidate) => {
+          const warnings = promotionCandidateWarnings(store, scope, candidate);
+          const score = scorePromotionCandidate(candidate, warnings, trigger);
+          return { candidate, warnings, score };
+        });
+        const selected = assessed
+          .filter((item) => item.score > 0)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, limit);
+
+        return {
+          kind: 'memory_promotion_suggestions',
+          trigger,
+          source: {
+            sessionId: options.sessionId || null,
+            checkpointId: checkpointId || null,
+            mode: sourceMode,
+            allowScopeFallback,
+          },
+          proposals: selected.map((item, index) => promotionProposal(item.candidate, item.warnings, index + 1)),
+          skipped: assessed
+            .filter((item) => item.score <= 0)
+            .map((item) => ({
+              candidateId: item.candidate.id,
+              reason: candidateWarningReason(item.warnings) || 'low_score',
+            })),
+          nextActions: [
+            'Ask the user to choose: promote, edit then promote, skip, or reject.',
+            'Do not promote automatically.',
+          ],
+        };
+      });
+    },
+
+    async reconcileMemory(options = {}) {
+      const scope = normalizeScopeOptions(options, config);
+      requireOption(options.query, 'query');
+      requireOption(options.correction, 'correction');
+      const mode = options.mode || 'propose';
+      if (!['propose', 'apply_safe'].includes(mode)) {
+        throw new Error('mode must be propose or apply_safe.');
+      }
+      const limit = positiveNumber(options.limit == null ? 8 : Number(options.limit), 'limit');
+      const candidateLimit = positiveNumber(
+        options.candidateLimit == null ? 5 : Number(options.candidateLimit),
+        'candidateLimit',
+      );
+      const includeShared = truthyOption(options.includeShared);
+      const reconciliationQuery = `${options.query}\n${options.correction}`;
+      const bootstrap = await this.bootstrapContext({
+        ...options,
+        query: reconciliationQuery,
+        includeShared,
+        limit,
+      });
+      const liveState = isLiveStateCorrection(`${options.query}\n${options.correction}`);
+      return useStore((store) => {
+        const basis = (bootstrap.results || []).slice(0, limit).map(summarizeBasisResult);
+        if (options.sessionId && !basis.some((item) => item.type === 'checkpoint')) {
+          const latestCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId });
+          if (latestCheckpoint) {
+            basis.push(checkpointBasisResult(latestCheckpoint));
+          }
+        }
+        if (options.sessionId && !basis.some((item) => item.type === 'memory_candidate')) {
+          const latestCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId });
+          if (latestCheckpoint) {
+            const latestCandidates = store.listMemoryCandidates({
+              ...scope,
+              checkpointId: latestCheckpoint.id,
+              status: 'pending',
+              sort: 'recommendation',
+              limit: candidateLimit,
+            });
+            basis.push(...latestCandidates.map(indexedCandidateBasisResult));
+          }
+        }
+        const durableBasis = basis.filter((item) => item.type === 'memory');
+        const checkpointBasis = basis.filter((item) => item.type === 'checkpoint');
+        const candidateBasis = basis.filter((item) => item.type === 'memory_candidate').slice(0, candidateLimit);
+        const conflicts = basis.map((item) => ({
+          type: item.type,
+          key: item.key,
+          conflict: 'possible_conflict',
+          reason:
+            item.type === 'checkpoint'
+              ? 'Checkpoint may explain prior belief, but it should not be edited directly.'
+              : 'User correction may conflict with this stored context; review before applying.',
+        }));
+        const proposedActions = [
+          ...durableBasis.map((item) => ({
+            action: liveState ? 'verify_live_state_before_memory_change' : 'correct_memory',
+            key: item.key,
+            content: options.correction,
+            reason: 'User correction conflicts with existing durable memory.',
+          })),
+          ...candidateBasis.map((item) => ({
+            action: 'reject_memory_candidate',
+            candidateId: item.candidateId,
+            reason: 'User correction indicates this candidate should not become durable truth.',
+          })),
+          ...checkpointBasis.map((item) => ({
+            action: 'propose_corrective_memory_note',
+            checkpointId: item.checkpointId,
+            content: options.correction,
+            reason: 'Checkpoints are immutable handoff evidence; add corrective durable context instead.',
+          })),
+        ];
+        const appliedActions = [];
+        const warnings = [];
+
+        if (liveState) {
+          warnings.push({
+            code: 'live_state_verification_required',
+            message: 'Correction appears to involve mutable live state; verify git/GitHub/CI/runtime/migrations first.',
+          });
+        }
+
+        if (mode === 'apply_safe') {
+          if (liveState) {
+            warnings.push({
+              code: 'apply_safe_skipped_live_state',
+              message: 'No memory changes were applied because live state verification is required.',
+            });
+          } else if (durableBasis.length === 1) {
+            const durable = durableBasis[0];
+            const previous = store.getMemory({ ...scope, key: durable.key });
+            const corrected = store.rememberMemory({
+              ...scope,
+              key: durable.key,
+              content: options.correction,
+              category: durable.category || 'note',
+              tags: [],
+              importance: undefined,
+              supersedesMemoryId: previous?.id || durable.memoryId || undefined,
+              eventType: 'correct',
+              eventMetadata: {
+                key: durable.key,
+                previousMemoryId: previous?.id || durable.memoryId || null,
+                previousContent: previous?.content || durable.content,
+                reason: 'Applied via reconcile_memory apply_safe.',
+              },
+            });
+            appliedActions.push({
+              action: 'correct_memory',
+              key: corrected.key,
+              memoryId: corrected.id,
+            });
+          } else if (durableBasis.length > 1) {
+            warnings.push({
+              code: 'ambiguous_durable_memory',
+              message: 'Multiple durable memories matched; no automatic correction was applied.',
+            });
+          }
+
+          if (!liveState) {
+            for (const item of candidateBasis) {
+              const candidate = store.getMemoryCandidate({
+                ...scope,
+                candidateId: item.candidateId,
+              });
+              if (candidate?.status === 'pending') {
+                const rejected = store.markMemoryCandidateReviewed({
+                  ...scope,
+                  candidateId: item.candidateId,
+                  status: 'rejected',
+                  reason: 'Rejected via reconcile_memory apply_safe after user correction.',
+                  metadata: {
+                    correction: options.correction,
+                    query: options.query,
+                  },
+                });
+                appliedActions.push({
+                  action: 'reject_memory_candidate',
+                  candidateId: rejected.id,
+                });
+              }
+            }
+          }
+        }
+
+        return {
+          kind: 'memory_reconciliation',
+          mode,
+          scope: bootstrap.scope,
+          storage: bootstrap.storage,
+          query: options.query,
+          correction: options.correction,
+          basis,
+          conflicts,
+          proposedActions,
+          appliedActions,
+          warnings,
+          trustPolicy: {
+            userCorrection: 'strong evidence, but not automatically treated as universal truth',
+            durableMemory: 'canonical until corrected or deactivated',
+            checkpoint: 'basis and immutable handoff evidence; do not edit directly',
+            memoryCandidate: 'review material that can be rejected when contradicted',
+            liveState: 'verify mutable git/GitHub/CI/runtime/migration claims before changing memory',
+          },
+          nextActions:
+            mode === 'apply_safe'
+              ? ['Review appliedActions and warnings.', 'Verify mutable live state before making further memory changes.']
+              : [
+                  'Ask the user whether to apply a correction, deactivate stale durable memory, reject candidates, or add a corrective note.',
+                  'Verify mutable live state before changing memory for git/GitHub/CI/runtime/migration claims.',
+                ],
+        };
+      });
     },
 
     promoteMemoryCandidate(options) {
