@@ -1236,6 +1236,8 @@ export function createContextForge(options = {}) {
         provider: config.embeddings.provider,
         skipped: true,
         reason: 'embeddings_disabled',
+        model: null,
+        dimensions: null,
         queued: 0,
         bySourceType: {},
       };
@@ -1295,6 +1297,10 @@ export function createContextForge(options = {}) {
     };
     const active = [];
     for (const job of jobs) {
+      const claimedJob = store.markEmbeddingJobProcessing(job.id);
+      if (!claimedJob) {
+        continue;
+      }
       const source = embeddingSourceForJob(store, job);
       if (!source || source.contentHash !== job.contentHash) {
         store.markEmbeddingJobFailed(
@@ -1305,7 +1311,7 @@ export function createContextForge(options = {}) {
         result.missingSources += source ? 0 : 1;
         continue;
       }
-      active.push({ job: store.markEmbeddingJobProcessing(job.id), source });
+      active.push({ job: claimedJob, source });
     }
     if (active.length === 0) {
       return result;
@@ -2653,6 +2659,8 @@ export function createContextForge(options = {}) {
       }
       const batchSize = positiveNumber(options.batchSize == null ? 32 : Number(options.batchSize), 'batchSize');
       const limit = positiveNumber(options.limit == null ? 50 : Number(options.limit), 'limit');
+      const staleAfterMs =
+        options.staleAfterMs == null ? 10 * 60 * 1000 : positiveNumber(Number(options.staleAfterMs), 'staleAfterMs');
       return useStore(async (store) => {
         store.ensureEmbeddingIndex(embeddingProvider.dimensions, { resetOnDimensionChange: truthyOption(options.force) });
         const shouldNarrowScope = Boolean(options.scope || options.scopeKey || options.cwd || options.repoPath);
@@ -2661,6 +2669,11 @@ export function createContextForge(options = {}) {
           scopeKey: shouldNarrowScope ? scope.scopeKey : null,
           limit,
         };
+        const staleReset = store.resetStaleEmbeddingJobs({
+          scopeType: listOptions.scopeType,
+          scopeKey: listOptions.scopeKey,
+          staleBeforeIso: new Date(Date.now() - staleAfterMs).toISOString(),
+        });
         const pending = store.listEmbeddingJobs({ ...listOptions, status: 'pending' });
         const failed = truthyOption(options.retryFailed)
           ? store.listEmbeddingJobs({ ...listOptions, status: 'failed', limit: Math.max(0, limit - pending.length) })
@@ -2678,10 +2691,7 @@ export function createContextForge(options = {}) {
           missingSources: 0,
           bySourceType: {},
           errors: [],
-          jobs: store.countEmbeddingJobs({
-            scopeType: listOptions.scopeType,
-            scopeKey: listOptions.scopeKey,
-          }),
+          staleReset,
         };
         for (let index = 0; index < jobs.length; index += batchSize) {
           const batch = jobs.slice(index, index + batchSize);

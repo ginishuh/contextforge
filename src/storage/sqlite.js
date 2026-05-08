@@ -1105,6 +1105,10 @@ export class ContextForgeStore {
           WHEN embedding_jobs.status = 'failed' THEN 'pending'
           ELSE embedding_jobs.status
         END,
+        attempts = CASE
+          WHEN ? OR embedding_jobs.content_hash != excluded.content_hash THEN 0
+          ELSE embedding_jobs.attempts
+        END,
         last_error = CASE
           WHEN ? OR embedding_jobs.content_hash != excluded.content_hash OR embedding_jobs.status = 'failed' THEN NULL
           ELSE embedding_jobs.last_error
@@ -1128,6 +1132,7 @@ export class ContextForgeStore {
         source.contentHash,
         timestamp,
         timestamp,
+        force ? 1 : 0,
         force ? 1 : 0,
         force ? 1 : 0,
         force ? 1 : 0,
@@ -1219,10 +1224,37 @@ export class ContextForgeStore {
             attempts = attempts + 1,
             updated_at = ?
         WHERE id = ?
+          AND status IN ('pending', 'failed')
         RETURNING *
       `)
       .get(timestamp, jobId);
     return hydrateEmbeddingJob(row);
+  }
+
+  resetStaleEmbeddingJobs({ scopeType = null, scopeKey = null, staleBeforeIso }) {
+    if (!staleBeforeIso) throw new Error('staleBeforeIso is required.');
+    const conditions = ["status = 'processing'", 'updated_at < ?'];
+    const values = [staleBeforeIso];
+    if (scopeType) {
+      conditions.push('scope_type = ?');
+      values.push(scopeType);
+    }
+    if (scopeKey) {
+      conditions.push('scope_key = ?');
+      values.push(scopeKey);
+    }
+    const result = this.db
+      .prepare(`
+        UPDATE embedding_jobs
+        SET status = 'pending',
+            updated_at = ?
+        WHERE ${conditions.join(' AND ')}
+      `)
+      .run(nowIso(), ...values);
+    return {
+      reset: result.changes,
+      staleBeforeIso,
+    };
   }
 
   markEmbeddingJobCompleted(jobId) {

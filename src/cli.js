@@ -157,6 +157,7 @@ function toCoreOptions(options) {
     batchSize: options.batchSize == null ? undefined : Number(options.batchSize),
     force: options.force === true || options.force === 'true',
     retryFailed: options.retryFailed === true || options.retryFailed === 'true',
+    staleAfterMs: options.staleAfterMs == null ? undefined : Number(options.staleAfterMs),
   };
 }
 

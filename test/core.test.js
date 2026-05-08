@@ -237,6 +237,43 @@ test('ContextForgeStore.withTransaction returns results and rolls back on throw'
   }
 });
 
+test('embedding jobs claim atomically and stale processing jobs reset', async () => {
+  const dataDir = await makeTempDir();
+  const store = new ContextForgeStore({ dataDir });
+  try {
+    const [job] = store.enqueueEmbeddingJobs(
+      [
+        {
+          sourceType: 'memory',
+          scopeType: 'repo',
+          scopeKey: 'embedding-job-repo',
+          recordId: 'memory-1',
+          contentHash: 'hash-1',
+        },
+      ],
+      { model: 'test-embedding', dimensions: 3 },
+    );
+
+    const claimed = store.markEmbeddingJobProcessing(job.id);
+    assert.equal(claimed.status, 'processing');
+    assert.equal(claimed.attempts, 1);
+    assert.equal(store.markEmbeddingJobProcessing(job.id), null);
+
+    store.db.prepare("UPDATE embedding_jobs SET updated_at = '2000-01-01T00:00:00.000Z' WHERE id = ?").run(job.id);
+    const reset = store.resetStaleEmbeddingJobs({
+      scopeType: 'repo',
+      scopeKey: 'embedding-job-repo',
+      staleBeforeIso: '2000-01-01T00:00:01.000Z',
+    });
+    assert.equal(reset.reset, 1);
+    const reclaimed = store.markEmbeddingJobProcessing(job.id);
+    assert.equal(reclaimed.status, 'processing');
+    assert.equal(reclaimed.attempts, 2);
+  } finally {
+    store.close();
+  }
+});
+
 test('session working context is mutable scoped session state', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
@@ -2599,7 +2636,7 @@ test('embedding jobs can fail and be retried independently after distill succeed
     model: 'test-embedding',
     dimensions: 3,
     async embed(texts) {
-      return texts.map((_, index) => (index === 0 ? [1, 0, 0] : [0, 1]));
+      return texts.map((text) => (String(text).includes('bad-candidate-vector') ? [0, 1] : [1, 0, 0]));
     },
   };
   const app = createContextForge({

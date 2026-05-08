@@ -215,6 +215,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
         batchSize: z.number().int().positive().optional(),
         limit: z.number().int().positive().optional(),
         retryFailed: z.boolean().optional(),
+        staleAfterMs: z.number().int().positive().optional(),
         force: z.boolean().optional(),
       },
       annotations: {
