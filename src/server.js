@@ -95,6 +95,7 @@ function serverStorageEnv(env) {
   return {
     ...env,
     CONTEXTFORGE_STORAGE_MODE: storageMode === 'remote' || !storageMode ? 'project-local' : storageMode,
+    CONTEXTFORGE_RUNTIME_ROLE: 'http-server',
   };
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "contextforge",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "Self-hosted memory and distillation runtime for coding agents.",
   "type": "module",
   "bin": {
@@ -12,6 +12,7 @@
     "src",
     "scripts",
     "examples",
+    "docs",
     "README.md",
     "LICENSE"
   ],

@@ -227,6 +227,9 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
         30000,
       ),
     },
+    runtime: {
+      role: env.CONTEXTFORGE_RUNTIME_ROLE || 'local-process',
+    },
     autoPromote: {
       enabled: parseBoolean(env.CONTEXTFORGE_AUTO_PROMOTE_ENABLED),
     },

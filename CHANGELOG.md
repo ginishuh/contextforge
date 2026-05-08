@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+## 0.3.6 - 2026-05-08
+
+- Added explicit ContextForge connection metadata to `dbInfo`, distinguishing
+  direct local processes, HTTP server processes, and remote-client wrappers.
+- Updated remote-client `bootstrapContext` results so the client perspective
+  reports remote canonical storage while preserving the server-owned
+  `serverMode` separately.
+- Clarified agent guidance so remote servers reporting a local SQLite store are
+  not mistaken for downstream local-only usage.
+
+## 0.3.5 - 2026-05-08
+
+- Added a portable `contextforge-memory` skill source package with installation
+  notes for agent runtimes.
+- Added `AGENTS.md` authoring guidance and runtime-mode documentation for
+  clone-safe repo instructions and downstream ContextForge consumer repos.
+- Trimmed repo `AGENTS.md` guidance so full ContextForge MCP workflow lives in
+  the installed `contextforge-memory` skill.
+
+## 0.3.4 - 2026-05-08
+
+- Moved detailed ContextForge agent workflow guidance into the
+  `contextforge-memory` skill source package and kept repo `AGENTS.md` focused
+  on local operating rules.
+
+## 0.3.3 - 2026-05-08
+
+- Clarified MCP memory-candidate tool descriptions around session status,
+  checkpoint distillation, candidate listing, and promotion.
+
+## 0.3.2 - 2026-05-08
+
+- Added closeout-source warnings for memory-candidate suggestion and automatic
+  promotion calls without a current `sessionId` or `checkpointId`.
+
+## 0.3.1 - 2026-05-08
+
 - Expanded agent guidance for repo-scoped semantic continuation retrieval,
   vector result verification boundaries, durable promotion criteria, and
   memory-candidate review queue handling.
@@ -9,8 +46,6 @@
   `bootstrap_context` tool so agents can resolve startup memory context,
   storage/vector readiness, trust hints, and live-state verification reminders
   in one call.
-
-## 0.3.1 - 2026-05-08
 
 - Fixed the `codex_exec` structured output schema so root fields and
   `sessionWorkingContext` fields satisfy Codex response-schema strictness,

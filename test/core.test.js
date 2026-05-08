@@ -197,6 +197,8 @@ test('dbInfo initializes a fresh SQLite store', async () => {
   assert.equal(info.embeddings.staleAfterMs, 10 * 60 * 1000);
   assert.equal(info.embeddings.degraded, true);
   assert.deepEqual(info.embeddings.jobs, { pending: 0, processing: 0, completed: 0, failed: 0 });
+  assert.equal(info.connection.mode, 'direct-local');
+  assert.equal(info.connection.storageMode, 'project-local');
   assert.match(info.dbPath, /contextforge\.db$/);
 });
 
@@ -5944,6 +5946,10 @@ test('remote storage mode delegates core calls and preserves scope semantics', a
       includeShared: true,
     });
     assert.equal(bootstrap.scope.scopeKey, 'repo-remote');
+    assert.equal(bootstrap.connection.mode, 'remote-client');
+    assert.equal(bootstrap.storage.mode, 'remote');
+    assert.equal(bootstrap.storage.authority, 'canonical');
+    assert.equal(bootstrap.storage.serverMode, 'project-local');
     assert.ok(bootstrap.results.some((item) => item.group === 'primary' && item.key === 'storage-mode'));
     assert.ok(bootstrap.results.some((item) => item.group === 'shared' && item.key === 'storage-mode'));
 
@@ -5966,6 +5972,10 @@ test('remote storage mode delegates core calls and preserves scope semantics', a
 
     const info = await app.dbInfo();
     assert.equal(info.tables.memories, 2);
+    assert.equal(info.connection.mode, 'remote-client');
+    assert.equal(info.connection.clientStorageMode, 'remote');
+    assert.equal(info.connection.server.mode, 'http-server');
+    assert.equal(info.connection.server.storageMode, 'project-local');
   } finally {
     await remote.close();
   }

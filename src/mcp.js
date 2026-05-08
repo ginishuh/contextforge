@@ -26,7 +26,7 @@ const MCP_INSTRUCTIONS = [
   'Use ContextForge for scoped memory retrieval on demand.',
   'At the start of non-trivial project work, call bootstrap_context with repoPath, cwd, or an explicit scopeKey. It summarizes storage authority, vector readiness, repo semantic retrieval results, and trust hints in one response.',
   'bootstrap_context does not create a session. In Codex or Claude Code auto-ingest environments, preserve or recover the adapter session id such as codex:<native-session-id> or claude_code:<native-session-id> before session_status, distill_checkpoint, or closeout promotion. Use begin_session only for manual ContextForge evidence streams where the agent will call append_raw itself; do not create a fresh cf_... session at closeout to review candidates from an existing Codex/Claude session.',
-  'If db_info shows remote storage, treat results as shared canonical ContextForge state for the configured scope. If it shows local or project-local storage, treat results as machine-local context unless the user confirms that store is authoritative.',
+  'Use db_info connection metadata to see whether the tool is a direct local process, an HTTP server, or a remote-client wrapper. Do not treat a remote server reporting its own local SQLite store as proof that the consuming repo is local-only.',
   'Search result types have different trust roles: memory is reviewed durable fact or decision; checkpoint is credible recent handoff state for continuity, planning, prior intent, recent decisions, and unfinished work, but mutable live-state claims must be verified with git/GitHub/CI/runtime/migrations before acting; memory_candidate is unreviewed promotion material and not durable truth.',
   'For start/resume requests such as "지난 환경 작업과 동기화", "어제 하던 거 이어서", "previous work", or "continue", call sync_resume_context. Use checkpoints actively as handoff notes, then verify mutable state with git/GitHub/CI/runtime/migrations. Do not propose memory promotions during resume sync.',
   'For closeout triggers only, call suggest_memory_promotions with the current sessionId or the checkpointId returned by distill_checkpoint: after this agent merges a PR, after the user says they merged and the agent syncs main/cleans branches, or when the user explicitly says today\'s work is done. Suggest at most 1-3 durable memory promotions and never promote automatically.',
@@ -60,7 +60,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Database Info',
       description:
-        'Inspect the configured ContextForge storage backend, table counts, raw retention, and sqlite-vec/embeddings readiness. Use this to distinguish remote canonical storage from local or project-local storage before relying on retrieval results.',
+        'Inspect ContextForge connection metadata, storage backend, table counts, raw retention, and sqlite-vec/embeddings readiness. Remote servers may report their own local SQLite store; use the connection metadata and repo AGENTS guidance to distinguish external remote-client usage from local-only storage.',
       inputSchema: {},
       annotations: {
         title: 'Database Info',

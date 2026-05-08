@@ -113,7 +113,60 @@ export function createRemoteContextForge(config, options = {}) {
   });
   const api = { config };
 
+  function remoteClientConnection(serverConnection) {
+    return {
+      mode: 'remote-client',
+      viewpoint: 'this client delegates to a remote ContextForge server',
+      remoteUrl: config.remote.url,
+      clientStorageMode: config.storageMode,
+      server: serverConnection || null,
+      note:
+        'This client is configured with CONTEXTFORGE_STORAGE_MODE=remote. The server may report its own storageMode as local because it owns the canonical SQLite store.',
+    };
+  }
+
   for (const method of REMOTE_METHODS) {
+    if (method === 'dbInfo') {
+      api[method] = async (callOptions = {}) => {
+        const serverInfo = await client.call(method, callOptions);
+        return {
+          ...serverInfo,
+          connection: remoteClientConnection(
+            serverInfo.connection || {
+              mode: serverInfo.storageMode || 'unknown',
+              storageMode: serverInfo.storageMode || null,
+            },
+          ),
+        };
+      };
+      continue;
+    }
+    if (method === 'bootstrapContext') {
+      api[method] = async (callOptions = {}) => {
+        const { cwd, repoPath, ...remoteOptions } = callOptions;
+        const scope = normalizeScopeOptions(callOptions, config);
+        const result = await client.call(method, {
+          ...remoteOptions,
+          scope: scope.scopeType,
+          scopeType: scope.scopeType,
+          scopeKey: scope.scopeKey,
+        });
+        return {
+          ...result,
+          connection: remoteClientConnection(result.connection || null),
+          storage: {
+            ...result.storage,
+            mode: 'remote',
+            authority: 'canonical',
+            serverMode: result.storage?.mode || null,
+            serverAuthority: result.storage?.authority || null,
+            note:
+              'This bootstrap call used a remote ContextForge client. serverMode describes the server-owned store, not this checkout.',
+          },
+        };
+      };
+      continue;
+    }
     api[method] = (callOptions = {}) => {
       if (UNSCOPED_REMOTE_METHODS.has(method)) {
         return client.call(method, callOptions);

@@ -33,10 +33,15 @@ Always set scope intentionally:
 - `shared`: cross-repo/user-wide conventions. Include only when it may matter.
 - `local`: machine-specific context; opt in only when appropriate.
 
-Before relying on results, check storage authority from `bootstrap_context` or `db_info`:
+Before relying on results, check connection metadata and storage authority from `bootstrap_context` or `db_info`:
 
-- `remote`: server-backed canonical memory for the configured scope.
-- `local` or `project-local`: local context unless the user says it is authoritative.
+- `connection.mode: "remote-client"`: this agent is delegating to a remote ContextForge server.
+- `connection.mode: "http-server"`: the tool is running on the ContextForge HTTP server itself; the server may own a local SQLite store.
+- `connection.mode: "direct-local"`: the tool is running as a local ContextForge process.
+- `remote` storage from a remote-client wrapper means server-backed canonical memory for the configured scope.
+- `local` or `project-local` storage from a direct local process is local context unless the user or repo `AGENTS.md` says it is authoritative.
+
+Do not decide downstream repo connection mode from server storage alone. A remote MCP endpoint can report its server-owned SQLite store as `local`; that does not mean the consuming repo is local-only.
 
 ## Startup Bootstrap
 

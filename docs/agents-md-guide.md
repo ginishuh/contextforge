@@ -112,8 +112,14 @@ This repo uses ContextForge as an external remote memory service.
 - Use the installed `contextforge-memory` skill.
 - At task start, call `bootstrap_context` with this repo's canonical scope key:
   `github.com/owner/repo`.
-- Use `db_info` or the storage block returned by `bootstrap_context` to confirm
-  the connected backend.
+- Use `db_info` or the storage block returned by `bootstrap_context` only to
+  inspect the connected ContextForge process. Remote MCP endpoints may report
+  the server's own storage as `local`; that does not mean this repo is
+  local-only.
+- Prefer `connection.mode` when present. `remote-client` means this repo is
+  delegating to a remote server; `http-server` means the tool is running on the
+  server process itself; `direct-local` means a local ContextForge process is
+  answering.
 - Do not infer runtime mode from local `.contextforge/` files in this checkout.
 ```
 

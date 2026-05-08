@@ -79,8 +79,10 @@ Use the installed `contextforge-memory` skill for session IDs, distillation,
 candidate review, closeout promotion, correction, and embedding maintenance.
 
 Do not infer runtime mode from local `.contextforge/` files in this checkout.
-Use `db_info` or the storage block returned by `bootstrap_context` to confirm
-the connected backend.
+Use `db_info` or the storage block returned by `bootstrap_context` only to
+inspect the connected ContextForge process. Prefer `connection.mode` when
+present. Remote MCP endpoints may report the server's own storage as `local`;
+that does not mean this repo is local-only.
 ```
 
 ## Local Or Project-Local Variant

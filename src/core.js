@@ -478,6 +478,7 @@ function storageBootstrapInfo(config, info) {
     sqliteVecAvailable: Boolean(info.vector?.sqliteVecAvailable),
     sqliteVecVersion: info.vector?.sqliteVecVersion || null,
     embeddingProvider: info.embeddings?.provider || 'none',
+    connection: info.connection || null,
   };
 }
 
@@ -1212,6 +1213,22 @@ export function createContextForge(options = {}) {
     return {
       ...storeInfo,
       storageMode: config.storageMode,
+      connection: {
+        mode: config.runtime.role === 'http-server' ? 'http-server' : 'direct-local',
+        processRole: config.runtime.role,
+        viewpoint: 'this ContextForge process',
+        storageMode: config.storageMode,
+        storageAuthority:
+          config.storageMode === 'remote'
+            ? 'remote-server'
+            : config.storageMode === 'local'
+              ? 'local'
+              : 'project-local',
+        note:
+          config.runtime.role === 'http-server'
+            ? 'This response is from the ContextForge HTTP server process. Its storageMode describes the server-owned store.'
+            : 'This response is from a local ContextForge process. Its storageMode describes this process.',
+      },
       embeddings: {
         provider: config.embeddings.provider,
         model: config.embeddings.model,
