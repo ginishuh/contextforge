@@ -4257,6 +4257,250 @@ test('suggestMemoryPromotions uses only latest checkpoint for a session and skip
   assert.ok(result.skipped.some((item) => item.reason.includes('high_sensitivity')));
 });
 
+test('autoPromoteMemoryCandidates requires closeout scope and defaults to dry-run', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'auto_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      auto_provider: async () => ({
+        summaryShort: 'Auto promote checkpoint.',
+        summaryText: 'Closeout produced strict automatic promotion candidates.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'auto-runbook',
+            content: 'Closeout automation can promote strict runbook candidates.',
+            category: 'runbook',
+            candidateType: 'runbook',
+            confidence: 0.95,
+            stability: 0.95,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+        ],
+      }),
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'auto-repo',
+    sessionId: 'auto-session',
+    role: 'assistant',
+    content: 'Strict auto promotion candidate.',
+  });
+  const checkpoint = await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'auto-repo',
+    sessionId: 'auto-session',
+  });
+
+  const noSource = await app.autoPromoteMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'auto-repo',
+    trigger: 'manual_closeout',
+  });
+  assert.deepEqual(noSource.wouldPromote, []);
+  assert.equal(noSource.source.mode, 'none');
+
+  const dryRun = await app.autoPromoteMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'auto-repo',
+    sessionId: 'auto-session',
+    trigger: 'user_declared_work_done',
+    limit: 5,
+  });
+  assert.equal(dryRun.dryRun, true);
+  assert.equal(dryRun.wouldPromote.length, 1);
+  assert.deepEqual(dryRun.promoted, []);
+  assert.equal(dryRun.wouldPromote[0].key, 'auto-runbook');
+  assert.ok(dryRun.requestWarnings.some((warning) => warning.code === 'limit_capped'));
+  assert.equal(app.listMemoryCandidates({ scope: 'repo', scopeKey: 'auto-repo', status: 'promoted' }).length, 0);
+
+  const checkpointOnly = await app.autoPromoteMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'auto-repo',
+    checkpointId: checkpoint.id,
+    trigger: 'manual_closeout',
+  });
+  assert.equal(checkpointOnly.source.mode, 'checkpoint');
+  assert.equal(checkpointOnly.wouldPromote.length, 1);
+
+  await assert.rejects(
+    () =>
+      app.autoPromoteMemoryCandidates({
+        scope: 'repo',
+        scopeKey: 'auto-repo',
+        sessionId: 'auto-session',
+        trigger: 'manual_closeout',
+        minConfidence: 1.5,
+      }),
+    /minConfidence/,
+  );
+
+  await assert.rejects(
+    () =>
+      app.autoPromoteMemoryCandidates({
+        scope: 'repo',
+        scopeKey: 'auto-repo',
+        sessionId: 'auto-session',
+        trigger: 'manual_closeout',
+        minStability: -1,
+      }),
+    /minStability/,
+  );
+
+  await assert.rejects(
+    () =>
+      app.autoPromoteMemoryCandidates({
+        scope: 'repo',
+        scopeKey: 'auto-repo',
+        sessionId: 'auto-session',
+        trigger: 'manual_closeout',
+        dryRun: false,
+      }),
+    /CONTEXTFORGE_AUTO_PROMOTE_ENABLED/,
+  );
+});
+
+test('autoPromoteMemoryCandidates returns stable empty arrays and preference input warnings', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'auto_empty_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      auto_empty_provider: async () => ({
+        summaryShort: 'No candidates.',
+        summaryText: 'Closeout produced no memory candidates.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [],
+      }),
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'auto-empty-repo',
+    sessionId: 'auto-empty-session',
+    role: 'assistant',
+    content: 'No candidates here.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'auto-empty-repo',
+    sessionId: 'auto-empty-session',
+  });
+
+  const result = await app.autoPromoteMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'auto-empty-repo',
+    sessionId: 'auto-empty-session',
+    trigger: 'manual_closeout',
+    allowedCategories: ['preference'],
+  });
+
+  assert.deepEqual(result.wouldPromote, []);
+  assert.deepEqual(result.promoted, []);
+  assert.deepEqual(result.policy.allowedCategories, []);
+  assert.ok(result.requestWarnings.some((warning) => warning.code === 'preference_input_stripped'));
+});
+
+test('autoPromoteMemoryCandidates promotes only strict safe candidates when enabled', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'auto_enabled_provider',
+      CONTEXTFORGE_AUTO_PROMOTE_ENABLED: 'true',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      auto_enabled_provider: async () => ({
+        summaryShort: 'Auto enabled checkpoint.',
+        summaryText: 'Closeout produced mixed automatic promotion candidates.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'safe-api-contract',
+            content: 'The API contract requires idempotent delete retries.',
+            category: 'api-contract',
+            candidateType: 'api-contract',
+            confidence: 0.96,
+            stability: 0.96,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+          {
+            key: 'user-pref',
+            content: 'The user prefers a particular closing phrase.',
+            category: 'preference',
+            candidateType: 'preference',
+            confidence: 0.99,
+            stability: 0.99,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+          {
+            key: 'low-confidence-runbook',
+            content: 'This runbook is not stable enough.',
+            category: 'runbook',
+            candidateType: 'runbook',
+            confidence: 0.7,
+            stability: 0.96,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+        ],
+      }),
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'auto-enabled-repo',
+    sessionId: 'auto-enabled-session',
+    role: 'assistant',
+    content: 'Mixed auto promotion candidates.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'auto-enabled-repo',
+    sessionId: 'auto-enabled-session',
+  });
+
+  const result = await app.autoPromoteMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'auto-enabled-repo',
+    sessionId: 'auto-enabled-session',
+    trigger: 'agent_merged_pr',
+    dryRun: false,
+  });
+
+  assert.equal(result.dryRun, false);
+  assert.deepEqual(result.wouldPromote, []);
+  assert.deepEqual(
+    result.promoted.map((item) => item.key),
+    ['safe-api-contract'],
+  );
+  assert.ok(result.promoted[0].evidence);
+  assert.equal(result.promoted[0].promotionResult.status, 'promoted');
+  assert.ok(result.skipped.some((item) => item.reason.includes('preference_auto_excluded')));
+  assert.ok(result.skipped.some((item) => item.reason.includes('auto_low_confidence')));
+  assert.equal(app.getMemory({ scope: 'repo', scopeKey: 'auto-enabled-repo', key: 'safe-api-contract' }).status, 'active');
+  assert.equal(app.getMemory({ scope: 'repo', scopeKey: 'auto-enabled-repo', key: 'user-pref' }), null);
+  assert.equal(app.listMemoryCandidates({ scope: 'repo', scopeKey: 'auto-enabled-repo', status: 'promoted' }).length, 1);
+});
+
 test('reconcileMemory proposes by default and apply_safe only changes unambiguous non-live memory', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({
@@ -4415,9 +4659,10 @@ test('reconcileMemory apply_safe rejects matching candidates when no durable mem
   assert.equal(candidates.length, 1);
 });
 
-test('REMOTE_METHODS exposes resume, suggestion, and reconciliation wrappers', () => {
+test('REMOTE_METHODS exposes resume, suggestion, auto-promotion, and reconciliation wrappers', () => {
   assert.ok(REMOTE_METHODS.includes('syncResumeContext'));
   assert.ok(REMOTE_METHODS.includes('suggestMemoryPromotions'));
+  assert.ok(REMOTE_METHODS.includes('autoPromoteMemoryCandidates'));
   assert.ok(REMOTE_METHODS.includes('reconcileMemory'));
 });
 
@@ -4568,6 +4813,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     const toolNames = toolList.tools.map((tool) => tool.name).sort();
     assert.deepEqual(toolNames, [
       'append_raw',
+      'auto_promote_memory_candidates',
       'begin_session',
       'bootstrap_context',
       'correct_memory',
@@ -4610,6 +4856,10 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     const suggestTool = toolList.tools.find((tool) => tool.name === 'suggest_memory_promotions');
     assert.ok(suggestTool.inputSchema.properties.allowScopeFallback);
     assert.ok(suggestTool.inputSchema.properties.trigger);
+    const autoPromoteTool = toolList.tools.find((tool) => tool.name === 'auto_promote_memory_candidates');
+    assert.ok(autoPromoteTool.inputSchema.properties.dryRun);
+    assert.ok(autoPromoteTool.inputSchema.properties.minConfidence);
+    assert.ok(autoPromoteTool.inputSchema.properties.allowedCategories);
     const reconcileTool = toolList.tools.find((tool) => tool.name === 'reconcile_memory');
     assert.ok(reconcileTool.inputSchema.properties.correction);
     assert.ok(reconcileTool.inputSchema.properties.mode);

@@ -459,6 +459,14 @@ const AUTO_SKIP_WARNING_CODES = new Set([
   'temporary_candidate',
 ]);
 
+const AUTO_PROMOTE_SKIP_WARNING_CODES = new Set([
+  ...AUTO_SKIP_WARNING_CODES,
+  'auto_low_confidence',
+  'auto_low_stability',
+  'auto_disallowed_category',
+  'preference_auto_excluded',
+]);
+
 const DURABLE_PROPOSAL_CATEGORIES = new Set([
   'decision',
   'runbook',
@@ -467,6 +475,8 @@ const DURABLE_PROPOSAL_CATEGORIES = new Set([
   'preference',
   'environment',
 ]);
+
+const SAFE_AUTO_PROMOTE_CATEGORIES = new Set(['runbook', 'failure-mode', 'api-contract', 'environment', 'decision']);
 
 function compactBootstrapCandidate(result) {
   return {
@@ -598,8 +608,8 @@ function candidateWarningReason(warnings) {
   return warnings.map((warning) => warning.code).join(', ');
 }
 
-function scorePromotionCandidate(indexedCandidate, warnings) {
-  if (warnings.some((warning) => AUTO_SKIP_WARNING_CODES.has(warning.code))) {
+function scorePromotionCandidate(indexedCandidate, warnings, skipWarningCodes = AUTO_SKIP_WARNING_CODES) {
+  if (warnings.some((warning) => skipWarningCodes.has(warning.code))) {
     return 0;
   }
   const candidate = indexedCandidate.candidate || {};
@@ -634,6 +644,102 @@ function promotionProposal(indexedCandidate, warnings, rank) {
     warnings,
     recommendedAction: 'ask_user',
   };
+}
+
+function normalizeAllowedCategories(value, defaultCategories = SAFE_AUTO_PROMOTE_CATEGORIES) {
+  const raw = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value
+          .split(',')
+          .map((item) => item.trim())
+          .filter(Boolean)
+      : Array.from(defaultCategories);
+  return {
+    allowedCategories: new Set(raw.filter((category) => category !== 'preference')),
+    strippedPreference: raw.includes('preference'),
+  };
+}
+
+function autoPromotionWarnings(store, scope, indexedCandidate, policy) {
+  const candidate = indexedCandidate.candidate || {};
+  const warnings = [...promotionCandidateWarnings(store, scope, indexedCandidate)];
+  if (Number(candidate.confidence || 0) < policy.minConfidence) {
+    warnings.push({
+      code: 'auto_low_confidence',
+      message: `Candidate confidence must be at least ${policy.minConfidence}.`,
+      confidence: candidate.confidence ?? null,
+      minConfidence: policy.minConfidence,
+    });
+  }
+  if (Number(candidate.stability || 0) < policy.minStability) {
+    warnings.push({
+      code: 'auto_low_stability',
+      message: `Candidate stability must be at least ${policy.minStability}.`,
+      stability: candidate.stability ?? null,
+      minStability: policy.minStability,
+    });
+  }
+  if (!policy.allowedCategories.has(candidate.category)) {
+    warnings.push({
+      code: candidate.category === 'preference' ? 'preference_auto_excluded' : 'auto_disallowed_category',
+      message:
+        candidate.category === 'preference'
+          ? 'Preference candidates are excluded from auto-promotion until occurrence/merge tracking exists.'
+          : `Candidate category "${candidate.category}" is not allowed for auto-promotion.`,
+      category: candidate.category || null,
+    });
+  }
+  return warnings;
+}
+
+function autoPromotionWouldPromote(indexedCandidate, warnings, rank) {
+  const proposal = promotionProposal(indexedCandidate, warnings, rank);
+  return {
+    ...proposal,
+    recommendedAction: 'dry_run_only',
+    auditReason:
+      'Would auto-promote in a future enabled mode because this closeout-scoped pending candidate passed strict dry-run safety policy.',
+  };
+}
+
+function autoPromoteIndexedCandidate(store, scope, indexedCandidate, warnings, reason) {
+  const candidate = indexedCandidate.candidate || {};
+  return store.db.transaction(() => {
+    const memory = store.rememberMemory({
+      ...scope,
+      key: candidate.key,
+      content: candidate.content,
+      category: candidate.category || 'note',
+      tags: candidate.tags || [],
+      importance: candidate.importance ?? 0,
+      eventType: 'promote',
+      eventMetadata: {
+        sourceCheckpointId: indexedCandidate.checkpointId,
+        sourceSessionId: indexedCandidate.sessionId,
+        sourceCandidateIndex: indexedCandidate.index,
+        sourceCandidateId: indexedCandidate.id,
+        candidateSourceEventIds: candidate.sourceEventIds || [],
+        promotionWarnings: warnings,
+        reason,
+        autoPromoted: true,
+      },
+    });
+    store.markMemoryCandidateReviewed({
+      ...scope,
+      candidateId: indexedCandidate.id,
+      status: 'promoted',
+      reason,
+      promotedMemoryId: memory.id,
+      metadata: {
+        memoryKey: memory.key,
+        memoryId: memory.id,
+        promotionWarnings: warnings,
+        autoPromoted: true,
+      },
+    });
+    return memory;
+  })();
 }
 
 function summarizeBasisResult(result) {
@@ -1411,6 +1517,185 @@ export function createContextForge(options = {}) {
           nextActions: [
             'Ask the user to choose: promote, edit then promote, skip, or reject.',
             'Do not promote automatically.',
+          ],
+        };
+      });
+    },
+
+    async autoPromoteMemoryCandidates(options = {}) {
+      const scope = normalizeScopeOptions(options, config);
+      const trigger = options.trigger;
+      if (!CLOSEOUT_TRIGGERS.has(trigger)) {
+        throw new Error('trigger must be a closeout trigger.');
+      }
+      const dryRun = options.dryRun == null ? true : truthyOption(options.dryRun);
+      if (!dryRun && !config.autoPromote.enabled) {
+        throw new Error('Set CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true to use dryRun=false.');
+      }
+      const requestedLimit = positiveNumber(options.limit == null ? 2 : Number(options.limit), 'limit');
+      const limit = Math.min(2, requestedLimit);
+      const requestWarnings =
+        requestedLimit > 2
+          ? [
+              {
+                code: 'limit_capped',
+                message: 'auto_promote_memory_candidates handles at most 2 candidates per call.',
+                requestedLimit,
+                effectiveLimit: limit,
+              },
+            ]
+          : [];
+      const minConfidence = Number(options.minConfidence ?? 0.85);
+      const minStability = Number(options.minStability ?? 0.85);
+      if (!Number.isFinite(minConfidence) || minConfidence < 0 || minConfidence > 1) {
+        throw new Error('minConfidence must be between 0 and 1.');
+      }
+      if (!Number.isFinite(minStability) || minStability < 0 || minStability > 1) {
+        throw new Error('minStability must be between 0 and 1.');
+      }
+      const categoryPolicy = normalizeAllowedCategories(options.allowedCategories);
+      const allowedCategories = categoryPolicy.allowedCategories;
+      if (categoryPolicy.strippedPreference) {
+        requestWarnings.push({
+          code: 'preference_input_stripped',
+          message: 'Preference candidates cannot be auto-promoted until occurrence/merge tracking exists.',
+        });
+      }
+      const scanLimit = positiveNumber(options.scanLimit == null ? 10 : Number(options.scanLimit), 'scanLimit');
+      if (!options.sessionId && !options.checkpointId) {
+        return {
+          kind: 'auto_memory_promotion_dry_run',
+          trigger,
+          dryRun,
+          source: {
+            sessionId: null,
+            checkpointId: null,
+            mode: 'none',
+          },
+          policy: {
+            minConfidence,
+            minStability,
+            allowedCategories: Array.from(allowedCategories),
+            scopeFallback: false,
+            realPromotionEnabled: config.autoPromote.enabled,
+          },
+          wouldPromote: [],
+          promoted: [],
+          skipped: [],
+          requestWarnings,
+          nextActions: [
+            'Provide sessionId or checkpointId; auto-promotion dry-run never scans the scope backlog.',
+            'No memory candidates were promoted.',
+          ],
+        };
+      }
+
+      return useStore((store) => {
+        let checkpointId = options.checkpointId || null;
+        let sourceMode = null;
+        if (checkpointId) {
+          sourceMode = 'checkpoint';
+        } else {
+          const latestCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId });
+          checkpointId = latestCheckpoint?.id || null;
+          sourceMode = 'latest_checkpoint';
+        }
+        if (options.sessionId && !checkpointId) {
+          return {
+            kind: 'auto_memory_promotion_dry_run',
+            trigger,
+            dryRun,
+            source: {
+              sessionId: options.sessionId,
+              checkpointId: null,
+              mode: sourceMode,
+            },
+            policy: {
+              minConfidence,
+              minStability,
+              allowedCategories: Array.from(allowedCategories),
+              scopeFallback: false,
+              realPromotionEnabled: config.autoPromote.enabled,
+            },
+            wouldPromote: [],
+            promoted: [],
+            skipped: [],
+            requestWarnings,
+            nextActions: [
+              'No latest checkpoint was found for this session; distill a checkpoint before auto-promotion dry-run.',
+              'No memory candidates were promoted.',
+            ],
+          };
+        }
+
+        const policy = { minConfidence, minStability, allowedCategories };
+        const candidates = store.listMemoryCandidates({
+          ...scope,
+          sessionId: options.sessionId || null,
+          checkpointId,
+          status: 'pending',
+          promotionRecommendation: 'promote',
+          sort: 'recommendation',
+          limit: scanLimit,
+        });
+        const assessed = candidates.map((candidate) => {
+          const warnings = autoPromotionWarnings(store, scope, candidate, policy);
+          const score = scorePromotionCandidate(candidate, warnings, AUTO_PROMOTE_SKIP_WARNING_CODES);
+          return { candidate, warnings, score };
+        });
+        const selected = assessed
+          .filter((item) => item.score > 0)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, limit);
+
+        return {
+          kind: 'auto_memory_promotion_dry_run',
+          trigger,
+          dryRun,
+          source: {
+            sessionId: options.sessionId || null,
+            checkpointId,
+            mode: sourceMode,
+          },
+          policy: {
+            minConfidence,
+            minStability,
+            allowedCategories: Array.from(allowedCategories),
+            scopeFallback: false,
+            realPromotionEnabled: config.autoPromote.enabled,
+          },
+          wouldPromote: dryRun
+            ? selected.map((item, index) => autoPromotionWouldPromote(item.candidate, item.warnings, index + 1))
+            : [],
+          promoted: dryRun
+            ? []
+            : selected.map((item, index) => {
+                const reason =
+                  'Auto-promoted by auto_promote_memory_candidates after strict closeout-scoped safety checks.';
+                const memory = autoPromoteIndexedCandidate(store, scope, item.candidate, item.warnings, reason);
+                return {
+                  ...promotionProposal(item.candidate, item.warnings, index + 1),
+                  memoryId: memory.id,
+                  promotionResult: {
+                    memoryId: memory.id,
+                    memoryKey: memory.key,
+                    status: 'promoted',
+                  },
+                  auditReason: reason,
+                };
+              }),
+          skipped: assessed
+            .filter((item) => item.score <= 0)
+            .map((item) => ({
+              candidateId: item.candidate.id,
+              reason: candidateWarningReason(item.warnings) || 'low_score',
+            })),
+          requestWarnings,
+          nextActions: [
+            dryRun
+              ? 'Inspect wouldPromote quality or set dryRun=false with CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true to promote.'
+              : 'Review promoted entries and audit metadata.',
+            dryRun ? 'No memory candidates were promoted.' : 'Do not auto-promote preference candidates until occurrence/merge tracking exists.',
           ],
         };
       });

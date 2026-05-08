@@ -381,6 +381,16 @@ only one to three items for promotion. It is normal for many `memory_candidate`
 records to accumulate; treat them as a review queue, not as a backlog that must
 be emptied.
 
+When the user wants automatic promotion, use `auto_promote_memory_candidates`
+only at closeout triggers and only with `sessionId` or `checkpointId`. The tool
+defaults to `dryRun=true`. Real promotion with `dryRun=false` requires
+`CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true` and still applies strict policy:
+pending candidates only, `promotionRecommendation=promote`, high confidence and
+stability, no high/restricted sensitivity, no duplicates, no scope-wide backlog
+fallback, and category limited to `runbook`, `failure-mode`, `api-contract`,
+`environment`, or `decision`. Do not auto-promote `preference` candidates until
+occurrence/merge tracking exists.
+
 Candidate records may include review signals such as `candidateType`,
 `confidence`, `stability`, `sensitivity`, `promotionRecommendation`, and
 `sourceEventIds`. Use those fields to prioritize review. Treat `ignore`,
@@ -476,6 +486,9 @@ Prefer distilling at meaningful boundaries:
   candidates.
 - `suggest_memory_promotions`: closeout-only selector that proposes at most one
   to three durable memory promotions and never promotes automatically.
+- `auto_promote_memory_candidates`: closeout-only strict automatic promotion
+  selector. Defaults to dry-run; real promotion requires
+  `CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true` plus `dryRun=false`.
 - `reconcile_memory`: reconcile user corrections against durable memories,
   checkpoints, and memory candidates.
 - `promote_memory_candidate`: promote a reviewed candidate by candidate id.
