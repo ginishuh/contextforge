@@ -79,7 +79,8 @@ Use the installed `contextforge-memory` skill for session IDs, distillation,
 candidate review, closeout promotion, correction, and embedding maintenance.
 
 Use `connection.summary` or `connection.accessMode` from `db_info` or
-`bootstrap_context` when present. Treat local `.contextforge/` state as
+`bootstrap_context` when present. `accessMode` is `direct-local`,
+`server-process`, or `remote-client`. Treat local `.contextforge/` state as
 relevant only for local/project-local modes.
 ```
 

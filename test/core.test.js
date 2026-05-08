@@ -5936,6 +5936,7 @@ test('MCP streamable HTTP db_info reports remote-client for HTTP callers', async
     assert.equal(info.structuredContent.result.connection.server.accessMode, 'server-process');
     assert.equal(info.structuredContent.result.connection.server.accessPath, 'in-process');
     assert.equal(info.structuredContent.result.connection.server.serverRole, 'http-server');
+    assert.equal(info.structuredContent.result.connection.server.summary, 'in-process http-server');
     assert.equal(info.structuredContent.result.connection.server.storageMode, 'project-local');
   } finally {
     await client.close();
@@ -5974,6 +5975,7 @@ test('HTTP v0 callers see remote-client connection metadata', async () => {
     assert.equal(body.result.connection.server.accessMode, 'server-process');
     assert.equal(body.result.connection.server.accessPath, 'in-process');
     assert.equal(body.result.connection.server.serverRole, 'http-server');
+    assert.equal(body.result.connection.server.summary, 'in-process http-server');
     assert.equal(body.result.connection.server.storageMode, 'project-local');
 
     const resumeResponse = await fetch(`${remote.url}/v0/syncResumeContext`, {

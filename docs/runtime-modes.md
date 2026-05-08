@@ -198,7 +198,8 @@ This repo uses ContextForge as an external remote memory service.
 - At task start, call `bootstrap_context` with this repo's canonical scope key:
   `github.com/owner/repo`.
 - Use `connection.summary` or `connection.accessMode` from `db_info` or
-  `bootstrap_context` when present.
+  `bootstrap_context` when present. `accessMode` is `direct-local`,
+  `server-process`, or `remote-client`.
 - Treat local `.contextforge/` state as relevant only for local/project-local
   modes.
 ```

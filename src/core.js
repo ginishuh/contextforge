@@ -1235,7 +1235,7 @@ export function createContextForge(options = {}) {
           config.runtime.role === 'http-server'
             ? 'This response is from the ContextForge HTTP server process. Its storageMode describes the server-owned store.'
             : 'This response is from a local ContextForge process. Its storageMode describes this process.',
-        summary: serverRole ? `${accessPath} ${serverRole}` : `${accessPath} ${config.runtime.role}`,
+        summary: `${accessPath} ${config.runtime.role}`,
       },
       embeddings: {
         provider: config.embeddings.provider,

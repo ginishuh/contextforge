@@ -90,8 +90,12 @@ function isAuthorized(request, token) {
   return timingSafeStringEqual(request.headers.authorization, `Bearer ${token}`);
 }
 
+function connectionServerRole(connection) {
+  return connection?.serverRole || connection?.server?.processRole || connection?.processRole || connection?.mode || null;
+}
+
 function remoteAccessConnection(serverConnection, transport) {
-  const serverRole = serverConnection?.processRole || serverConnection?.mode || null;
+  const serverRole = connectionServerRole(serverConnection);
   return {
     mode: 'remote-client',
     accessMode: 'remote-client',

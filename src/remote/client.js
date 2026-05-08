@@ -113,13 +113,12 @@ export function createRemoteContextForge(config, options = {}) {
   });
   const api = { config };
 
+  function connectionServerRole(connection) {
+    return connection?.serverRole || connection?.server?.processRole || connection?.processRole || connection?.mode || null;
+  }
+
   function remoteClientConnection(serverConnection) {
-    const serverRole =
-      serverConnection?.serverRole ||
-      serverConnection?.server?.processRole ||
-      serverConnection?.processRole ||
-      serverConnection?.mode ||
-      null;
+    const serverRole = connectionServerRole(serverConnection);
     const accessPath = serverConnection?.accessPath || serverConnection?.transport || 'http-api';
     if (serverConnection?.mode === 'remote-client') {
       return {
