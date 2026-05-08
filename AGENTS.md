@@ -50,6 +50,12 @@ Do not recommend git as the live storage backend for SQLite or raw runtime data.
 - `node src/server.js`: run the HTTP server entrypoint when needed.
 - `node src/mcp.js`: run the MCP server entrypoint when needed.
 
+## GitHub Workflow
+- Work on a branch and open a PR; do not push directly to `main`.
+- Agents may create and update PRs, but must not merge them.
+- CI is useful but not required for every docs-only change; run focused local
+  verification before opening the PR.
+
 ## Runtime Mode
 Runtime mode is checkout-local. Do not assume a clone is the live server.
 
