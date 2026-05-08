@@ -163,7 +163,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Search Memory',
       description:
-        'Search scoped ContextForge retrieval results. Results may include type=memory reviewed durable facts, type=checkpoint recent continuity, and type=memory_candidate unreviewed promotion candidates. Pass repoPath or cwd to retrieve repo results for a checkout outside the MCP process cwd; repoPath takes precedence. Pass scopeKey to pin the canonical repo memory key.',
+        'Search scoped ContextForge retrieval results. Results may include type=memory reviewed durable facts, type=checkpoint credible recent handoff state, and type=memory_candidate unreviewed promotion candidates. Pass repoPath or cwd to retrieve repo results for a checkout outside the MCP process cwd; repoPath takes precedence. Pass scopeKey to pin the canonical repo memory key.',
       inputSchema: {
         ...scopedSchema,
         query: z.string(),
@@ -420,7 +420,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Reconcile Memory',
       description:
-        'Search relevant durable memories, checkpoints, and memory candidates for a user correction; explain the basis for existing knowledge, assess conflicts, and optionally apply safe memory corrections only when explicitly requested.',
+        'Search relevant durable memories, checkpoints, and memory candidates for a user correction; explain the basis for existing knowledge, assess conflicts, and optionally apply safe memory corrections only when explicitly requested. Default mode=propose is read-only; mode=apply_safe may correct durable memory or reject candidates when the correction is unambiguous.',
       inputSchema: {
         ...scopedSchema,
         query: z.string(),

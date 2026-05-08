@@ -211,7 +211,7 @@ function bootstrapTrustForType(type) {
     return 'reviewed_durable';
   }
   if (type === 'checkpoint') {
-    return 'recent_continuity';
+    return 'credible_recent_handoff';
   }
   if (type === 'memory_candidate') {
     return 'review_material';
@@ -224,7 +224,7 @@ function bootstrapUseHint(result) {
     return 'Reviewed durable state; use for decisions, but verify drift-prone facts against live sources.';
   }
   if (result.type === 'checkpoint') {
-    return 'Recent session continuity; useful for resuming work, but verify before acting.';
+    return 'Credible recent handoff state; use actively for continuity and planning, but verify mutable live state before acting.';
   }
   if (result.type === 'memory_candidate') {
     return 'Unreviewed promotion candidate; useful context and review material, not canonical truth.';
@@ -468,14 +468,27 @@ const DURABLE_PROPOSAL_CATEGORIES = new Set([
   'environment',
 ]);
 
-function compactMemoryCandidate(candidate) {
+function compactBootstrapCandidate(result) {
   return {
-    candidateId: candidate.candidateId || candidate.id,
-    key: candidate.key || candidate.candidate?.key || null,
-    category: candidate.category || candidate.candidate?.category || null,
-    content: truncateText(candidate.content || candidate.candidate?.content, 240),
-    status: candidate.status || null,
-    checkpointId: candidate.checkpointId || null,
+    candidateId: result.candidateId || null,
+    key: result.key || null,
+    category: result.category || null,
+    content: truncateText(result.content, 240),
+    status: result.status || null,
+    checkpointId: result.checkpointId || null,
+    trust: 'review_material',
+    useHint: 'Useful context and review material, not durable truth or a promotion proposal.',
+  };
+}
+
+function compactIndexedCandidate(indexedCandidate) {
+  return {
+    candidateId: indexedCandidate.id,
+    key: indexedCandidate.candidate?.key || null,
+    category: indexedCandidate.candidate?.category || null,
+    content: truncateText(indexedCandidate.candidate?.content, 240),
+    status: indexedCandidate.status || null,
+    checkpointId: indexedCandidate.checkpointId || null,
     trust: 'review_material',
     useHint: 'Useful context and review material, not durable truth or a promotion proposal.',
   };
@@ -585,7 +598,7 @@ function candidateWarningReason(warnings) {
   return warnings.map((warning) => warning.code).join(', ');
 }
 
-function scorePromotionCandidate(indexedCandidate, warnings, trigger) {
+function scorePromotionCandidate(indexedCandidate, warnings) {
   if (warnings.some((warning) => AUTO_SKIP_WARNING_CODES.has(warning.code))) {
     return 0;
   }
@@ -598,7 +611,6 @@ function scorePromotionCandidate(indexedCandidate, warnings, trigger) {
   if (/\b(pr|issue|ci|api|migration|deploy|rollback|command|test|runtime)\b/i.test(candidate.reason || candidate.content || '')) {
     score += 1;
   }
-  if (trigger === 'manual_closeout') score += 0.25;
   return score;
 }
 
@@ -625,74 +637,35 @@ function promotionProposal(indexedCandidate, warnings, rank) {
 }
 
 function summarizeBasisResult(result) {
-  if (result.key != null && result.content != null && !result.memory && !result.checkpoint && !result.candidate) {
-    return {
-      type: result.type,
-      key: result.key,
-      category: result.category || null,
-      content: truncateText(result.content, 500),
-      trust: result.trust || bootstrapTrustForType(result.type),
-      whyUse: result.whyUse || bootstrapUseHint(result),
-      verificationRequired: Boolean(result.verificationRequired),
-      source: result.source || null,
-      retrieval: result.retrieval || null,
-      memoryId: result.memoryId || null,
-      checkpointId: result.checkpointId || (result.type === 'checkpoint' ? result.key : null),
-      candidateId: result.candidateId || null,
-      sessionId: result.sessionId || null,
-      status: result.status || null,
-    };
-  }
-  const base = {
+  return {
     type: result.type,
-    key: null,
-    content: '',
-    trust: bootstrapTrustForType(result.type),
-    whyUse: bootstrapUseHint(result),
-    verificationRequired: result.type !== 'memory' || requiresLiveStateVerification(result),
+    key: result.key,
+    category: result.category || null,
+    content: truncateText(result.content, 500),
+    trust: result.trust || bootstrapTrustForType(result.type),
+    whyUse: result.whyUse || bootstrapUseHint(result),
+    verificationRequired: Boolean(result.verificationRequired),
     source: result.source || null,
     retrieval: result.retrieval || null,
+    memoryId: result.memoryId || null,
+    checkpointId: result.checkpointId || (result.type === 'checkpoint' ? result.key : null),
+    candidateId: result.candidateId || null,
+    sessionId: result.sessionId || null,
+    status: result.status || null,
   };
-  if (result.memory) {
-    return {
-      ...base,
-      key: result.memory.key,
-      category: result.memory.category,
-      content: truncateText(result.memory.content, 500),
-      memoryId: result.memory.id,
-    };
-  }
-  if (result.checkpoint) {
-    return {
-      ...base,
-      key: result.checkpoint.id,
-      category: 'checkpoint',
-      content: truncateText(result.checkpoint.summaryText || result.checkpoint.summaryShort, 500),
-      checkpointId: result.checkpoint.id,
-      sessionId: result.checkpoint.sessionId,
-      trust: 'credible_recent_handoff',
-      whyUse:
-        'Checkpoint basis explains why prior agents may have believed this; do not edit checkpoints directly.',
-    };
-  }
-  if (result.candidate) {
-    return {
-      ...base,
-      key: result.candidate.candidate.key,
-      category: result.candidate.candidate.category,
-      content: truncateText(result.candidate.candidate.content, 500),
-      candidateId: result.candidate.id,
-      checkpointId: result.candidate.checkpointId,
-      status: result.candidate.status,
-    };
-  }
-  return base;
 }
 
 function isLiveStateCorrection(text) {
-  return /\b(branch\w*|prs?|pull requests?|issues?|ci|checks?|runtimes?|deploy\w*|deployments?|migrations?|migrate\w*|servers?|services?|queues?|status|drafts?|merge\w*|merged|commits?|tags?|releases?|rollbacks?)\b/i.test(
-    String(text || ''),
-  );
+  const value = String(text || '');
+  return [
+    /\bpr\s*#?\d+\b/i,
+    /\bpull request\s*#?\d+\b/i,
+    /\bissue\s*#?\d+\b/i,
+    /\b(branch|commit|tag|release)\s+[\w./-]+\b/i,
+    /\b(merged?|deployed|released|rolled back|rollback)\s+(to|into|from|on|in)\b/i,
+    /\b(ci|check run|github action|workflow run|migration|runtime|deployment|server|service|queue)\s+(failed|passing|passed|running|stopped|down|up|merged|deployed|current|pending)\b/i,
+    /\b(alembic|migration|migrations)\s+(current|heads?|upgraded?|downgraded?|applied|pending)\b/i,
+  ].some((pattern) => pattern.test(value));
 }
 
 function checkpointTimestamp(checkpoint) {
@@ -1099,8 +1072,11 @@ export function createContextForge(options = {}) {
       }
       if (bootstrap.sessionId && memoryCandidateResults.length === 0) {
         const latestCandidates = useStore((store) => {
-          const latestCheckpoint = store.getLatestCheckpoint({ ...bootstrap.scope, sessionId: bootstrap.sessionId });
-          return latestCheckpoint
+          const latestCheckpoint =
+            recentCheckpoints[0]?.key && recentCheckpoints[0]?.retrieval?.method === 'latest_checkpoint'
+              ? { id: recentCheckpoints[0].key }
+              : store.getLatestCheckpoint({ ...bootstrap.scope, sessionId: bootstrap.sessionId });
+          return latestCheckpoint?.id
             ? store.listMemoryCandidates({
                 ...bootstrap.scope,
                 checkpointId: latestCheckpoint.id,
@@ -1127,7 +1103,11 @@ export function createContextForge(options = {}) {
           recentCheckpoints,
           memoryCandidates: {
             count: memoryCandidateResults.length,
-            items: memoryCandidateResults.slice(0, 3).map(compactMemoryCandidate),
+            items: memoryCandidateResults
+              .slice(0, 3)
+              .map((candidate) =>
+                candidate.candidate ? compactIndexedCandidate(candidate) : compactBootstrapCandidate(candidate),
+              ),
             trust: 'review_material',
             useHint: 'Review material only; do not turn these into promotion proposals during resume sync.',
           },
@@ -1322,7 +1302,7 @@ export function createContextForge(options = {}) {
       );
     },
 
-    suggestMemoryPromotions(options = {}) {
+    async suggestMemoryPromotions(options = {}) {
       const scope = normalizeScopeOptions(options, config);
       const trigger = options.trigger;
       if (!CLOSEOUT_TRIGGERS.has(trigger)) {
@@ -1332,7 +1312,19 @@ export function createContextForge(options = {}) {
       if (allowScopeFallback && trigger !== 'manual_closeout') {
         throw new Error('allowScopeFallback is only allowed with trigger=manual_closeout.');
       }
-      const limit = Math.min(3, positiveNumber(options.limit == null ? 3 : Number(options.limit), 'limit'));
+      const requestedLimit = positiveNumber(options.limit == null ? 3 : Number(options.limit), 'limit');
+      const limit = Math.min(3, requestedLimit);
+      const warnings =
+        requestedLimit > 3
+          ? [
+              {
+                code: 'limit_capped',
+                message: 'suggest_memory_promotions returns at most 3 proposals.',
+                requestedLimit,
+                effectiveLimit: limit,
+              },
+            ]
+          : [];
       const scanLimit = positiveNumber(options.scanLimit == null ? 10 : Number(options.scanLimit), 'scanLimit');
       const promotionRecommendation = options.promotionRecommendation || 'promote';
 
@@ -1359,6 +1351,7 @@ export function createContextForge(options = {}) {
             },
             proposals: [],
             skipped: [],
+            warnings,
             nextActions: [
               'Provide sessionId or checkpointId to review current closeout candidates.',
               'Use allowScopeFallback=true only with trigger=manual_closeout when intentionally reviewing the scope backlog.',
@@ -1379,6 +1372,7 @@ export function createContextForge(options = {}) {
             },
             proposals: [],
             skipped: [],
+            warnings,
             nextActions: [
               'No latest checkpoint was found for this session; distill a checkpoint before reviewing promotions.',
               'Do not promote automatically.',
@@ -1397,7 +1391,7 @@ export function createContextForge(options = {}) {
         });
         const assessed = candidates.map((candidate) => {
           const warnings = promotionCandidateWarnings(store, scope, candidate);
-          const score = scorePromotionCandidate(candidate, warnings, trigger);
+          const score = scorePromotionCandidate(candidate, warnings);
           return { candidate, warnings, score };
         });
         const selected = assessed
@@ -1421,6 +1415,7 @@ export function createContextForge(options = {}) {
               candidateId: item.candidate.id,
               reason: candidateWarningReason(item.warnings) || 'low_score',
             })),
+          warnings,
           nextActions: [
             'Ask the user to choose: promote, edit then promote, skip, or reject.',
             'Do not promote automatically.',
@@ -1453,24 +1448,21 @@ export function createContextForge(options = {}) {
       const liveState = isLiveStateCorrection(`${options.query}\n${options.correction}`);
       return useStore((store) => {
         const basis = (bootstrap.results || []).slice(0, limit).map(summarizeBasisResult);
-        if (options.sessionId && !basis.some((item) => item.type === 'checkpoint')) {
-          const latestCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId });
-          if (latestCheckpoint) {
-            basis.push(checkpointBasisResult(latestCheckpoint));
-          }
+        const latestCheckpoint = options.sessionId
+          ? store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId })
+          : null;
+        if (latestCheckpoint && !basis.some((item) => item.type === 'checkpoint')) {
+          basis.push(checkpointBasisResult(latestCheckpoint));
         }
-        if (options.sessionId && !basis.some((item) => item.type === 'memory_candidate')) {
-          const latestCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId });
-          if (latestCheckpoint) {
-            const latestCandidates = store.listMemoryCandidates({
-              ...scope,
-              checkpointId: latestCheckpoint.id,
-              status: 'pending',
-              sort: 'recommendation',
-              limit: candidateLimit,
-            });
-            basis.push(...latestCandidates.map(indexedCandidateBasisResult));
-          }
+        if (latestCheckpoint && !basis.some((item) => item.type === 'memory_candidate')) {
+          const latestCandidates = store.listMemoryCandidates({
+            ...scope,
+            checkpointId: latestCheckpoint.id,
+            status: 'pending',
+            sort: 'recommendation',
+            limit: candidateLimit,
+          });
+          basis.push(...latestCandidates.map(indexedCandidateBasisResult));
         }
         const durableBasis = basis.filter((item) => item.type === 'memory');
         const checkpointBasis = basis.filter((item) => item.type === 'checkpoint');
@@ -1522,27 +1514,34 @@ export function createContextForge(options = {}) {
           } else if (durableBasis.length === 1) {
             const durable = durableBasis[0];
             const previous = store.getMemory({ ...scope, key: durable.key });
-            const corrected = store.rememberMemory({
-              ...scope,
-              key: durable.key,
-              content: options.correction,
-              category: durable.category || 'note',
-              tags: [],
-              importance: undefined,
-              supersedesMemoryId: previous?.id || durable.memoryId || undefined,
-              eventType: 'correct',
-              eventMetadata: {
+            if (!previous) {
+              warnings.push({
+                code: 'durable_memory_not_found',
+                message: `Memory ${durable.key} was not found when applying correction; no correction was applied.`,
+              });
+            } else {
+              const corrected = store.rememberMemory({
+                ...scope,
                 key: durable.key,
-                previousMemoryId: previous?.id || durable.memoryId || null,
-                previousContent: previous?.content || durable.content,
-                reason: 'Applied via reconcile_memory apply_safe.',
-              },
-            });
-            appliedActions.push({
-              action: 'correct_memory',
-              key: corrected.key,
-              memoryId: corrected.id,
-            });
+                content: options.correction,
+                category: previous.category,
+                tags: previous.tags,
+                importance: previous.importance,
+                supersedesMemoryId: previous.id,
+                eventType: 'correct',
+                eventMetadata: {
+                  key: durable.key,
+                  previousMemoryId: previous.id,
+                  previousContent: previous.content,
+                  reason: 'Applied via reconcile_memory apply_safe.',
+                },
+              });
+              appliedActions.push({
+                action: 'correct_memory',
+                key: corrected.key,
+                memoryId: corrected.id,
+              });
+            }
           } else if (durableBasis.length > 1) {
             warnings.push({
               code: 'ambiguous_durable_memory',
@@ -1550,7 +1549,7 @@ export function createContextForge(options = {}) {
             });
           }
 
-          if (!liveState) {
+          if (!liveState && appliedActions.some((item) => item.action === 'correct_memory')) {
             for (const item of candidateBasis) {
               const candidate = store.getMemoryCandidate({
                 ...scope,
