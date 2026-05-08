@@ -393,8 +393,10 @@ defaults to `dryRun=true`. Real promotion with `dryRun=false` requires
 pending candidates only, `promotionRecommendation=promote`, high confidence and
 stability, no high/restricted sensitivity, no duplicates, no scope-wide backlog
 fallback, and category limited to `runbook`, `failure-mode`, `api-contract`,
-`environment`, or `decision`. Do not auto-promote `preference` candidates until
-occurrence/merge tracking exists.
+`environment`, or `decision`. Do not auto-promote `preference` candidates from
+the normal auto-promotion path. Preference candidates are tracked separately as
+occurrences so repeated evidence, corrections, and future merge policy can be
+reviewed before any durable preference is created.
 
 `auto_promote_memory_candidates` returns
 `kind: "auto_memory_promotion_result"` for both dry-run and real-promotion
@@ -407,6 +409,12 @@ Candidate records may include review signals such as `candidateType`,
 `sourceEventIds`. Use those fields to prioritize review. Treat `ignore`,
 `reject`, low-confidence, low-stability, and high-sensitivity candidates as
 reasons to skip or reject unless the user explicitly asks to keep them.
+
+For preference-like candidates, use `list_preference_occurrences` to inspect
+merged occurrence evidence across sessions and checkpoints. Repeated preference
+evidence is not durable memory by itself. Corrections handled through
+`reconcile_memory` can weaken preference occurrences when contradicted
+candidates are rejected.
 
 If a candidate key looks wrong, too broad, or belongs to the wrong repo, do not
 promote it as-is. Use `remember` with a corrected key/content or leave it as a
@@ -503,6 +511,8 @@ Prefer distilling at meaningful boundaries:
   estimated input tokens, elapsed time, and actual provider usage when recorded.
 - `list_memory_candidates`: inspect checkpoint-generated durable-memory
   candidates.
+- `list_preference_occurrences`: inspect merged preference evidence recorded
+  from preference-like candidates.
 - `suggest_memory_promotions`: closeout-only selector that proposes at most one
   to three durable memory promotions and never promotes automatically.
 - `auto_promote_memory_candidates`: closeout-only strict automatic promotion

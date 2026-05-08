@@ -30,6 +30,7 @@ const MCP_INSTRUCTIONS = [
   'For start/resume requests such as "지난 환경 작업과 동기화", "어제 하던 거 이어서", "previous work", or "continue", call sync_resume_context. Use checkpoints actively as handoff notes, then verify mutable state with git/GitHub/CI/runtime/migrations. Do not propose memory promotions during resume sync.',
   'For closeout triggers only, call suggest_memory_promotions: after this agent merges a PR, after the user says they merged and the agent syncs main/cleans branches, or when the user explicitly says today\'s work is done. Suggest at most 1-3 durable memory promotions and never promote automatically.',
   'For strict closeout-scoped safe automatic promotion, call auto_promote_memory_candidates only when the user wants automatic promotion. By default use dryRun=true. Use dryRun=false only when CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true is intentionally configured; never use scope-wide backlog fallback and never auto-promote preference candidates.',
+  'Preference-like candidates are tracked as merged occurrences; use list_preference_occurrences to review repeated evidence and weakened corrections, but do not treat occurrence evidence alone as durable preference truth.',
   'For user corrections such as "너 잘못 알고 있잖아", "그거 아니야", "그건 X가 아니라 Y야", or "기억 수정해", call reconcile_memory. Show the basis for prior knowledge, assess conflicts, and only apply safe corrections when the user explicitly asks to fix memory.',
   'When resuming a known session, pass sessionId to bootstrap_context or call get_working_summary and get_session_working_context to load latest rolling handoff state separately from durable memory and checkpoint search results.',
   'If working on a repository while the MCP process cwd is elsewhere, pass repoPath or cwd so repo scope resolves to that checkout; repoPath takes precedence when both are provided.',
@@ -459,6 +460,26 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
       },
     },
     async (args) => jsonResult(await app.listMemoryCandidates(args)),
+  );
+
+  server.registerTool(
+    'list_preference_occurrences',
+    {
+      title: 'List Preference Occurrences',
+      description:
+        'List merged preference occurrence evidence tracked from preference-like memory candidates. Use for review; do not auto-promote preferences solely from this output.',
+      inputSchema: {
+        ...scopedSchema,
+        status: z.enum(['active', 'weakened', 'superseded', 'rejected']).optional(),
+        limit: z.number().int().positive().optional(),
+      },
+      annotations: {
+        title: 'List Preference Occurrences',
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.listPreferenceOccurrences(args)),
   );
 
   server.registerTool(

@@ -4693,6 +4693,207 @@ test('autoPromoteMemoryCandidates promotes only strict safe candidates when enab
   assert.equal(autoEvents[0].metadata.autoPromoted, true);
 });
 
+test('preference candidates record merged occurrences across checkpoints', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'preference_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      preference_provider: async () => ({
+        summaryShort: 'Preference checkpoint.',
+        summaryText: 'A repeated user preference was observed.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'closing-style',
+            content: 'The user prefers concise Korean closeout summaries with command evidence.',
+            category: 'preference',
+            candidateType: 'preference',
+            confidence: 0.9,
+            stability: 0.86,
+            sensitivity: 'low',
+            promotionRecommendation: 'review',
+            sourceEventIds: ['event-a'],
+          },
+        ],
+      }),
+    },
+  });
+
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'preference-repo',
+    sessionId: 'preference-session-a',
+    role: 'user',
+    content: 'Keep closeout summaries concise and in Korean.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'preference-repo',
+    sessionId: 'preference-session-a',
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'preference-repo',
+    sessionId: 'preference-session-b',
+    role: 'user',
+    content: 'Again, keep closeout summaries concise and in Korean.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'preference-repo',
+    sessionId: 'preference-session-b',
+  });
+
+  const occurrences = app.listPreferenceOccurrences({
+    scope: 'repo',
+    scopeKey: 'preference-repo',
+  });
+  assert.equal(occurrences.length, 1);
+  assert.equal(occurrences[0].mergeKey, 'key:closing-style');
+  assert.equal(occurrences[0].occurrenceCount, 2);
+  assert.deepEqual(occurrences[0].sessionIds.sort(), ['preference-session-a', 'preference-session-b']);
+  assert.equal(occurrences[0].checkpointIds.length, 2);
+  assert.equal(occurrences[0].confidence, 0.9);
+  assert.equal(occurrences[0].stability, 0.86);
+});
+
+test('preference occurrence backfill covers existing preference candidates', async () => {
+  const dataDir = await makeTempDir();
+  const env = {
+    CONTEXTFORGE_DATA_DIR: dataDir,
+    CONTEXTFORGE_DISTILL_PROVIDER: 'preference_backfill_provider',
+  };
+  const distillProviders = {
+    preference_backfill_provider: async () => ({
+      summaryShort: 'Preference backfill checkpoint.',
+      summaryText: 'A preference candidate existed before occurrence tracking.',
+      decisions: [],
+      todos: [],
+      openQuestions: [],
+      memoryCandidates: [
+        {
+          key: 'review-style',
+          content: 'The user prefers review comments grouped by severity.',
+          category: 'preference',
+          candidateType: 'preference',
+          confidence: 0.88,
+          stability: 0.82,
+          sensitivity: 'low',
+          promotionRecommendation: 'review',
+        },
+      ],
+    }),
+  };
+  const app = createContextForge({ env, cwd: process.cwd(), distillProviders });
+
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'preference-backfill-repo',
+    sessionId: 'preference-backfill-session',
+    role: 'assistant',
+    content: 'Preference candidate exists before backfill.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'preference-backfill-repo',
+    sessionId: 'preference-backfill-session',
+  });
+
+  const db = new Database(path.join(dataDir, 'contextforge.db'));
+  try {
+    db.prepare('DELETE FROM preference_occurrences').run();
+    db.prepare("DELETE FROM schema_meta WHERE key = 'preference_occurrences_backfill_completed_at'").run();
+  } finally {
+    db.close();
+  }
+
+  const reopened = createContextForge({ env, cwd: process.cwd(), distillProviders });
+  const occurrences = reopened.listPreferenceOccurrences({
+    scope: 'repo',
+    scopeKey: 'preference-backfill-repo',
+  });
+  assert.equal(occurrences.length, 1);
+  assert.equal(occurrences[0].mergeKey, 'key:review-style');
+  assert.equal(occurrences[0].occurrenceCount, 1);
+});
+
+test('reconcileMemory apply_safe weakens preference occurrences when rejecting contradicted candidates', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'preference_reconcile_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      preference_reconcile_provider: async () => ({
+        summaryShort: 'Preference correction checkpoint.',
+        summaryText: 'A preference candidate should be rejected after correction.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'summary-style',
+            content: 'The user always wants long exhaustive closeout summaries.',
+            category: 'preference',
+            candidateType: 'preference',
+            confidence: 0.95,
+            stability: 0.95,
+            sensitivity: 'low',
+            promotionRecommendation: 'review',
+          },
+        ],
+      }),
+    },
+  });
+
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'preference-correction-repo',
+    sessionId: 'preference-correction-session',
+    role: 'assistant',
+    content: 'Preference candidate: long exhaustive summaries.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'preference-correction-repo',
+    sessionId: 'preference-correction-session',
+  });
+
+  const before = app.listPreferenceOccurrences({
+    scope: 'repo',
+    scopeKey: 'preference-correction-repo',
+  });
+  assert.equal(before[0].status, 'active');
+  assert.equal(before[0].negativeCount, 0);
+
+  const result = await app.reconcileMemory({
+    scope: 'repo',
+    scopeKey: 'preference-correction-repo',
+    sessionId: 'preference-correction-session',
+    query: 'summary style preference',
+    correction: 'That is wrong; prefer concise summaries unless I ask for exhaustive detail.',
+    mode: 'apply_safe',
+  });
+
+  assert.ok(result.appliedActions.some((action) => action.action === 'reject_memory_candidate'));
+  assert.ok(result.appliedActions.some((action) => action.action === 'weaken_preference_occurrence'));
+  const after = app.listPreferenceOccurrences({
+    scope: 'repo',
+    scopeKey: 'preference-correction-repo',
+  });
+  assert.equal(after[0].status, 'weakened');
+  assert.equal(after[0].negativeCount, 1);
+  assert.match(after[0].lastCorrection, /prefer concise/);
+});
+
 test('reconcileMemory proposes by default and apply_safe only changes unambiguous non-live memory', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({
@@ -4856,6 +5057,7 @@ test('REMOTE_METHODS exposes resume, suggestion, auto-promotion, and reconciliat
   assert.ok(REMOTE_METHODS.includes('suggestMemoryPromotions'));
   assert.ok(REMOTE_METHODS.includes('autoPromoteMemoryCandidates'));
   assert.ok(REMOTE_METHODS.includes('reconcileMemory'));
+  assert.ok(REMOTE_METHODS.includes('listPreferenceOccurrences'));
   assert.ok(REMOTE_METHODS.includes('listCheckpoints'));
   assert.ok(REMOTE_METHODS.includes('getSessionWorkingContext'));
   assert.ok(REMOTE_METHODS.includes('upsertSessionWorkingContext'));
@@ -5022,6 +5224,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'list_checkpoints',
       'list_memory_candidates',
       'list_memory_events',
+      'list_preference_occurrences',
       'promote_memory',
       'promote_memory_candidate',
       'prune_raw_events',
@@ -5060,6 +5263,9 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     const suggestTool = toolList.tools.find((tool) => tool.name === 'suggest_memory_promotions');
     assert.ok(suggestTool.inputSchema.properties.allowScopeFallback);
     assert.ok(suggestTool.inputSchema.properties.trigger);
+    const preferenceOccurrencesTool = toolList.tools.find((tool) => tool.name === 'list_preference_occurrences');
+    assert.ok(preferenceOccurrencesTool.inputSchema.properties.status);
+    assert.ok(preferenceOccurrencesTool.inputSchema.properties.limit);
     const autoPromoteTool = toolList.tools.find((tool) => tool.name === 'auto_promote_memory_candidates');
     assert.ok(autoPromoteTool.inputSchema.properties.dryRun);
     assert.ok(autoPromoteTool.inputSchema.properties.minConfidence);

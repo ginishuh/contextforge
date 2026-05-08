@@ -179,6 +179,7 @@ async function main() {
     deactivateMemory: (app, coreOptions) => app.deactivateMemory(coreOptions),
     listMemoryEvents: (app, coreOptions) => app.listMemoryEvents(coreOptions),
     listMemoryCandidates: (app, coreOptions) => app.listMemoryCandidates(coreOptions),
+    listPreferenceOccurrences: (app, coreOptions) => app.listPreferenceOccurrences(coreOptions),
     autoPromoteMemoryCandidates: (app, coreOptions) => app.autoPromoteMemoryCandidates(coreOptions),
     search: (app, coreOptions) => app.search(coreOptions),
     rebuildEmbeddings: (app, coreOptions) => app.rebuildEmbeddings(coreOptions),
