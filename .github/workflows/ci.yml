@@ -1,0 +1,119 @@
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Detect changes
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    outputs:
+      run-tests: ${{ steps.filter.outputs.run_tests }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decide whether tests are needed
+        id: filter
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+            mapfile -t files < <(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+          else
+            before="${{ github.event.before }}"
+            after="${{ github.sha }}"
+            if [[ "$before" =~ ^0+$ ]]; then
+              mapfile -t files < <(git diff-tree --no-commit-id --name-only -r "$after")
+            else
+              mapfile -t files < <(git diff --name-only "$before" "$after")
+            fi
+          fi
+
+          run_tests=false
+          for file in "${files[@]}"; do
+            case "$file" in
+              *.md|LICENSE)
+                ;;
+              *)
+                run_tests=true
+                ;;
+            esac
+          done
+
+          printf 'run_tests=%s\n' "$run_tests" >> "$GITHUB_OUTPUT"
+
+  workflow-lint:
+    name: Workflow lint
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install actionlint
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=1.7.12
+          curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${version}/actionlint_${version}_linux_amd64.tar.gz" -o /tmp/actionlint.tar.gz
+          tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint
+          install -m 0755 /tmp/actionlint /usr/local/bin/actionlint
+
+      - name: Run actionlint
+        run: actionlint .github/workflows/*.yml
+
+  test:
+    name: Test on Node ${{ matrix.node-version }}
+    needs: changes
+    if: (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && needs.changes.outputs.run-tests == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20, 22, 24]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - run: npm ci
+      - run: npm test
+
+  ci-summary:
+    name: CI Summary
+    needs:
+      - changes
+      - workflow-lint
+      - test
+    if: (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check required jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ needs.workflow-lint.result }}" != "success" ]]; then
+            echo "workflow-lint failed"
+            exit 1
+          fi
+          if [[ "${{ needs.changes.outputs.run-tests }}" == "true" && "${{ needs.test.result }}" != "success" ]]; then
+            echo "tests failed"
+            exit 1
+          fi
+          if [[ "${{ needs.changes.outputs.run-tests }}" != "true" ]]; then
+            echo "docs-only change: Node test matrix skipped"
+          fi
