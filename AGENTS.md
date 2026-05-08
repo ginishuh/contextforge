@@ -50,29 +50,31 @@ Do not recommend git as the live storage backend for SQLite or raw runtime data.
 - `node src/server.js`: run the HTTP server entrypoint when needed.
 - `node src/mcp.js`: run the MCP server entrypoint when needed.
 
-## VPS 운영 공통 원칙 (/srv)
-- 운영 작업은 항상 대상 리포의 `/srv/<repo>` 경로에서 직접 수행합니다.
-- 작업 시작 전 `pwd`와 `git remote -v`로 리포/원격을 확인합니다.
-- 서로 다른 리포의 배포 스크립트, Compose 파일, 환경 파일을 혼용하지 않습니다.
-- 환경 변수는 대문자 스네이크 케이스를 사용하고, 새 값은 `.env.example` 또는 해당 예제 파일에 설명을 남깁니다.
-- `.env`, 키 파일, 인증서, DB 백업, 토큰은 절대 커밋하지 않습니다.
-- 공개 포트는 최소화하고 가능하면 `127.0.0.1`에 바인딩합니다. 외부 노출은 Nginx/리버스 프록시에서 처리합니다.
-- 배포 전 백업/롤백 경로를 확인하고, 위험 작업은 되돌릴 수 있는 상태에서만 진행합니다.
-- 배포 후에는 같은 리포 기준으로 상태, 헬스체크, 최근 로그를 검증합니다.
+## Current Runtime On This Host
+This `/home/ubuntu/contextforge` checkout is also used to operate the live
+ContextForge HTTP remote server on this host.
 
-## 공통 운영 명령
-- `docker compose ps`: 컨테이너 상태 확인.
-- `docker compose logs --since 10m`: 최근 로그 확인.
-- `/root/scripts/post_deploy_check.sh <repo-name|repo-path> [health_url ...]`: 배포 후 공통 점검.
-- `journalctl -u <service> --since "1 hour ago" --no-pager`: systemd 서비스 장애 추적.
-- `certbot certificates`: 인증서 만료와 도메인 매핑 점검.
+- Treat the live host as **HTTP server mode**, not only as a local development
+  checkout.
+- User systemd units normally include `contextforge-remote.service`,
+  `contextforge-codex-router-codex.service`,
+  `contextforge-claude-code-router-claude-code.service`, and
+  `contextforge-embedding-worker.timer`.
+- The live server environment is read from
+  `/home/ubuntu/.config/contextforge/server.env`; it contains secrets and must
+  not be committed or pasted into reports.
+- The local health endpoint is `http://127.0.0.1:8766/healthz`.
+- Before claiming live runtime state, verify the user services, `/healthz`, and
+  current git state.
+
+For local all-in-one, HTTP server, and external remote client distinctions,
+follow `docs/runtime-modes.md`.
 
 ## 한국어 응대 원칙
 - 운영 보고, 장애 공유, 작업 결과는 한국어로 작성합니다.
 - 명령어, 경로, 환경 변수는 원문 그대로 백틱(``)으로 표기합니다.
 - 긴급 이슈는 `현상 → 영향 → 조치 → 검증 → 재발 방지` 순서로 간결하게 보고합니다.
 - 날짜/시간은 절대값으로 명시합니다. 예: `2026-04-26 14:30 KST`.
-
 
 ## Safety
 - Never commit `.db`, `.db-wal`, `.db-shm`, raw logs, or `.env` files.
@@ -96,12 +98,14 @@ search shared memory only when cross-repo or user-wide policy may matter. Use
 the inferred repo scope key, or an explicit `github.com/owner/repo` key when
 cross-machine continuity matters.
 
-Use the portable ContextForge memory skill/guide at
-`docs/skills/contextforge-memory/SKILL.md` for full ContextForge MCP workflow
-details: storage authority, scopes, bootstrap/search, resume, session IDs, raw
-evidence, distillation, checkpoint candidates, closeout promotion, correction,
-and embedding maintenance. Agent-specific skill systems may install or mirror
-that same guide, but the repo copy is the source of truth.
+Before relying on retrieval, distinguish storage authority. Remote
+ContextForge storage is canonical shared memory for the configured scope;
+local or project-local storage is machine/check-out local context unless the
+user says otherwise.
+
+Interpret search result types by trust role: `memory` is reviewed durable
+state, `checkpoint` is credible recent handoff state that still needs live
+verification, and `memory_candidate` is review material.
 
 Critical session invariant: `bootstrap_context` does not create a session. In
 Codex/Claude auto-ingest flows, use the adapter session id such as
@@ -110,37 +114,5 @@ Codex/Claude auto-ingest flows, use the adapter session id such as
 manual `append_raw` evidence stream. Do not create a fresh `cf_...` session at
 closeout to review candidates from an existing Codex/Claude session.
 
-For start/resume wording such as "지난 환경 작업과 동기화", "어제 하던 거
-이어서", "previous work", or "continue", call `sync_resume_context` when
-available. Use checkpoints actively as handoff notes, then verify live state.
-Do not propose memory promotions during resume sync.
-
-Keep durable memory intentional. At closeout triggers only, call
-`suggest_memory_promotions` when available and propose at most one to three
-stable durable facts. Use `auto_promote_memory_candidates` only when the user
-explicitly wants strict closeout-scoped automatic promotion and the configured
-safety gates allow it.
-
-Use `remember` for new reviewed durable facts, decisions, preferences, or
-runbook notes. Use `promote_memory_candidate` only after reviewing a checkpoint
-candidate and confirming it is stable beyond the current task, scoped correctly,
-and free of secrets or private data. Use `reconcile_memory` for user
-corrections when available, `correct_memory` for changed durable facts,
-`deactivate_memory` for stale facts, and `reject_memory_candidate` for
-incorrect candidates.
-
-For full ContextForge MCP workflow rules, follow the portable guide at
-`docs/skills/contextforge-memory/SKILL.md`. For copyable prompt snippets and
-repo `AGENTS.md` templates, see `docs/agent-instructions.md`.
-
-## JavaScript REPL (Node)
-
-- Use `js_repl` for Node-backed JavaScript scratch work when it is more useful
-  than one-off shell commands.
-- Send raw JavaScript only. Do not wrap direct `js_repl` calls in JSON, quotes,
-  or markdown fences.
-- Prefer dynamic `await import(...)` over static import declarations.
-- Top-level bindings persist across cells; reuse names carefully or reset the
-  kernel with `js_repl_reset` when a clean state is needed.
-- Avoid direct `process.stdin` / `process.stdout` / `process.stderr` access; use
-  `console.log`, `codex.tool(...)`, and `codex.emitImage(...)`.
+For full ContextForge MCP workflow rules, use the installed
+`contextforge-memory` skill.

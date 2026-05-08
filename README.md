@@ -63,7 +63,9 @@ or want several agents to share the same source of truth. Set
 server-backed store.
 
 See [docs/architecture.md](docs/architecture.md) for the full product model and
-[docs/roadmap.md](docs/roadmap.md) for the implementation roadmap.
+[docs/roadmap.md](docs/roadmap.md) for the implementation roadmap. For the
+operator-facing distinction between local all-in-one, HTTP server, and external
+remote client roles, see [ContextForge Runtime Modes](docs/runtime-modes.md).
 
 ## Distillation
 
@@ -1208,26 +1210,34 @@ deleting their history. `distill_checkpoint` returns `memoryCandidateCount`,
 and `session_status` reports `latestCheckpointMemoryCandidateCount`; agents
 should call `list_memory_candidates` when either count is greater than zero.
 
-For agent runtime workflow guidance, use the portable
-[ContextForge Memory skill/guide](docs/skills/contextforge-memory/SKILL.md).
-It is written as an agent-neutral reusable guide for ContextForge MCP startup,
-storage authority, scopes, resume/handoff, session IDs, evidence capture,
-distillation, checkpoint candidates, closeout promotion, correction, and
-embedding maintenance. Agent-specific systems such as Codex skills may install
-or mirror that guide, but the repository copy is the source of truth.
+For agent runtime workflow guidance, use the installed `contextforge-memory`
+skill. It is written as an agent-neutral reusable guide for ContextForge MCP
+startup, storage authority, scopes, resume/handoff, session IDs, evidence
+capture, distillation, checkpoint candidates, closeout promotion, correction,
+and embedding maintenance. The ContextForge repo source package is
+[docs/skills/contextforge-memory/SKILL.md](docs/skills/contextforge-memory/SKILL.md);
+agent-specific systems should install or update that skill through their normal
+runtime skill installer. See
+[Installing The contextforge-memory Skill](docs/skills/contextforge-memory/INSTALL.md).
 
 For copyable prompt or `AGENTS.md` snippets, see
-[ContextForge Agent Instructions](docs/agent-instructions.md). Keep repository
-`AGENTS.md` files short: include only a small ContextForge bootstrap snippet,
-the critical session invariant, and a link to the portable skill/guide instead
-of copying every MCP rule into each project. For loose continuation prompts
-like "yesterday", "continue", "previous work", issue/PR follow-up, or
-cross-agent handoff, agents should call `bootstrap_context` or
-`bootstrapContext` early. The bootstrap response reviews repo-scoped `memory`,
-`checkpoint`, and `memory_candidate` hits as context candidates, optionally
-includes up to three shared-scope hits, then reminds the agent to verify
-current branch, issue/PR, CI, migration, and runtime state against live sources
-before acting.
+[ContextForge Agent Instruction Snippets](docs/agent-instructions.md). For
+rules about what belongs in a repository `AGENTS.md`, see the
+[AGENTS.md Authoring Guide](docs/agents-md-guide.md). Keep repository
+`AGENTS.md` files short: include only the local operating contract, a small
+ContextForge bootstrap snippet, the critical session invariant, and a direction
+to use the installed `contextforge-memory` skill instead of copying every MCP
+rule into each project.
+If a checkout is also a live server or remote client, include a short
+secret-free current runtime section and link to
+[ContextForge Runtime Modes](docs/runtime-modes.md).
+For loose continuation prompts like "yesterday", "continue", "previous work",
+issue/PR follow-up, or cross-agent handoff, agents should call
+`bootstrap_context` or `bootstrapContext` early. The bootstrap response reviews
+repo-scoped `memory`, `checkpoint`, and `memory_candidate` hits as context
+candidates, optionally includes up to three shared-scope hits, then reminds the
+agent to verify current branch, issue/PR, CI, migration, and runtime state
+against live sources before acting.
 
 When resuming a known session, pass `sessionId` to `bootstrap_context` or
 `bootstrapContext`. ContextForge will include the session's latest
