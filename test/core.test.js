@@ -195,6 +195,44 @@ test('dbInfo initializes a fresh SQLite store', async () => {
   assert.match(info.dbPath, /contextforge\.db$/);
 });
 
+test('ContextForgeStore.withTransaction returns results and rolls back on throw', async () => {
+  const dataDir = await makeTempDir();
+  const store = new ContextForgeStore({ dataDir });
+  try {
+    const memory = store.withTransaction(() =>
+      store.rememberMemory({
+        scopeType: 'repo',
+        scopeKey: 'tx-repo',
+        key: 'tx-memory',
+        content: 'Transaction return value survives.',
+      }),
+    );
+
+    assert.equal(memory.key, 'tx-memory');
+    assert.equal(
+      store.getMemory({ scopeType: 'repo', scopeKey: 'tx-repo', key: 'tx-memory' }).content,
+      'Transaction return value survives.',
+    );
+
+    assert.throws(
+      () =>
+        store.withTransaction(() => {
+          store.rememberMemory({
+            scopeType: 'repo',
+            scopeKey: 'tx-repo',
+            key: 'rolled-back-memory',
+            content: 'This should roll back.',
+          });
+          throw new Error('rollback please');
+        }),
+      /rollback please/,
+    );
+    assert.equal(store.getMemory({ scopeType: 'repo', scopeKey: 'tx-repo', key: 'rolled-back-memory' }), null);
+  } finally {
+    store.close();
+  }
+});
+
 test('repo scope key defaults to normalized GitHub origin remote', async () => {
   const cwd = await makeGitRepo();
   const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: path.join(cwd, 'data') }, cwd });

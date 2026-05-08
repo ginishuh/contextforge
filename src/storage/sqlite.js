@@ -242,7 +242,8 @@ export class ContextForgeStore {
     this.db.close();
   }
 
-  transaction(fn) {
+  // Runs fn inside an implicit transaction; rolls back on throw; returns fn's return value.
+  withTransaction(fn) {
     return this.db.transaction(fn)();
   }
 
