@@ -688,7 +688,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
         'Search relevant durable memories, checkpoints, and memory candidates for a user correction; explain the basis for existing knowledge, assess conflicts, and optionally apply safe memory corrections only when explicitly requested. Default mode=propose is read-only unless createUpdateCandidates=true persists review proposals; mode=apply_safe may correct durable memory or reject candidates when the correction is unambiguous.',
       inputSchema: {
         ...scopedSchema,
-        query: z.string(),
+        query: z.string().optional(),
         correction: z.string(),
         mode: z.enum(['propose', 'apply_safe']).optional(),
         sessionId: z.string().optional(),

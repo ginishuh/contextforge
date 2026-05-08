@@ -284,9 +284,7 @@ function resultTextForVerification(result) {
 }
 
 function requiresLiveStateVerification(result) {
-  return /\b(branch\w*|prs?|pull requests?|issues?|ci|checks?|runtimes?|deploy\w*|deployments?|migrations?|migrate\w*|servers?|services?|queues?|status|drafts?|merge\w*|merged|commits?|tags?|releases?|rollbacks?)\b/i.test(
-    resultTextForVerification(result),
-  );
+  return liveStateTermsMatch(resultTextForVerification(result));
 }
 
 function bootstrapTrustForType(type) {
@@ -1014,7 +1012,13 @@ function isLiveStateCorrection(text) {
     /\b(merged?|deployed|released|rolled back|rollback)\s+(to|into|from|on|in)\b/i,
     /\b(ci|check run|github action|workflow run|migration|runtime|deployment|server|service|queue)\s+(failed|passing|passed|running|stopped|down|up|merged|deployed|current|pending)\b/i,
     /\b(alembic|migration|migrations)\s+(current|heads?|upgraded?|downgraded?|applied|pending)\b/i,
-  ].some((pattern) => pattern.test(value));
+  ].some((pattern) => pattern.test(value)) || liveStateTermsMatch(value);
+}
+
+function liveStateTermsMatch(text) {
+  return /(\b(branch\w*|prs?|pull requests?|issues?|ci|checks?|runtimes?|deploy\w*|deployments?|migrations?|migrate\w*|servers?|services?|queues?|status|drafts?|merge\w*|merged|commits?|tags?|releases?|rollbacks?)\b|브랜치|원격|머지|이슈|배포|런타임|마이그레이션|마이그레이트|커밋|릴리즈|롤백|서버|서비스|큐|상태)/i.test(
+    String(text || ''),
+  );
 }
 
 function checkpointTimestamp(checkpoint) {
@@ -2221,8 +2225,8 @@ export function createContextForge(options = {}) {
 
     async reconcileMemory(options = {}) {
       const scope = normalizeScopeOptions(options, config);
-      requireOption(options.query, 'query');
       requireOption(options.correction, 'correction');
+      const baseQuery = options.query || options.correction;
       const mode = options.mode || 'propose';
       if (!['propose', 'apply_safe'].includes(mode)) {
         throw new Error('mode must be propose or apply_safe.');
@@ -2234,14 +2238,14 @@ export function createContextForge(options = {}) {
       );
       const includeShared = truthyOption(options.includeShared);
       const createUpdateCandidates = truthyOption(options.createUpdateCandidates);
-      const reconciliationQuery = `${options.query}\n${options.correction}`;
+      const reconciliationQuery = `${baseQuery}\n${options.correction}`;
       const bootstrap = await this.bootstrapContext({
         ...options,
         query: reconciliationQuery,
         includeShared,
         limit,
       });
-      const liveState = isLiveStateCorrection(`${options.query}\n${options.correction}`);
+      const liveState = isLiveStateCorrection(reconciliationQuery);
       return useStore((store) => {
         const basis = (bootstrap.results || []).slice(0, limit).map(summarizeBasisResult);
         const latestCheckpoint = options.sessionId
@@ -2404,7 +2408,7 @@ export function createContextForge(options = {}) {
                   reason: 'Rejected via reconcile_memory apply_safe after user correction.',
                   metadata: {
                     correction: options.correction,
-                    query: options.query,
+                    query: baseQuery,
                   },
                 });
                 appliedActions.push({
@@ -2438,7 +2442,7 @@ export function createContextForge(options = {}) {
           mode,
           scope: bootstrap.scope,
           storage: bootstrap.storage,
-          query: options.query,
+          query: baseQuery,
           correction: options.correction,
           basis,
           conflicts,

@@ -2633,6 +2633,15 @@ test('distillCheckpoint queues embedding jobs and processEmbeddingJobs indexes t
   assert.equal(checkpointResults[0].checkpoint.id, checkpoint.id);
   assert.equal(checkpointResults[0].retrieval.method, 'vector');
 
+  const bootstrap = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-distill-vector',
+    query: 'checkpoint search',
+  });
+  const bootstrapCheckpoint = bootstrap.results.find((item) => item.type === 'checkpoint');
+  assert.equal(bootstrapCheckpoint.trust, 'credible_recent_handoff');
+  assert.match(bootstrapCheckpoint.whyUse, /Credible recent handoff state/);
+
   const candidateResults = await app.search({
     scope: 'repo',
     scopeKey: 'repo-distill-vector',
@@ -5032,6 +5041,18 @@ test('reconcileMemory proposes by default and apply_safe only changes unambiguou
     sessionId: 'reconcile-session',
   });
 
+  const proposedWithoutQuery = await app.reconcileMemory({
+    scope: 'repo',
+    scopeKey: 'reconcile-repo',
+    sessionId: 'reconcile-session',
+    correction: 'API REST only transport is wrong; the API supports REST and GraphQL.',
+  });
+  assert.equal(
+    proposedWithoutQuery.query,
+    'API REST only transport is wrong; the API supports REST and GraphQL.',
+  );
+  assert.ok(proposedWithoutQuery.basis.some((item) => item.type === 'memory'));
+
   const proposed = await app.reconcileMemory({
     scope: 'repo',
     scopeKey: 'reconcile-repo',
@@ -5124,6 +5145,16 @@ test('reconcileMemory proposes by default and apply_safe only changes unambiguou
   });
   assert.ok(live.warnings.some((warning) => warning.code === 'live_state_verification_required'));
   assert.equal(live.appliedActions.length, 0);
+
+  const koreanLive = await app.reconcileMemory({
+    scope: 'repo',
+    scopeKey: 'reconcile-repo',
+    sessionId: 'reconcile-session',
+    correction: '그 PR 아직 안 머지됐잖아. 이슈 상태랑 원격 브랜치를 확인해야 해.',
+    mode: 'apply_safe',
+  });
+  assert.ok(koreanLive.warnings.some((warning) => warning.code === 'live_state_verification_required'));
+  assert.equal(koreanLive.appliedActions.length, 0);
 });
 
 test('memory update candidates can be rejected without mutating memory', async () => {
@@ -5577,6 +5608,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.ok(autoPromoteTool.inputSchema.properties.allowedCategories);
     const reconcileTool = toolList.tools.find((tool) => tool.name === 'reconcile_memory');
     assert.ok(reconcileTool.inputSchema.properties.correction);
+    assert.ok(!reconcileTool.inputSchema.required?.includes('query'));
     assert.ok(reconcileTool.inputSchema.properties.mode);
     assert.ok(reconcileTool.inputSchema.properties.createUpdateCandidates);
     const appendRawTool = toolList.tools.find((tool) => tool.name === 'append_raw');

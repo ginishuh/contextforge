@@ -129,9 +129,10 @@ github.com/example/repo unless the user says otherwise. Include shared scope
 only for user-wide policy, deployment, credential-location, or cross-repo
 conventions.
 
-Interpret search result types by trust level:
+Interpret search result types by trust role:
 - memory: reviewed durable fact or decision.
-- checkpoint: recent session continuity; verify important claims before acting.
+- checkpoint: credible recent handoff state for continuity and planning; verify
+  mutable live state before acting.
 - memory_candidate: unreviewed promotion candidate and review material.
 
 For loose continuation prompts such as "yesterday", "continue", "previous
@@ -343,8 +344,9 @@ it.
 
 ## Checkpoints And Candidates
 
-Checkpoints are recent continuity. They are useful for handoff, but they are
-not canonical truth.
+Checkpoints are credible recent handoff state. Use them actively for
+continuity, planning, prior intent, recent decisions, and unfinished work, while
+verifying mutable live state separately.
 
 Good checkpoints are compressed retrieval indexes, not generic summaries. They
 should preserve the names, numbers, intervals, commands, paths, APIs, error
