@@ -1510,6 +1510,17 @@ export function createContextForge(options = {}) {
       );
     },
 
+    listPreferenceOccurrences(options) {
+      const scope = normalizeScopeOptions(options, config);
+      return useStore((store) =>
+        store.listPreferenceOccurrences({
+          ...scope,
+          status: options.status || null,
+          limit: options.limit == null ? null : Number(options.limit),
+        }),
+      );
+    },
+
     async suggestMemoryPromotions(options = {}) {
       const scope = normalizeScopeOptions(options, config);
       const trigger = options.trigger;
@@ -1871,7 +1882,7 @@ export function createContextForge(options = {}) {
             reason: 'User correction conflicts with existing durable memory.',
           })),
           ...candidateBasis.map((item) => ({
-            action: 'reject_memory_candidate',
+            action: item.category === 'preference' ? 'reject_memory_candidate_and_weaken_preference_occurrence' : 'reject_memory_candidate',
             candidateId: item.candidateId,
             reason: 'User correction indicates this candidate should not become durable truth.',
           })),
@@ -1957,6 +1968,23 @@ export function createContextForge(options = {}) {
                   action: 'reject_memory_candidate',
                   candidateId: rejected.id,
                 });
+                if (candidate.candidate?.category === 'preference' || candidate.candidate?.candidateType === 'preference') {
+                  const weakened = store.weakenPreferenceOccurrenceForCandidate({
+                    ...scope,
+                    candidateId: item.candidateId,
+                    correction: options.correction,
+                    reason: 'Weakened via reconcile_memory apply_safe after user correction.',
+                  });
+                  if (weakened) {
+                    appliedActions.push({
+                      action: 'weaken_preference_occurrence',
+                      occurrenceId: weakened.id,
+                      mergeKey: weakened.mergeKey,
+                      negativeCount: weakened.negativeCount,
+                      status: weakened.status,
+                    });
+                  }
+                }
               }
             }
           }

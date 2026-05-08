@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 
 function nowIso() {
   return new Date().toISOString();
@@ -203,6 +203,33 @@ function hydrateMemoryCandidate(row) {
   };
 }
 
+function hydratePreferenceOccurrence(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    scopeType: row.scope_type,
+    scopeKey: row.scope_key,
+    mergeKey: row.merge_key,
+    preferenceKey: row.preference_key,
+    content: row.content,
+    category: row.category,
+    occurrenceCount: row.occurrence_count,
+    negativeCount: row.negative_count,
+    confidence: row.confidence,
+    stability: row.stability,
+    status: row.status,
+    candidateIds: parseJson(row.candidate_ids_json, []),
+    sessionIds: parseJson(row.session_ids_json, []),
+    checkpointIds: parseJson(row.checkpoint_ids_json, []),
+    sourceEventIds: parseJson(row.source_event_ids_json, []),
+    lastCorrection: row.last_correction,
+    reviewReason: row.review_reason,
+    metadata: parseJson(row.metadata_json, {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 function ftsValue(value) {
   return String(value || '').replace(/\0/g, ' ');
 }
@@ -213,6 +240,27 @@ function normalizeTags(tags) {
 
 function contentHash(value) {
   return createHash('sha256').update(String(value || '')).digest('hex');
+}
+
+function normalizePreferenceText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function preferenceMergeKey(candidate) {
+  const key = normalizePreferenceText(candidate.key);
+  if (key) {
+    return `key:${key}`;
+  }
+  return `content:${contentHash(normalizePreferenceText(candidate.content))}`;
+}
+
+function isPreferenceCandidate(candidate) {
+  return [candidate.category, candidate.candidateType].some(
+    (value) => normalizePreferenceText(value) === 'preference',
+  );
 }
 
 function validateDimensions(dimensions) {
@@ -243,6 +291,10 @@ function normalizeCandidate(candidate) {
 
 function normalizeStringList(value) {
   return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : [];
+}
+
+function appendUniqueStrings(existing, additions) {
+  return Array.from(new Set([...normalizeStringList(existing), ...normalizeStringList(additions)]));
 }
 
 function normalizeConfidence(value) {
@@ -456,6 +508,31 @@ export class ContextForgeStore {
         FOREIGN KEY (promoted_memory_id) REFERENCES memories(id) ON DELETE SET NULL
       );
 
+      CREATE TABLE IF NOT EXISTS preference_occurrences (
+        id TEXT PRIMARY KEY,
+        scope_type TEXT NOT NULL CHECK (scope_type IN ('shared', 'repo', 'local')),
+        scope_key TEXT NOT NULL,
+        merge_key TEXT NOT NULL,
+        preference_key TEXT NOT NULL DEFAULT '',
+        content TEXT NOT NULL,
+        category TEXT NOT NULL DEFAULT 'preference',
+        occurrence_count INTEGER NOT NULL DEFAULT 0,
+        negative_count INTEGER NOT NULL DEFAULT 0,
+        confidence REAL,
+        stability REAL,
+        status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'weakened', 'superseded', 'rejected')),
+        candidate_ids_json TEXT NOT NULL DEFAULT '[]',
+        session_ids_json TEXT NOT NULL DEFAULT '[]',
+        checkpoint_ids_json TEXT NOT NULL DEFAULT '[]',
+        source_event_ids_json TEXT NOT NULL DEFAULT '[]',
+        last_correction TEXT,
+        review_reason TEXT,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (scope_type, scope_key, merge_key)
+      );
+
       CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
         memory_id UNINDEXED,
         scope_type UNINDEXED,
@@ -482,6 +559,8 @@ export class ContextForgeStore {
         ON memory_candidate_index(scope_type, scope_key, status, created_at);
       CREATE INDEX IF NOT EXISTS idx_memory_candidate_checkpoint
         ON memory_candidate_index(checkpoint_id, candidate_index);
+      CREATE INDEX IF NOT EXISTS idx_preference_occurrences_scope
+        ON preference_occurrences(scope_type, scope_key, status, updated_at);
     `);
 
     this.ensureColumn('checkpoints', 'distill_run_id', 'TEXT');
@@ -502,7 +581,12 @@ export class ContextForgeStore {
     this.ensureColumn('memory_candidate_index', 'sensitivity', 'TEXT');
     this.ensureColumn('memory_candidate_index', 'promotion_recommendation', 'TEXT');
     this.ensureColumn('memory_candidate_index', 'source_event_ids_json', "TEXT NOT NULL DEFAULT '[]'");
+    this.ensureColumn('preference_occurrences', 'negative_count', 'INTEGER NOT NULL DEFAULT 0');
+    this.ensureColumn('preference_occurrences', 'last_correction', 'TEXT');
+    this.ensureColumn('preference_occurrences', 'review_reason', 'TEXT');
+    this.ensureColumn('preference_occurrences', 'metadata_json', "TEXT NOT NULL DEFAULT '{}'");
     this.backfillMemoryCandidateIndexOnce();
+    this.backfillPreferenceOccurrencesOnce();
     this.ensureMemoryFts();
 
     this.db
@@ -537,6 +621,7 @@ export class ContextForgeStore {
         sessionWorkingContexts: count('session_working_context'),
         memoryEvents: count('memory_events'),
         memoryCandidates: count('memory_candidate_index'),
+        preferenceOccurrences: count('preference_occurrences'),
         embeddings: embeddingIndexExists ? count('embedding_index') : 0,
       },
       vector: {
@@ -957,6 +1042,52 @@ export class ContextForgeStore {
       .run(nowIso());
   }
 
+  backfillPreferenceOccurrencesOnce() {
+    const completed = this.db
+      .prepare("SELECT value FROM schema_meta WHERE key = 'preference_occurrences_backfill_completed_at'")
+      .get();
+    if (completed?.value) {
+      return;
+    }
+    const rows = this.db
+      .prepare(`
+        SELECT
+          memory_candidate_index.*,
+          checkpoints.created_at AS checkpoint_created_at
+        FROM memory_candidate_index
+        JOIN checkpoints ON checkpoints.id = memory_candidate_index.checkpoint_id
+        WHERE memory_candidate_index.category = 'preference'
+           OR memory_candidate_index.candidate_type = 'preference'
+        ORDER BY memory_candidate_index.created_at ASC, memory_candidate_index.id ASC
+      `)
+      .all();
+    for (const row of rows) {
+      const indexedCandidate = hydrateMemoryCandidate(row);
+      if (!indexedCandidate || !isPreferenceCandidate(indexedCandidate.candidate)) {
+        continue;
+      }
+      this.upsertPreferenceOccurrenceForCandidate({
+        checkpoint: {
+          id: indexedCandidate.checkpointId,
+          scopeType: indexedCandidate.scopeType,
+          scopeKey: indexedCandidate.scopeKey,
+          sessionId: indexedCandidate.sessionId,
+          conversationId: indexedCandidate.conversationId,
+          createdAt: indexedCandidate.source.checkpointCreatedAt,
+        },
+        candidate: indexedCandidate.candidate,
+        candidateId: indexedCandidate.id,
+      });
+    }
+    this.db
+      .prepare(`
+        INSERT INTO schema_meta (key, value)
+        VALUES ('preference_occurrences_backfill_completed_at', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+      `)
+      .run(nowIso());
+  }
+
   indexMemoryCandidatesForCheckpoint(checkpoint) {
     const candidates = Array.isArray(checkpoint?.metadata?.memoryCandidates)
       ? checkpoint.metadata.memoryCandidates
@@ -978,8 +1109,9 @@ export class ContextForgeStore {
 
     for (const [index, rawCandidate] of candidates.entries()) {
       const candidate = normalizeCandidate(rawCandidate);
-      insert.run(
-        randomUUID(),
+      const candidateId = randomUUID();
+      const inserted = insert.run(
+        candidateId,
         checkpoint.id,
         checkpoint.sessionId,
         checkpoint.conversationId,
@@ -1000,12 +1132,114 @@ export class ContextForgeStore {
         json(candidate.sourceEventIds, []),
         checkpoint.createdAt,
       );
+      if (inserted.changes > 0 && isPreferenceCandidate(candidate)) {
+        this.upsertPreferenceOccurrenceForCandidate({
+          checkpoint,
+          candidate,
+          candidateId,
+        });
+      }
     }
     return this.listMemoryCandidates({
       scopeType: checkpoint.scopeType,
       scopeKey: checkpoint.scopeKey,
       checkpointId: checkpoint.id,
     });
+  }
+
+  upsertPreferenceOccurrenceForCandidate({ checkpoint, candidate, candidateId }) {
+    const timestamp = nowIso();
+    const mergeKey = preferenceMergeKey(candidate);
+    const existing = this.db
+      .prepare(
+        `SELECT * FROM preference_occurrences
+         WHERE scope_type = ? AND scope_key = ? AND merge_key = ?`,
+      )
+      .get(checkpoint.scopeType, checkpoint.scopeKey, mergeKey);
+    if (!existing) {
+      this.db
+        .prepare(`
+          INSERT INTO preference_occurrences (
+            id, scope_type, scope_key, merge_key, preference_key, content, category,
+            occurrence_count, negative_count, confidence, stability, status,
+            candidate_ids_json, session_ids_json, checkpoint_ids_json, source_event_ids_json,
+            metadata_json, created_at, updated_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)
+        `)
+        .run(
+          randomUUID(),
+          checkpoint.scopeType,
+          checkpoint.scopeKey,
+          mergeKey,
+          candidate.key,
+          candidate.content,
+          candidate.category || 'preference',
+          candidate.confidence,
+          candidate.stability,
+          json([candidateId], []),
+          json([checkpoint.sessionId], []),
+          json([checkpoint.id], []),
+          json(candidate.sourceEventIds, []),
+          json(
+            {
+              latestReason: candidate.reason || null,
+              latestCandidateType: candidate.candidateType || null,
+              latestPromotionRecommendation: candidate.promotionRecommendation || null,
+            },
+            {},
+          ),
+          timestamp,
+          timestamp,
+        );
+      return this.getPreferenceOccurrence({ scopeType: checkpoint.scopeType, scopeKey: checkpoint.scopeKey, mergeKey });
+    }
+
+    const occurrenceCount = appendUniqueStrings(parseJson(existing.candidate_ids_json, []), [candidateId]).length;
+    const status = existing.status === 'rejected' ? 'weakened' : existing.status;
+    this.db
+      .prepare(`
+        UPDATE preference_occurrences
+        SET preference_key = COALESCE(NULLIF(?, ''), preference_key),
+            content = ?,
+            category = ?,
+            occurrence_count = ?,
+            confidence = MAX(COALESCE(confidence, 0), COALESCE(?, 0)),
+            stability = MAX(COALESCE(stability, 0), COALESCE(?, 0)),
+            status = ?,
+            candidate_ids_json = ?,
+            session_ids_json = ?,
+            checkpoint_ids_json = ?,
+            source_event_ids_json = ?,
+            metadata_json = ?,
+            updated_at = ?
+        WHERE id = ?
+      `)
+      .run(
+        candidate.key,
+        candidate.content,
+        candidate.category || existing.category || 'preference',
+        occurrenceCount,
+        candidate.confidence,
+        candidate.stability,
+        status,
+        json(appendUniqueStrings(parseJson(existing.candidate_ids_json, []), [candidateId]), []),
+        json(appendUniqueStrings(parseJson(existing.session_ids_json, []), [checkpoint.sessionId]), []),
+        json(appendUniqueStrings(parseJson(existing.checkpoint_ids_json, []), [checkpoint.id]), []),
+        json(appendUniqueStrings(parseJson(existing.source_event_ids_json, []), candidate.sourceEventIds), []),
+        json(
+          {
+            ...parseJson(existing.metadata_json, {}),
+            latestReason: candidate.reason || null,
+            latestCandidateType: candidate.candidateType || null,
+            latestPromotionRecommendation: candidate.promotionRecommendation || null,
+          },
+          {},
+        ),
+        timestamp,
+        existing.id,
+      );
+    return this.getPreferenceOccurrence({ scopeType: checkpoint.scopeType, scopeKey: checkpoint.scopeKey, mergeKey });
   }
 
   pruneRawEventsOlderThan(cutoffIso) {
@@ -1577,6 +1811,78 @@ export class ContextForgeStore {
       `)
       .all(...values)
       .map(hydrateMemoryCandidate);
+  }
+
+  getPreferenceOccurrence({ scopeType, scopeKey, mergeKey = null, candidateId = null }) {
+    if (candidateId) {
+      const row = this.db
+        .prepare(`
+          SELECT * FROM preference_occurrences
+          WHERE scope_type = ?
+            AND scope_key = ?
+            AND EXISTS (
+              SELECT 1 FROM json_each(preference_occurrences.candidate_ids_json)
+              WHERE json_each.value = ?
+            )
+          ORDER BY updated_at DESC
+          LIMIT 1
+        `)
+        .get(scopeType, scopeKey, candidateId);
+      return hydratePreferenceOccurrence(row);
+    }
+    if (!mergeKey) {
+      throw new Error('mergeKey or candidateId is required.');
+    }
+    const row = this.db
+      .prepare(`
+        SELECT * FROM preference_occurrences
+        WHERE scope_type = ? AND scope_key = ? AND merge_key = ?
+      `)
+      .get(scopeType, scopeKey, mergeKey);
+    return hydratePreferenceOccurrence(row);
+  }
+
+  listPreferenceOccurrences({ scopeType, scopeKey, status = null, limit = null }) {
+    const conditions = ['scope_type = ?', 'scope_key = ?'];
+    const values = [scopeType, scopeKey];
+    if (status) {
+      conditions.push('status = ?');
+      values.push(status);
+    }
+    const parsedLimit = limit == null ? null : Number(limit);
+    const limitClause = Number.isInteger(parsedLimit) && parsedLimit > 0 ? 'LIMIT ?' : '';
+    if (limitClause) {
+      values.push(parsedLimit);
+    }
+    return this.db
+      .prepare(`
+        SELECT * FROM preference_occurrences
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY occurrence_count DESC, updated_at DESC, id DESC
+        ${limitClause}
+      `)
+      .all(...values)
+      .map(hydratePreferenceOccurrence);
+  }
+
+  weakenPreferenceOccurrenceForCandidate({ scopeType, scopeKey, candidateId, correction = null, reason = null }) {
+    const existing = this.getPreferenceOccurrence({ scopeType, scopeKey, candidateId });
+    if (!existing) {
+      return null;
+    }
+    const updatedAt = nowIso();
+    this.db
+      .prepare(`
+        UPDATE preference_occurrences
+        SET negative_count = negative_count + 1,
+            status = CASE status WHEN 'rejected' THEN 'rejected' ELSE 'weakened' END,
+            last_correction = ?,
+            review_reason = ?,
+            updated_at = ?
+        WHERE id = ?
+      `)
+      .run(correction, reason, updatedAt, existing.id);
+    return this.getPreferenceOccurrence({ scopeType, scopeKey, mergeKey: existing.mergeKey });
   }
 
   getMemoryCandidate({ scopeType, scopeKey, candidateId }) {
