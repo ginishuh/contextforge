@@ -53,8 +53,8 @@ Single-machine home-directory mode.
 Repo-bound storage in a gitignored directory.
 
 - useful when memory should stay near one checkout
-- default v0 path: `.contextforge/`
-- default v0 storage mode
+- default path: `.contextforge/`
+- default storage mode
 - live DB files must not be committed
 
 ### Remote
@@ -77,7 +77,7 @@ can hold source, docs, migrations, example exports, and reviewed snapshots.
 
 ### Remote Client/Server Boundary
 
-The v0 remote boundary is intentionally narrow:
+The remote boundary is intentionally narrow:
 
 - the client keeps no canonical SQLite database when `storageMode=remote`
 - the client sends JSON requests to `/v0/<method>`
