@@ -703,42 +703,86 @@ function autoPromotionWouldPromote(indexedCandidate, warnings, rank) {
   };
 }
 
-function autoPromoteIndexedCandidate(store, scope, indexedCandidate, warnings, reason) {
-  const candidate = indexedCandidate.candidate || {};
+function promoteCandidateToMemory(
+  store,
+  scope,
+  {
+    candidate,
+    checkpointId,
+    sessionId,
+    candidateIndex,
+    indexedCandidate = null,
+    key,
+    content,
+    category,
+    tags,
+    importance,
+    reason = null,
+    warnings = [],
+    sourceRawEventIds = [],
+    allowStatusOverride = false,
+    eventMetadata = {},
+    reviewMetadata = {},
+  },
+) {
   return store.withTransaction(() => {
     const memory = store.rememberMemory({
       ...scope,
-      key: candidate.key,
-      content: candidate.content,
-      category: candidate.category || 'note',
-      tags: candidate.tags || [],
-      importance: candidate.importance ?? 0,
+      key,
+      content,
+      category,
+      tags,
+      importance,
       eventType: 'promote',
       eventMetadata: {
-        sourceCheckpointId: indexedCandidate.checkpointId,
-        sourceSessionId: indexedCandidate.sessionId,
-        sourceCandidateIndex: indexedCandidate.index,
-        sourceCandidateId: indexedCandidate.id,
+        sourceCheckpointId: checkpointId,
+        sourceSessionId: sessionId,
+        sourceCandidateIndex: candidateIndex,
+        sourceCandidateId: indexedCandidate?.id || null,
+        sourceRawEventIds,
         candidateSourceEventIds: candidate.sourceEventIds || [],
         promotionWarnings: warnings,
         reason,
-        autoPromoted: true,
+        ...eventMetadata,
       },
     });
-    store.markMemoryCandidateReviewed({
-      ...scope,
-      candidateId: indexedCandidate.id,
-      status: 'promoted',
-      reason,
-      promotedMemoryId: memory.id,
-      metadata: {
-        memoryKey: memory.key,
-        memoryId: memory.id,
-        promotionWarnings: warnings,
-        autoPromoted: true,
-      },
-    });
+    if (indexedCandidate) {
+      store.markMemoryCandidateReviewed({
+        ...scope,
+        candidateId: indexedCandidate.id,
+        status: 'promoted',
+        reason,
+        promotedMemoryId: memory.id,
+        allowStatusOverride,
+        metadata: {
+          memoryKey: memory.key,
+          memoryId: memory.id,
+          promotionWarnings: warnings,
+          ...reviewMetadata,
+        },
+      });
+    }
     return memory;
+  });
+}
+
+function autoPromoteIndexedCandidate(store, scope, indexedCandidate, warnings, reason) {
+  const candidate = indexedCandidate.candidate || {};
+  return promoteCandidateToMemory(store, scope, {
+    candidate,
+    checkpointId: indexedCandidate.checkpointId,
+    sessionId: indexedCandidate.sessionId,
+    candidateIndex: indexedCandidate.index,
+    indexedCandidate,
+    key: candidate.key,
+    content: candidate.content,
+    category: candidate.category || 'note',
+    tags: candidate.tags || [],
+    importance: candidate.importance ?? 0,
+    reason,
+    warnings,
+    eventMetadata: { autoPromoted: true },
+    reviewMetadata: { autoPromoted: true },
   });
 }
 
@@ -1945,41 +1989,22 @@ export function createContextForge(options = {}) {
           error.warnings = warnings;
           throw error;
         }
-        const memory = store.rememberMemory({
-          ...scope,
+        return promoteCandidateToMemory(store, scope, {
+          candidate,
+          checkpointId: checkpoint.id,
+          sessionId: checkpoint.sessionId,
+          candidateIndex,
+          indexedCandidate,
           key,
           content,
           category: options.category || candidate.category || 'note',
           tags: options.tags?.length ? options.tags : candidate.tags || [],
           importance: options.importance == null ? candidate.importance || 0 : options.importance,
-          eventType: 'promote',
-          eventMetadata: {
-            sourceCheckpointId: checkpoint.id,
-            sourceSessionId: checkpoint.sessionId,
-            sourceCandidateIndex: candidateIndex,
-            sourceCandidateId: indexedCandidate?.id || null,
-            sourceRawEventIds: options.sourceRawEventIds || [],
-            candidateSourceEventIds: candidate.sourceEventIds || [],
-            promotionWarnings: warnings,
-            reason: options.reason || null,
-          },
+          reason: options.reason || null,
+          warnings,
+          sourceRawEventIds: options.sourceRawEventIds || [],
+          allowStatusOverride: truthyOption(options.allowStatusOverride),
         });
-        if (indexedCandidate) {
-          store.markMemoryCandidateReviewed({
-            ...scope,
-            candidateId: indexedCandidate.id,
-            status: 'promoted',
-            reason: options.reason || null,
-            promotedMemoryId: memory.id,
-            allowStatusOverride: truthyOption(options.allowStatusOverride),
-            metadata: {
-              memoryKey: memory.key,
-              memoryId: memory.id,
-              promotionWarnings: warnings,
-            },
-          });
-        }
-        return memory;
       });
     },
 

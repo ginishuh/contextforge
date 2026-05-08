@@ -4540,7 +4540,17 @@ test('autoPromoteMemoryCandidates promotes only strict safe candidates when enab
   assert.ok(result.skipped.some((item) => item.reason.includes('auto_low_confidence')));
   assert.equal(app.getMemory({ scope: 'repo', scopeKey: 'auto-enabled-repo', key: 'safe-api-contract' }).status, 'active');
   assert.equal(app.getMemory({ scope: 'repo', scopeKey: 'auto-enabled-repo', key: 'user-pref' }), null);
-  assert.equal(app.listMemoryCandidates({ scope: 'repo', scopeKey: 'auto-enabled-repo', status: 'promoted' }).length, 1);
+  const promotedCandidates = app.listMemoryCandidates({ scope: 'repo', scopeKey: 'auto-enabled-repo', status: 'promoted' });
+  assert.equal(promotedCandidates.length, 1);
+  assert.equal(promotedCandidates[0].reviewMetadata.autoPromoted, true);
+  assert.equal(promotedCandidates[0].reviewMetadata.memoryId, result.promoted[0].memoryId);
+  const autoEvents = app.listMemoryEvents({
+    scope: 'repo',
+    scopeKey: 'auto-enabled-repo',
+    key: 'safe-api-contract',
+  });
+  assert.equal(autoEvents[0].metadata.sourceCandidateId, promotedCandidates[0].id);
+  assert.equal(autoEvents[0].metadata.autoPromoted, true);
 });
 
 test('reconcileMemory proposes by default and apply_safe only changes unambiguous non-live memory', async () => {
