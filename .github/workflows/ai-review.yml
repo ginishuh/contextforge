@@ -1,0 +1,36 @@
+name: AI Mention PR Review
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: ai-mention-review-${{ github.event.issue.number }}-${{ github.event.comment.id }}
+  cancel-in-progress: false
+
+jobs:
+  review:
+    if: >-
+      github.event.issue.pull_request != null &&
+      github.event.comment.author_association == 'OWNER' &&
+      (
+        contains(github.event.comment.body, '@claude') ||
+        contains(github.event.comment.body, '@opencode')
+      )
+    uses: ginishuh/personal-review-machines/.github/workflows/mention-pr-review.yml@main
+    with:
+      pr_number: ${{ github.event.issue.number }}
+      comment_body: ${{ github.event.comment.body }}
+      comment_id: ${{ github.event.comment.id }}
+      comment_author_association: ${{ github.event.comment.author_association }}
+      language: Korean
+      review_level: standard
+    secrets:
+      anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+      claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      zai_api_key: ${{ secrets.ZAI_API_KEY }}
