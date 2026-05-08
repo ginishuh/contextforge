@@ -53,6 +53,17 @@ export function validateDistillOutput(output) {
     );
   }
 
+  if (
+    output.sessionWorkingContext != null &&
+    (typeof output.sessionWorkingContext !== 'object' || Array.isArray(output.sessionWorkingContext))
+  ) {
+    throw new Error(
+      `Provider output field "sessionWorkingContext" must be an object when present; received ${receivedType(
+        output.sessionWorkingContext,
+      )}.`,
+    );
+  }
+
   return {
     summaryShort: output.summaryShort,
     summaryText: output.summaryText,
@@ -64,6 +75,7 @@ export function validateDistillOutput(output) {
         ? output.workingSummary
         : output.summaryText,
     memoryCandidates: output.memoryCandidates,
+    sessionWorkingContext: output.sessionWorkingContext || null,
     sourceEventCount: output.sourceEventCount,
     provider: output.provider,
     metadata: output.metadata || {},

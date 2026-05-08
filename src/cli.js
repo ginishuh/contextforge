@@ -129,6 +129,26 @@ function toCoreOptions(options) {
     iterations: options.iterations == null ? undefined : Number(options.iterations),
     charsPerToken: options.charsPerToken == null ? undefined : Number(options.charsPerToken),
     rawTailLimit: options.rawTailLimit == null ? undefined : Number(options.rawTailLimit),
+    mode: options.mode,
+    currentTask: options.currentTask,
+    currentUserIntent: options.currentUserIntent,
+    targetSubject: options.targetSubject,
+    sourceSubject: options.sourceSubject,
+    lastUserCorrection: options.lastUserCorrection,
+    openQuestion: options.openQuestion,
+    nonGoals: options.nonGoals
+      ? String(options.nonGoals)
+          .split(',')
+          .map((item) => item.trim())
+          .filter(Boolean)
+      : undefined,
+    avoidMisreadings: options.avoidMisreadings
+      ? String(options.avoidMisreadings)
+          .split(',')
+          .map((item) => item.trim())
+          .filter(Boolean)
+      : undefined,
+    confidence: options.confidence == null ? undefined : Number(options.confidence),
     batchSize: options.batchSize == null ? undefined : Number(options.batchSize),
     force: options.force === true || options.force === 'true',
   };
@@ -161,6 +181,8 @@ async function main() {
     appendRaw: (app, coreOptions) => app.appendRaw(coreOptions),
     listRawEvents: (app, coreOptions) => app.listRawEvents(coreOptions),
     getWorkingSummary: (app, coreOptions) => app.getWorkingSummary(coreOptions),
+    getSessionWorkingContext: (app, coreOptions) => app.getSessionWorkingContext(coreOptions),
+    upsertSessionWorkingContext: (app, coreOptions) => app.upsertSessionWorkingContext(coreOptions),
     pruneRawEvents: (app, coreOptions) => app.pruneRawEvents(coreOptions),
     distillCheckpoint: (app, coreOptions) => app.distillCheckpoint(coreOptions),
     listDistillRuns: (app, coreOptions) => app.listDistillRuns(coreOptions),

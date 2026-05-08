@@ -192,8 +192,9 @@ trust levels.
 5. If resuming a known session, call `session_status` for that `sessionId` to
    inspect recent checkpoint state.
 6. If the task needs live handoff state, pass `sessionId` to
-   `bootstrap_context` or call `get_working_summary`. Treat the returned
-   working summary as current session state, not durable truth.
+   `bootstrap_context` or call `get_working_summary` and
+   `get_session_working_context`. Treat returned working state as current
+   session state, not durable truth.
 7. If the task depends on recent handoff state, call `sync_resume_context` when
    available. Treat checkpoints as credible recent handoff state and memory
    candidates as review material only. Do not propose promotions during resume
@@ -471,7 +472,8 @@ Prefer distilling at meaningful boundaries:
   repo memory/checkpoints/candidates semantically, optionally includes up to
   three shared-scope results, and annotates trust plus verification hints.
 - `sync_resume_context`: build a start/resume handoff package. Checkpoints are
-  credible recent handoff state; candidates are review material only.
+  credible recent handoff state; structured working context is mutable session
+  state; candidates are review material only.
 - `search`: retrieve scoped results. Results can include reviewed durable
   `memory`, recent-continuity `checkpoint`, and unreviewed
   `memory_candidate` records.
@@ -484,6 +486,11 @@ Prefer distilling at meaningful boundaries:
   distillation and debugging. Tool output is evidence, not conversation memory;
   keep tool-call/tool-result payloads in the native agent transcript or an
   explicit artifact, and distill the assistant-interpreted verification facts.
+- `get_working_summary`: fetch the rolling summary for one session.
+- `get_session_working_context`: fetch structured mutable task state for one
+  session.
+- `upsert_session_working_context`: create or update structured mutable task
+  state for a session. This is not durable memory.
 - `session_status`: inspect raw/checkpoint thresholds before distilling.
 - `distill_checkpoint`: create a recent-continuity checkpoint.
 - `distill_usage`: summarize distillation run counts, selected input size,

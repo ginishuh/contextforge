@@ -233,6 +233,55 @@ test('ContextForgeStore.withTransaction returns results and rolls back on throw'
   }
 });
 
+test('session working context is mutable scoped session state', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+
+  const context = app.upsertSessionWorkingContext({
+    scope: 'repo',
+    scopeKey: 'working-context-repo',
+    sessionId: 'working-context-session',
+    currentTask: 'Implement structured resume handoff.',
+    currentUserIntent: 'Continue design follow-up work.',
+    targetSubject: 'session_working_context',
+    nonGoals: ['durable memory promotion'],
+    avoidMisreadings: ['structured context is canonical memory'],
+    confidence: 0.8,
+  });
+
+  assert.equal(context.scopeType, 'repo');
+  assert.equal(context.scopeKey, 'working-context-repo');
+  assert.equal(context.mode, 'task_execution');
+  assert.equal(context.currentTask, 'Implement structured resume handoff.');
+  assert.deepEqual(context.nonGoals, ['durable memory promotion']);
+  assert.deepEqual(context.avoidMisreadings, ['structured context is canonical memory']);
+  assert.equal(context.confidence, 0.8);
+
+  app.upsertSessionWorkingContext({
+    scope: 'repo',
+    scopeKey: 'working-context-repo',
+    sessionId: 'working-context-session',
+    currentTask: 'Update structured resume handoff tests.',
+    confidence: 2,
+  });
+
+  const updated = app.getSessionWorkingContext({
+    scope: 'repo',
+    scopeKey: 'working-context-repo',
+    sessionId: 'working-context-session',
+  });
+  assert.equal(updated.id, context.id);
+  assert.equal(updated.currentTask, 'Update structured resume handoff tests.');
+  assert.equal(updated.confidence, 1);
+
+  const otherSession = app.getSessionWorkingContext({
+    scope: 'repo',
+    scopeKey: 'working-context-repo',
+    sessionId: 'other-session',
+  });
+  assert.equal(otherSession, null);
+});
+
 test('repo scope key defaults to normalized GitHub origin remote', async () => {
   const cwd = await makeGitRepo();
   const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: path.join(cwd, 'data') }, cwd });
@@ -3647,8 +3696,8 @@ test('codex_exec provider distills synthetic raw events through a runner', async
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.model, 'gpt-test');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.reasoningEffort, 'low');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.timeoutMs, 1234);
-  assert.equal(checkpoint.metadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v5');
-  assert.equal(checkpoint.metadata.providerMetadata.codexExec.outputSchemaVersion, 'contextforge.checkpoint.v4');
+  assert.equal(checkpoint.metadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v6');
+  assert.equal(checkpoint.metadata.providerMetadata.codexExec.outputSchemaVersion, 'contextforge.checkpoint.v5');
   assert.match(invocation.prompt, /Return exactly one JSON object/);
   assert.deepEqual(invocation.args.slice(0, 2), ['exec', '--skip-git-repo-check']);
   assert.ok(invocation.args.includes('--output-schema'));
@@ -3658,6 +3707,7 @@ test('codex_exec provider distills synthetic raw events through a runner', async
   assert.equal(invocation.timeoutMs, 1234);
   const candidateSchema = schema.properties.memoryCandidates.items;
   assert.deepEqual(candidateSchema.required, Object.keys(candidateSchema.properties));
+  assert.ok(schema.properties.sessionWorkingContext);
   assert.deepEqual(schema.properties.metadata.required, ['providerNotes', 'retrievalHooks']);
 
   const runs = app.listDistillRuns({
@@ -3666,9 +3716,9 @@ test('codex_exec provider distills synthetic raw events through a runner', async
     sessionId: 'codex-session',
   });
   assert.equal(runs[0].status, 'succeeded');
-  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v5');
-  assert.equal(runs[0].inputMetadata.providerMetadata.outputSchemaVersion, 'contextforge.checkpoint.v4');
-  assert.equal(runs[0].outputMetadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v5');
+  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v6');
+  assert.equal(runs[0].inputMetadata.providerMetadata.outputSchemaVersion, 'contextforge.checkpoint.v5');
+  assert.equal(runs[0].outputMetadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v6');
 });
 
 test('codex_exec records JSON brace fallback recovery metadata', async () => {
@@ -3872,8 +3922,8 @@ test('codex_exec parse failures preserve raw evidence', async () => {
   });
   assert.equal(runs[0].status, 'failed');
   assert.equal(runs[0].outputMetadata.providerFailed, true);
-  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v5');
-  assert.equal(runs[0].outputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v5');
+  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v6');
+  assert.equal(runs[0].outputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v6');
 });
 
 test('bootstrapContext returns semantic retrieval with trust and verification hints', async () => {
@@ -4002,6 +4052,15 @@ test('syncResumeContext returns handoff context without promotion proposals', as
         decisions: ['Use checkpoint handoff for prior intent.'],
         todos: ['Verify CI before acting.'],
         openQuestions: [],
+        sessionWorkingContext: {
+          currentTask: 'Continue usage observability closeout verification.',
+          currentUserIntent: 'Resume unfinished PR verification without proposing memory promotions.',
+          targetSubject: 'usage observability',
+          openQuestion: 'Has CI passed on the latest PR commit?',
+          nonGoals: ['memory promotion review during resume'],
+          avoidMisreadings: ['checkpoint is weak memory'],
+          confidence: 0.82,
+        },
         memoryCandidates: [
           {
             key: 'resume-candidate-runbook',
@@ -4046,6 +4105,10 @@ test('syncResumeContext returns handoff context without promotion proposals', as
   });
 
   assert.equal(result.kind, 'resume_context');
+  assert.equal(result.handoff.structuredWorkingContext.type, 'session_working_context');
+  assert.equal(result.handoff.structuredWorkingContext.trust, 'mutable_session_state');
+  assert.match(result.handoff.structuredWorkingContext.currentTask, /usage observability/);
+  assert.deepEqual(result.handoff.structuredWorkingContext.nonGoals, ['memory promotion review during resume']);
   assert.equal(result.handoff.recentCheckpoints[0].trust, 'credible_recent_handoff');
   assert.match(result.handoff.recentCheckpoints[0].useHint, /Use actively/);
   assert.equal(result.handoff.memoryCandidates.count, 1);
@@ -4716,6 +4779,8 @@ test('REMOTE_METHODS exposes resume, suggestion, auto-promotion, and reconciliat
   assert.ok(REMOTE_METHODS.includes('suggestMemoryPromotions'));
   assert.ok(REMOTE_METHODS.includes('autoPromoteMemoryCandidates'));
   assert.ok(REMOTE_METHODS.includes('reconcileMemory'));
+  assert.ok(REMOTE_METHODS.includes('getSessionWorkingContext'));
+  assert.ok(REMOTE_METHODS.includes('upsertSessionWorkingContext'));
 });
 
 test('CLI supports the v0 workflow with synthetic data', async () => {
@@ -4874,6 +4939,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'distill_checkpoint',
       'distill_usage',
       'get_memory',
+      'get_session_working_context',
       'get_working_summary',
       'list_memory_candidates',
       'list_memory_events',
@@ -4888,6 +4954,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'session_status',
       'suggest_memory_promotions',
       'sync_resume_context',
+      'upsert_session_working_context',
     ]);
     const rememberTool = toolList.tools.find((tool) => tool.name === 'remember');
     assert.ok(rememberTool.inputSchema.properties.repoPath);
@@ -4905,6 +4972,9 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.ok(bootstrapTool.inputSchema.properties.rawTailLimit);
     const syncResumeTool = toolList.tools.find((tool) => tool.name === 'sync_resume_context');
     assert.ok(syncResumeTool.inputSchema.properties.sessionId);
+    const sessionWorkingContextTool = toolList.tools.find((tool) => tool.name === 'upsert_session_working_context');
+    assert.ok(sessionWorkingContextTool.inputSchema.properties.currentTask);
+    assert.ok(sessionWorkingContextTool.inputSchema.properties.avoidMisreadings);
     const suggestTool = toolList.tools.find((tool) => tool.name === 'suggest_memory_promotions');
     assert.ok(suggestTool.inputSchema.properties.allowScopeFallback);
     assert.ok(suggestTool.inputSchema.properties.trigger);
