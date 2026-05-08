@@ -24,6 +24,8 @@ const REMOTE_METHODS = [
   'appendRaw',
   'listRawEvents',
   'getWorkingSummary',
+  'getSessionWorkingContext',
+  'upsertSessionWorkingContext',
   'pruneRawEvents',
   'distillCheckpoint',
   'listDistillRuns',

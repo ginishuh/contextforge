@@ -3,8 +3,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-export const CODEX_EXEC_PROMPT_VERSION = 'codex_exec.prompt.v5';
-export const CODEX_EXEC_OUTPUT_SCHEMA_VERSION = 'contextforge.checkpoint.v4';
+export const CODEX_EXEC_PROMPT_VERSION = 'codex_exec.prompt.v6';
+export const CODEX_EXEC_OUTPUT_SCHEMA_VERSION = 'contextforge.checkpoint.v5';
 
 const OUTPUT_SCHEMA = {
   $id: CODEX_EXEC_OUTPUT_SCHEMA_VERSION,
@@ -26,6 +26,22 @@ const OUTPUT_SCHEMA = {
     summaryShort: { type: 'string', minLength: 1 },
     summaryText: { type: 'string', minLength: 1 },
     workingSummary: { type: 'string', minLength: 1 },
+    sessionWorkingContext: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        mode: { type: 'string' },
+        currentTask: { type: 'string' },
+        currentUserIntent: { type: 'string' },
+        targetSubject: { type: ['string', 'null'] },
+        sourceSubject: { type: ['string', 'null'] },
+        lastUserCorrection: { type: ['string', 'null'] },
+        openQuestion: { type: ['string', 'null'] },
+        nonGoals: { type: 'array', items: { type: 'string' } },
+        avoidMisreadings: { type: 'array', items: { type: 'string' } },
+        confidence: { type: 'number', minimum: 0, maximum: 1 },
+      },
+    },
     decisions: { type: 'array', items: { type: 'string' } },
     todos: { type: 'array', items: { type: 'string' } },
     openQuestions: { type: 'array', items: { type: 'string' } },
@@ -133,6 +149,25 @@ function compactWorkingSummary(summary) {
   };
 }
 
+function compactSessionWorkingContext(context) {
+  if (!context) return null;
+  return {
+    id: context.id,
+    mode: context.mode,
+    currentTask: context.currentTask,
+    currentUserIntent: context.currentUserIntent,
+    targetSubject: context.targetSubject,
+    sourceSubject: context.sourceSubject,
+    lastUserCorrection: context.lastUserCorrection,
+    openQuestion: context.openQuestion,
+    nonGoals: context.nonGoals,
+    avoidMisreadings: context.avoidMisreadings,
+    confidence: context.confidence,
+    sourceCheckpointId: context.sourceCheckpointId,
+    updatedAt: context.updatedAt,
+  };
+}
+
 function buildRawEventPayload(rawEvents, maxInputChars) {
   const events = [];
   let remaining = maxInputChars;
@@ -177,7 +212,9 @@ export function buildCodexExecPrompt(input, options = {}) {
       'Write the checkpoint as recent continuity for handoff and search, not as canonical durable truth.',
       'Write workingSummary as the latest rolling session state for immediate continuation: current goal, completed work, active blockers, and next actions.',
       'If previousWorkingSummary is supplied, update it with the new raw events instead of replacing it with a delta-only summary.',
+      'If useful, write sessionWorkingContext as structured mutable resume state: currentTask, currentUserIntent, targetSubject, sourceSubject, lastUserCorrection, openQuestion, nonGoals, avoidMisreadings, and confidence.',
       'Do not make workingSummary a durable fact; it is live handoff state and may be overwritten by later distills.',
+      'Do not make sessionWorkingContext a durable fact; it is mutable task framing for resume handoff.',
       'Optimize the checkpoint for future retrieval, not for a generic meeting-summary style. Preserve concrete hooks a future agent might search for.',
       'Preserve proper nouns, API names, command names, file paths, issue or PR numbers, model names, error strings, numeric thresholds, time intervals, and cadence details when they matter.',
       'Distinguish decision, rationale, risks, conditions, and next action. Do not say only that a topic was discussed.',
@@ -199,6 +236,7 @@ export function buildCodexExecPrompt(input, options = {}) {
     requestedOutputSchema: input.requestedOutputSchema,
     previousCheckpoint: compactCheckpoint(input.previousCheckpoint),
     previousWorkingSummary: compactWorkingSummary(input.previousWorkingSummary),
+    previousSessionWorkingContext: compactSessionWorkingContext(input.previousSessionWorkingContext),
     rawEvents: rawPayload.events,
   };
 

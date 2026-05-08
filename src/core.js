@@ -300,6 +300,35 @@ function bootstrapWorkingSummary(summary) {
   };
 }
 
+function bootstrapSessionWorkingContext(context) {
+  if (!context) {
+    return null;
+  }
+  return {
+    type: 'session_working_context',
+    id: context.id,
+    sessionId: context.sessionId,
+    conversationId: context.conversationId,
+    mode: context.mode,
+    currentTask: context.currentTask,
+    currentUserIntent: context.currentUserIntent,
+    targetSubject: context.targetSubject,
+    sourceSubject: context.sourceSubject,
+    lastUserCorrection: context.lastUserCorrection,
+    openQuestion: context.openQuestion,
+    nonGoals: context.nonGoals,
+    avoidMisreadings: context.avoidMisreadings,
+    confidence: context.confidence,
+    sourceCheckpointId: context.sourceCheckpointId,
+    distillRunId: context.distillRunId,
+    updatedAt: context.updatedAt,
+    trust: 'mutable_session_state',
+    verificationRequired: true,
+    whyUse:
+      'Structured live session state for resume handoff; useful for current task framing, but not reviewed durable memory.',
+  };
+}
+
 function bootstrapRawTailEvent(event) {
   return {
     id: event.id,
@@ -1170,6 +1199,9 @@ export function createContextForge(options = {}) {
         const workingSummary = sessionId
           ? bootstrapWorkingSummary(store.getWorkingSummary({ ...scope, sessionId }))
           : null;
+        const structuredWorkingContext = sessionId
+          ? bootstrapSessionWorkingContext(store.getSessionWorkingContext({ ...scope, sessionId }))
+          : null;
         const rawTail = sessionId
           ? store
               .listRecentRawEvents({ ...scope, sessionId, limit: rawTailLimit })
@@ -1181,7 +1213,7 @@ export function createContextForge(options = {}) {
           query: options.query,
           includeShared,
           sharedLimit: includeShared ? sharedLimit : null,
-          ...(sessionId ? { sessionId, workingSummary, rawTail, rawTailLimit } : {}),
+          ...(sessionId ? { sessionId, workingSummary, structuredWorkingContext, rawTail, rawTailLimit } : {}),
           ...(sharedSkippedReason ? { sharedSkippedReason } : {}),
           summary: bootstrapSummary(results),
           results,
@@ -1240,6 +1272,7 @@ export function createContextForge(options = {}) {
         ...(bootstrap.sessionId ? { sessionId: bootstrap.sessionId } : {}),
         handoff: {
           workingSummary: bootstrap.workingSummary || null,
+          structuredWorkingContext: bootstrap.structuredWorkingContext || null,
           rawTail: bootstrap.rawTail || [],
           durableMemories,
           recentCheckpoints,
@@ -2142,6 +2175,42 @@ export function createContextForge(options = {}) {
       return useStore((store) => store.getWorkingSummary({ ...scope, sessionId: options.sessionId }));
     },
 
+    getSessionWorkingContext(options) {
+      const scope = normalizeScopeOptions(options, config);
+      requireOption(options.sessionId, 'sessionId');
+      return useStore((store) => store.getSessionWorkingContext({ ...scope, sessionId: options.sessionId }));
+    },
+
+    upsertSessionWorkingContext(options) {
+      const scope = normalizeScopeOptions(options, config);
+      requireOption(options.sessionId, 'sessionId');
+      return useStore((store) =>
+        store.upsertSessionWorkingContext({
+          ...scope,
+          sessionId: options.sessionId,
+          conversationId: options.conversationId || null,
+          mode: options.mode || 'task_execution',
+          currentTask: options.currentTask || options.current_task || '',
+          currentUserIntent: options.currentUserIntent || options.current_user_intent || '',
+          targetSubject: options.targetSubject ?? options.target_subject ?? null,
+          sourceSubject: options.sourceSubject ?? options.source_subject ?? null,
+          lastUserCorrection: options.lastUserCorrection ?? options.last_user_correction ?? null,
+          openQuestion: options.openQuestion ?? options.open_question ?? null,
+          nonGoals: options.nonGoals || options.non_goals || options.nonGoalsJson || options.non_goals_json || [],
+          avoidMisreadings:
+            options.avoidMisreadings ||
+            options.avoid_misreadings ||
+            options.avoidMisreadingsJson ||
+            options.avoid_misreadings_json ||
+            [],
+          confidence: options.confidence ?? 0,
+          sourceCheckpointId: options.sourceCheckpointId || options.source_checkpoint_id || null,
+          distillRunId: options.distillRunId || options.distill_run_id || null,
+          metadata: options.metadata || {},
+        }),
+      );
+    },
+
     async distillCheckpoint(options) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.sessionId, 'sessionId');
@@ -2154,6 +2223,7 @@ export function createContextForge(options = {}) {
         const rawEvents = store.listRawEvents({ ...scope, sessionId: options.sessionId });
         const previousCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId });
         const previousWorkingSummary = store.getWorkingSummary({ ...scope, sessionId: options.sessionId });
+        const previousSessionWorkingContext = store.getSessionWorkingContext({ ...scope, sessionId: options.sessionId });
         const policy = {
           maxEvents: positiveNumber(
             options.maxEvents == null ? config.distillPolicy.maxEvents : Number(options.maxEvents),
@@ -2176,6 +2246,7 @@ export function createContextForge(options = {}) {
           todos: 'string[]',
           openQuestions: 'string[]',
           workingSummary: 'string',
+          sessionWorkingContext: 'object?',
           memoryCandidates: 'object[]',
           sourceEventCount: 'number',
           provider: 'string',
@@ -2191,6 +2262,7 @@ export function createContextForge(options = {}) {
             rawEventIds: selectedRawEvents.map((event) => event.id),
             previousCheckpointId: previousCheckpoint?.id || null,
             previousWorkingSummaryId: previousWorkingSummary?.id || null,
+            previousSessionWorkingContextId: previousSessionWorkingContext?.id || null,
             requestedOutputSchema,
             providerMetadata,
             sourceProvenance,
@@ -2209,6 +2281,7 @@ export function createContextForge(options = {}) {
             rawEvents: selectedRawEvents,
             previousCheckpoint,
             previousWorkingSummary,
+            previousSessionWorkingContext,
             requestedOutputSchema,
           });
         } catch (error) {
@@ -2293,6 +2366,41 @@ export function createContextForge(options = {}) {
           workingSummaryError = error;
         }
 
+        let sessionWorkingContext = null;
+        let sessionWorkingContextError = null;
+        if (output.sessionWorkingContext) {
+          try {
+            const context = output.sessionWorkingContext;
+            sessionWorkingContext = store.upsertSessionWorkingContext({
+              ...scope,
+              sessionId: options.sessionId,
+              conversationId,
+              mode: context.mode || 'task_execution',
+              currentTask: context.currentTask || context.current_task || '',
+              currentUserIntent: context.currentUserIntent || context.current_user_intent || '',
+              targetSubject: context.targetSubject ?? context.target_subject ?? null,
+              sourceSubject: context.sourceSubject ?? context.source_subject ?? null,
+              lastUserCorrection: context.lastUserCorrection ?? context.last_user_correction ?? null,
+              openQuestion: context.openQuestion ?? context.open_question ?? null,
+              nonGoals: context.nonGoals || context.non_goals || [],
+              avoidMisreadings: context.avoidMisreadings || context.avoid_misreadings || [],
+              confidence: context.confidence ?? 0,
+              sourceCheckpointId: checkpoint?.id || null,
+              distillRunId: distillRun.id,
+              metadata: {
+                providerMetadata: output.metadata,
+                sourceProvenance,
+                sourceRawEventIds: selectedRawEvents.map((event) => event.id),
+                sourceEventWindow: distillWindow.metadata,
+                checkpointId: checkpoint?.id || null,
+                checkpointInsertFailed: Boolean(checkpointError),
+              },
+            });
+          } catch (error) {
+            sessionWorkingContextError = error;
+          }
+        }
+
         if (checkpointError) {
           store.failDistillRun({
             id: distillRun.id,
@@ -2303,6 +2411,9 @@ export function createContextForge(options = {}) {
               workingSummaryUpdated: Boolean(workingSummary),
               workingSummaryId: workingSummary?.id || null,
               workingSummaryError: errorSummary(workingSummaryError),
+              sessionWorkingContextUpdated: Boolean(sessionWorkingContext),
+              sessionWorkingContextId: sessionWorkingContext?.id || null,
+              sessionWorkingContextError: errorSummary(sessionWorkingContextError),
               providerMetadata: output.metadata,
             },
           });
@@ -2318,6 +2429,9 @@ export function createContextForge(options = {}) {
             workingSummaryUpdated: Boolean(workingSummary),
             workingSummaryId: workingSummary?.id || null,
             workingSummaryError: errorSummary(workingSummaryError),
+            sessionWorkingContextUpdated: Boolean(sessionWorkingContext),
+            sessionWorkingContextId: sessionWorkingContext?.id || null,
+            sessionWorkingContextError: errorSummary(sessionWorkingContextError),
             providerMetadata: output.metadata,
           },
         });
@@ -2355,6 +2469,11 @@ export function createContextForge(options = {}) {
             updated: Boolean(workingSummary),
             id: workingSummary?.id || null,
             error: errorSummary(workingSummaryError),
+          },
+          sessionWorkingContext: {
+            updated: Boolean(sessionWorkingContext),
+            id: sessionWorkingContext?.id || null,
+            error: errorSummary(sessionWorkingContextError),
           },
           embedding,
         };

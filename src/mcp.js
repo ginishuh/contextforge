@@ -31,7 +31,7 @@ const MCP_INSTRUCTIONS = [
   'For closeout triggers only, call suggest_memory_promotions: after this agent merges a PR, after the user says they merged and the agent syncs main/cleans branches, or when the user explicitly says today\'s work is done. Suggest at most 1-3 durable memory promotions and never promote automatically.',
   'For strict closeout-scoped safe automatic promotion, call auto_promote_memory_candidates only when the user wants automatic promotion. By default use dryRun=true. Use dryRun=false only when CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true is intentionally configured; never use scope-wide backlog fallback and never auto-promote preference candidates.',
   'For user corrections such as "너 잘못 알고 있잖아", "그거 아니야", "그건 X가 아니라 Y야", or "기억 수정해", call reconcile_memory. Show the basis for prior knowledge, assess conflicts, and only apply safe corrections when the user explicitly asks to fix memory.',
-  'When resuming a known session, pass sessionId to bootstrap_context or call get_working_summary to load latest rolling handoff state separately from durable memory and checkpoint search results.',
+  'When resuming a known session, pass sessionId to bootstrap_context or call get_working_summary and get_session_working_context to load latest rolling handoff state separately from durable memory and checkpoint search results.',
   'If working on a repository while the MCP process cwd is elsewhere, pass repoPath or cwd so repo scope resolves to that checkout; repoPath takes precedence when both are provided.',
   'Treat scopeKey as the canonical repo memory key; pass an explicit normalized GitHub key when local paths differ across machines or the checkout cannot infer the right remote.',
   'Use remember for reviewed durable facts the user or assistant intentionally wants saved.',
@@ -299,6 +299,56 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
       },
     },
     async (args) => jsonResult(await app.getWorkingSummary(args)),
+  );
+
+  server.registerTool(
+    'get_session_working_context',
+    {
+      title: 'Get Session Working Context',
+      description:
+        'Fetch structured mutable working context for one scoped session. This is live resume state, not durable canonical memory.',
+      inputSchema: {
+        ...scopedSchema,
+        sessionId: z.string(),
+      },
+      annotations: {
+        title: 'Get Session Working Context',
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.getSessionWorkingContext(args)),
+  );
+
+  server.registerTool(
+    'upsert_session_working_context',
+    {
+      title: 'Upsert Session Working Context',
+      description:
+        'Create or update structured mutable working context for the current scoped session. Use for live task state only, not durable memory.',
+      inputSchema: {
+        ...scopedSchema,
+        sessionId: z.string(),
+        conversationId: z.string().optional(),
+        mode: z.string().optional(),
+        currentTask: z.string().optional(),
+        currentUserIntent: z.string().optional(),
+        targetSubject: z.string().optional(),
+        sourceSubject: z.string().optional(),
+        lastUserCorrection: z.string().optional(),
+        openQuestion: z.string().optional(),
+        nonGoals: z.array(z.string()).optional(),
+        avoidMisreadings: z.array(z.string()).optional(),
+        confidence: z.number().optional(),
+        metadata: metadataSchema.optional(),
+      },
+      annotations: {
+        title: 'Upsert Session Working Context',
+        readOnlyHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.upsertSessionWorkingContext(args)),
   );
 
   server.registerTool(
