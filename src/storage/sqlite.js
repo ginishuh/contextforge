@@ -242,6 +242,10 @@ export class ContextForgeStore {
     this.db.close();
   }
 
+  transaction(fn) {
+    return this.db.transaction(fn)();
+  }
+
   ensureColumn(table, column, definition) {
     const columns = this.db.prepare(`PRAGMA table_info(${table})`).all();
     if (!columns.some((item) => item.name === column)) {
