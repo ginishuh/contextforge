@@ -285,6 +285,10 @@ token only; embedding provider credentials belong to the remote server process.
 - `checkpoint`: LLM-distilled recent continuity from one session. Use it to
   resume work and understand recent context, then verify important claims
   against current code, status, or durable memory.
+- Checkpoints may include levels. Level 0 is the default session distill;
+  higher levels are reserved for later daily/task-batch or weekly/topic
+  consolidations. Use the recorded coverage window and source fields to choose
+  the right checkpoint granularity for resume or deeper investigation.
 - `memory_candidate`: a checkpoint-generated candidate that might deserve
   promotion. Use it as review material. Do not treat it as final truth until it
   is promoted or rewritten as durable memory.
@@ -491,6 +495,8 @@ Prefer distilling at meaningful boundaries:
   session.
 - `upsert_session_working_context`: create or update structured mutable task
   state for a session. This is not durable memory.
+- `list_checkpoints`: list checkpoints, optionally filtered by session and
+  level.
 - `session_status`: inspect raw/checkpoint thresholds before distilling.
 - `distill_checkpoint`: create a recent-continuity checkpoint.
 - `distill_usage`: summarize distillation run counts, selected input size,

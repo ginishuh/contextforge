@@ -302,6 +302,26 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
   );
 
   server.registerTool(
+    'list_checkpoints',
+    {
+      title: 'List Checkpoints',
+      description:
+        'List scoped checkpoints, optionally filtered by sessionId and checkpoint level. Level 0 is the default session distill level.',
+      inputSchema: {
+        ...scopedSchema,
+        sessionId: z.string().optional(),
+        level: z.number().int().nonnegative().optional(),
+      },
+      annotations: {
+        title: 'List Checkpoints',
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.listCheckpoints(args)),
+  );
+
+  server.registerTool(
     'get_session_working_context',
     {
       title: 'Get Session Working Context',
@@ -363,6 +383,11 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
         provider: z.string().optional(),
         maxEvents: z.number().int().positive().optional(),
         maxChars: z.number().int().positive().optional(),
+        level: z.number().int().nonnegative().optional(),
+        coversFrom: z.string().optional(),
+        coversTo: z.string().optional(),
+        source: z.string().optional(),
+        sourceRef: z.string().optional(),
       },
       annotations: {
         title: 'Distill Checkpoint',

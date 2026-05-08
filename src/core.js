@@ -254,6 +254,7 @@ function bootstrapResultSummary(result) {
       category: 'checkpoint',
       content: truncateText(result.checkpoint.summaryText || result.checkpoint.summaryShort),
       sessionId: result.checkpoint.sessionId,
+      level: result.checkpoint.level,
       createdAt: result.checkpoint.createdAt,
     };
   }
@@ -358,6 +359,7 @@ function bootstrapResult(result, group) {
     source: result.source,
     retrieval: result.retrieval,
     ...(summary.sessionId ? { sessionId: summary.sessionId } : {}),
+    ...(summary.level != null ? { level: summary.level } : {}),
     ...(summary.createdAt ? { createdAt: summary.createdAt } : {}),
     ...(summary.candidateId ? { candidateId: summary.candidateId } : {}),
     ...(summary.status ? { status: summary.status } : {}),
@@ -566,6 +568,11 @@ function checkpointHandoffResult(checkpoint, group = 'session') {
       vectorDimensions: null,
     },
     sessionId: checkpoint.sessionId,
+    level: checkpoint.level,
+    coversFrom: checkpoint.coversFrom,
+    coversTo: checkpoint.coversTo,
+    checkpointSource: checkpoint.source,
+    sourceRef: checkpoint.sourceRef,
     createdAt: checkpoint.createdAt,
   });
 }
@@ -908,6 +915,13 @@ function selectDistillWindow(rawEvents, latestCheckpoint, policy) {
       firstRawEventId: selected[0]?.id || null,
       lastRawEventId: selected.at(-1)?.id || null,
     },
+  };
+}
+
+function coverageFromEvents(events) {
+  return {
+    coversFrom: events[0]?.createdAt || null,
+    coversTo: events.at(-1)?.createdAt || null,
   };
 }
 
@@ -2169,6 +2183,17 @@ export function createContextForge(options = {}) {
       return useStore((store) => store.listRawEvents({ ...scope, sessionId: options.sessionId }));
     },
 
+    listCheckpoints(options) {
+      const scope = normalizeScopeOptions(options, config);
+      return useStore((store) =>
+        store.listCheckpoints({
+          ...scope,
+          sessionId: options.sessionId || null,
+          level: options.level == null ? null : Number(options.level),
+        }),
+      );
+    },
+
     getWorkingSummary(options) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.sessionId, 'sessionId');
@@ -2236,9 +2261,14 @@ export function createContextForge(options = {}) {
         };
         const distillWindow = selectDistillWindow(rawEvents, previousCheckpoint, policy);
         const selectedRawEvents = distillWindow.events;
+        const coverage = coverageFromEvents(selectedRawEvents);
         const sourceProvenance = sourceProvenanceFromEvents(selectedRawEvents);
         const conversationId =
           options.conversationId || rawEvents.find((event) => event.conversationId)?.conversationId || null;
+        const checkpointLevel = options.level == null ? 0 : Number(options.level);
+        if (!Number.isInteger(checkpointLevel) || checkpointLevel < 0) {
+          throw new Error('level must be a non-negative integer.');
+        }
         const requestedOutputSchema = {
           summaryShort: 'string',
           summaryText: 'string',
@@ -2324,6 +2354,11 @@ export function createContextForge(options = {}) {
           sourceEventCount: output.sourceEventCount ?? selectedRawEvents.length,
           provider: output.provider || provider.name,
           distillRunId: distillRun.id,
+          level: checkpointLevel,
+          coversFrom: options.coversFrom || coverage.coversFrom,
+          coversTo: options.coversTo || coverage.coversTo,
+          source: options.source || 'distill',
+          sourceRef: options.sourceRef || distillRun.id,
           metadata: {
             providerMetadata: output.metadata,
             memoryCandidates: output.memoryCandidates,

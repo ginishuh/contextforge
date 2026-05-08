@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
 
 function nowIso() {
   return new Date().toISOString();
@@ -76,6 +76,11 @@ function hydrateCheckpoint(row) {
     sourceEventCount: row.source_event_count,
     provider: row.provider,
     distillRunId: row.distill_run_id,
+    level: row.level ?? 0,
+    coversFrom: row.covers_from,
+    coversTo: row.covers_to,
+    source: row.source || 'distill',
+    sourceRef: row.source_ref,
     metadata: parseJson(row.metadata_json, {}),
     createdAt: row.created_at,
   };
@@ -340,6 +345,11 @@ export class ContextForgeStore {
         source_event_count INTEGER NOT NULL DEFAULT 0,
         provider TEXT NOT NULL,
         distill_run_id TEXT,
+        level INTEGER NOT NULL DEFAULT 0,
+        covers_from TEXT,
+        covers_to TEXT,
+        source TEXT NOT NULL DEFAULT 'distill',
+        source_ref TEXT,
         metadata_json TEXT NOT NULL DEFAULT '{}',
         created_at TEXT NOT NULL
       );
@@ -475,6 +485,11 @@ export class ContextForgeStore {
     `);
 
     this.ensureColumn('checkpoints', 'distill_run_id', 'TEXT');
+    this.ensureColumn('checkpoints', 'level', 'INTEGER NOT NULL DEFAULT 0');
+    this.ensureColumn('checkpoints', 'covers_from', 'TEXT');
+    this.ensureColumn('checkpoints', 'covers_to', 'TEXT');
+    this.ensureColumn('checkpoints', 'source', "TEXT NOT NULL DEFAULT 'distill'");
+    this.ensureColumn('checkpoints', 'source_ref', 'TEXT');
     this.ensureColumn('checkpoints', 'metadata_json', "TEXT NOT NULL DEFAULT '{}'");
     this.ensureColumn('memories', 'status', "TEXT NOT NULL DEFAULT 'active'");
     this.ensureColumn('memories', 'supersedes_memory_id', 'TEXT');
@@ -1304,34 +1319,42 @@ export class ContextForgeStore {
       .reverse();
   }
 
-  getLatestCheckpoint({ scopeType, scopeKey, sessionId }) {
+  getLatestCheckpoint({ scopeType, scopeKey, sessionId, level = null }) {
+    const filters = ['scope_type = ?', 'scope_key = ?', 'session_id = ?'];
+    const values = [scopeType, scopeKey, sessionId];
+    if (level != null) {
+      filters.push('level = ?');
+      values.push(Number(level));
+    }
     const row = this.db
       .prepare(`
         SELECT * FROM checkpoints
-        WHERE scope_type = ? AND scope_key = ? AND session_id = ?
+        WHERE ${filters.join(' AND ')}
         ORDER BY created_at DESC, id DESC
         LIMIT 1
       `)
-      .get(scopeType, scopeKey, sessionId);
+      .get(...values);
     return hydrateCheckpoint(row);
   }
 
-  listCheckpoints({ scopeType, scopeKey, sessionId = null }) {
-    const rows = sessionId
-      ? this.db
-          .prepare(`
-            SELECT * FROM checkpoints
-            WHERE scope_type = ? AND scope_key = ? AND session_id = ?
-            ORDER BY created_at DESC, id DESC
-          `)
-          .all(scopeType, scopeKey, sessionId)
-      : this.db
-          .prepare(`
-            SELECT * FROM checkpoints
-            WHERE scope_type = ? AND scope_key = ?
-            ORDER BY created_at DESC, id DESC
-          `)
-          .all(scopeType, scopeKey);
+  listCheckpoints({ scopeType, scopeKey, sessionId = null, level = null }) {
+    const filters = ['scope_type = ?', 'scope_key = ?'];
+    const values = [scopeType, scopeKey];
+    if (sessionId) {
+      filters.push('session_id = ?');
+      values.push(sessionId);
+    }
+    if (level != null) {
+      filters.push('level = ?');
+      values.push(Number(level));
+    }
+    const rows = this.db
+      .prepare(`
+        SELECT * FROM checkpoints
+        WHERE ${filters.join(' AND ')}
+        ORDER BY created_at DESC, id DESC
+      `)
+      .all(...values);
 
     return rows.map(hydrateCheckpoint);
   }
@@ -1648,6 +1671,11 @@ export class ContextForgeStore {
     sourceEventCount = 0,
     provider,
     distillRunId = null,
+    level = 0,
+    coversFrom = null,
+    coversTo = null,
+    source = 'distill',
+    sourceRef = null,
     metadata = {},
   }) {
     const row = this.db
@@ -1656,9 +1684,9 @@ export class ContextForgeStore {
           id, scope_type, scope_key, session_id, conversation_id,
           summary_short, summary_text, decisions_json, todos_json,
           open_questions_json, source_event_count, provider, distill_run_id,
-          metadata_json, created_at
+          level, covers_from, covers_to, source, source_ref, metadata_json, created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         RETURNING *
       `)
       .get(
@@ -1675,6 +1703,11 @@ export class ContextForgeStore {
         Number(sourceEventCount),
         provider,
         distillRunId,
+        Number(level),
+        coversFrom,
+        coversTo,
+        source,
+        sourceRef,
         json(metadata, {}),
         nowIso(),
       );
