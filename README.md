@@ -1232,6 +1232,10 @@ If a checkout is also a live server or remote client, include a short
 secret-free runtime mode section that tells agents to inspect env/config and
 live process state instead of assuming the clone is the server. Link to
 [ContextForge Runtime Modes](docs/runtime-modes.md).
+For downstream repositories that consume an external ContextForge service,
+state the expected connection mode and storage authority directly in
+`AGENTS.md`; sandboxed agents may not be able to inspect the ContextForge
+server's env files, service manager, or local database.
 For loose continuation prompts like "yesterday", "continue", "previous work",
 issue/PR follow-up, or cross-agent handoff, agents should call
 `bootstrap_context` or `bootstrapContext` early. The bootstrap response reviews

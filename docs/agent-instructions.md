@@ -57,6 +57,10 @@ machines, agents, or deployment hosts.
 ```text
 Use remote ContextForge as the canonical shared memory store for this repo.
 
+Connection mode: external remote client. Storage authority: remote canonical
+ContextForge. Agents may be sandboxed and may not be able to inspect the
+ContextForge server env files, service manager, or local database.
+
 At task start, call `bootstrap_context` with `scope: "repo"` and the canonical
 scope key `github.com/example/repo`. Include shared scope only for user-wide
 policy, deployment, credential-location, or cross-repo conventions.
@@ -73,6 +77,10 @@ state from live sources.
 
 Use the installed `contextforge-memory` skill for session IDs, distillation,
 candidate review, closeout promotion, correction, and embedding maintenance.
+
+Do not infer runtime mode from local `.contextforge/` files in this checkout.
+Use `db_info` or the storage block returned by `bootstrap_context` to confirm
+the connected backend.
 ```
 
 ## Local Or Project-Local Variant

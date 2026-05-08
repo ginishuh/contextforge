@@ -36,6 +36,8 @@ Include only guidance that an agent must know before touching this repository:
 - files or data that must not be committed
 - the current operating mode when this checkout is also a live server,
   deployment host, or external remote client
+- the expected ContextForge usage mode for this repository when it consumes an
+  external ContextForge service
 - repo-specific coding and documentation style
 - language or reporting expectations when they are part of the repo workflow
 - a short ContextForge bootstrap snippet
@@ -90,6 +92,36 @@ distinctions, follow `docs/runtime-modes.md`.
 Do not include token values, API keys, private customer data, full env-file
 contents, host-specific ports, or service names unless they are stable product
 documentation rather than one deployment's current state.
+
+## Consumer Repository Pattern
+
+When a repository consumes ContextForge as an external service, prefer an
+explicit expected-state section over asking agents to inspect the server host.
+Sandboxed agents may not be able to read ContextForge server env files,
+systemd units, local databases, or process state.
+
+```text
+## ContextForge Memory
+
+This repo uses ContextForge as an external remote memory service.
+
+- Connection mode: external remote client.
+- Storage authority: remote canonical ContextForge.
+- Agents may be sandboxed and may not be able to inspect the ContextForge
+  server env files, service manager, or local database.
+- Use the installed `contextforge-memory` skill.
+- At task start, call `bootstrap_context` with this repo's canonical scope key:
+  `github.com/owner/repo`.
+- Use `db_info` or the storage block returned by `bootstrap_context` to confirm
+  the connected backend.
+- Do not infer runtime mode from local `.contextforge/` files in this checkout.
+```
+
+For local/project-local consumer repositories, state that retrieval is
+machine-local or checkout-local and must not be treated as shared canonical
+memory. For server checkouts, state that the checkout operates the HTTP server
+and that health must be verified through `/healthz` and the service manager
+before making live runtime claims.
 
 ## ContextForge Section Pattern
 

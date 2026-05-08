@@ -183,6 +183,25 @@ Safety:
 - Pass explicit `scopeKey` values such as `github.com/owner/repo` when local
   paths, forks, or runner checkouts may differ across machines.
 
+Downstream `AGENTS.md` snippet:
+
+```text
+## ContextForge Memory
+
+This repo uses ContextForge as an external remote memory service.
+
+- Connection mode: external remote client.
+- Storage authority: remote canonical ContextForge.
+- Agents may be sandboxed and may not be able to inspect the ContextForge
+  server env files, service manager, or local database.
+- Use the installed `contextforge-memory` skill.
+- At task start, call `bootstrap_context` with this repo's canonical scope key:
+  `github.com/owner/repo`.
+- Use `db_info` or the storage block returned by `bootstrap_context` to confirm
+  the connected backend.
+- Do not infer runtime mode from local `.contextforge/` files in this checkout.
+```
+
 ## Agent Guidance
 
 At task start, agents should identify which mode they are in before making
