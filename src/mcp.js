@@ -142,7 +142,8 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     'session_status',
     {
       title: 'Session Status',
-      description: 'Inspect raw evidence and checkpoint thresholds for a session before deciding whether to distill.',
+      description:
+        'Inspect raw evidence and checkpoint thresholds for a session before deciding whether to distill. At closeout, use latestCheckpointId/latestCheckpointMemoryCandidateCount with suggest_memory_promotions or list_memory_candidates for the same session.',
       inputSchema: {
         ...scopedSchema,
         sessionId: z.string(),
@@ -422,7 +423,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Distill Checkpoint',
       description:
-        'Distill raw session evidence into a checkpoint with the configured provider. level defaults to 0 for session distills; higher levels are reserved for later daily/weekly consolidation.',
+        'Distill raw session evidence into a checkpoint with the configured provider. Keep the returned checkpointId and memoryCandidateCount for closeout review with suggest_memory_promotions, list_memory_candidates, or auto_promote_memory_candidates. level defaults to 0 for session distills; higher levels are reserved for later daily/weekly consolidation.',
       inputSchema: {
         ...scopedSchema,
         sessionId: z.string(),
@@ -487,7 +488,8 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     'list_memory_candidates',
     {
       title: 'List Memory Candidates',
-      description: 'List memory candidates saved on distilled checkpoints without promoting them.',
+      description:
+        'List memory candidates saved on distilled checkpoints without promoting them. At closeout, pass the same sessionId or checkpointId used for the current work; omitting both reviews the broader scope queue rather than the current closeout source.',
       inputSchema: {
         ...scopedSchema,
         sessionId: z.string().optional(),
@@ -712,7 +714,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Promote Memory',
       description:
-        'Promote a checkpoint candidate or reviewed fact into intentional durable memory with provenance metadata.',
+        'Promote a checkpoint candidate or reviewed fact into intentional durable memory with provenance metadata. Prefer promote_memory_candidate when promoting an existing candidate; use sourceSessionId/sourceCheckpointId/sourceCandidateIndex when writing a corrected durable fact from reviewed checkpoint evidence.',
       inputSchema: {
         ...scopedSchema,
         key: z.string(),
@@ -740,7 +742,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Promote Memory Candidate',
       description:
-        'Promote a reviewed checkpoint memory candidate into intentional durable memory without copying candidate fields manually.',
+        'Promote a reviewed checkpoint memory candidate into intentional durable memory without copying candidate fields manually. Prefer candidateId from suggest_memory_promotions/list_memory_candidates; checkpointId plus sourceCandidateIndex is the legacy fallback. Review warnings before using allowWarnings.',
       inputSchema: {
         ...scopedSchema,
         candidateId: z.string().optional(),

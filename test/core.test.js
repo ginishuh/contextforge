@@ -5583,10 +5583,12 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     const sessionStatusTool = toolList.tools.find((tool) => tool.name === 'session_status');
     assert.ok(sessionStatusTool.inputSchema.properties.maxEvents);
     assert.ok(sessionStatusTool.inputSchema.properties.maxChars);
+    assert.ok(sessionStatusTool.description.includes('latestCheckpointMemoryCandidateCount'));
     const distillTool = toolList.tools.find((tool) => tool.name === 'distill_checkpoint');
     assert.ok(distillTool.inputSchema.properties.maxEvents);
     assert.ok(distillTool.inputSchema.properties.maxChars);
     assert.ok(distillTool.inputSchema.properties.level);
+    assert.ok(distillTool.description.includes('memoryCandidateCount'));
     const listCheckpointsTool = toolList.tools.find((tool) => tool.name === 'list_checkpoints');
     assert.ok(listCheckpointsTool.inputSchema.properties.level);
     const distillUsageTool = toolList.tools.find((tool) => tool.name === 'distill_usage');
@@ -5613,6 +5615,8 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     const updateCandidatesTool = toolList.tools.find((tool) => tool.name === 'list_memory_update_candidates');
     assert.ok(updateCandidatesTool.inputSchema.properties.status);
     assert.ok(updateCandidatesTool.inputSchema.properties.action);
+    const listCandidateTool = toolList.tools.find((tool) => tool.name === 'list_memory_candidates');
+    assert.ok(listCandidateTool.description.includes('current closeout source'));
     const applyUpdateTool = toolList.tools.find((tool) => tool.name === 'apply_memory_update_candidate');
     assert.ok(applyUpdateTool.inputSchema.properties.candidateId);
     assert.ok(applyUpdateTool.inputSchema.properties.mergeTargetKey);
@@ -5625,6 +5629,10 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.ok(autoPromoteTool.inputSchema.properties.minConfidence);
     assert.ok(autoPromoteTool.inputSchema.properties.allowedCategories);
     assert.ok(autoPromoteTool.description.includes('missing_closeout_source'));
+    const promoteTool = toolList.tools.find((tool) => tool.name === 'promote_memory');
+    assert.ok(promoteTool.description.includes('sourceCheckpointId'));
+    const promoteCandidateTool = toolList.tools.find((tool) => tool.name === 'promote_memory_candidate');
+    assert.ok(promoteCandidateTool.description.includes('candidateId'));
     const reconcileTool = toolList.tools.find((tool) => tool.name === 'reconcile_memory');
     assert.ok(reconcileTool.inputSchema.properties.correction);
     assert.ok(!reconcileTool.inputSchema.required?.includes('query'));
