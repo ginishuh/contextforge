@@ -2215,6 +2215,7 @@ export function createContextForge(options = {}) {
             }
             const draft = {
               id: null,
+              // Transient draft status is returned only when the proposal is not persisted to SQLite.
               status: createUpdateCandidates ? 'pending' : 'proposed',
               scopeType: scope.scopeType,
               scopeKey: scope.scopeKey,

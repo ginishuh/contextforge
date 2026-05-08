@@ -2064,6 +2064,7 @@ export class ContextForgeStore {
   }) {
     const conditions = ['scope_type = ?', 'scope_key = ?', "status = 'pending'", 'action = ?'];
     const values = [scopeType, scopeKey, action];
+    // Dedup uses the strongest available identity. For the same target, the latest correction wins.
     if (targetMemoryId) {
       conditions.push('target_memory_id = ?');
       values.push(targetMemoryId);

@@ -425,7 +425,9 @@ candidate should not mutate durable memory, or `skip_memory_update_candidate`
 when it should remain non-applied without being treated as wrong.
 `reconcile_memory` propose mode is read-only by default; pass
 `createUpdateCandidates=true` only when the user wants persistent review
-proposals saved to the update-candidate lane.
+proposals saved to the update-candidate lane. Non-persisted proposals may return
+transient `status: "proposed"`; persisted update candidates use the SQLite
+lifecycle statuses `pending`, `applied`, `rejected`, or `skipped`.
 
 If a candidate key looks wrong, too broad, or belongs to the wrong repo, do not
 promote it as-is. Use `remember` with a corrected key/content or leave it as a
