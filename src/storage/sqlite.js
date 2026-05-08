@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 
-export const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 13;
 
 function nowIso() {
   return new Date().toISOString();
@@ -227,6 +227,36 @@ function hydratePreferenceOccurrence(row) {
     metadata: parseJson(row.metadata_json, {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function hydrateMemoryUpdateCandidate(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    scopeType: row.scope_type,
+    scopeKey: row.scope_key,
+    status: row.status,
+    action: row.action,
+    targetMemoryId: row.target_memory_id,
+    targetMemoryKey: row.target_memory_key,
+    proposedKey: row.proposed_key,
+    proposedContent: row.proposed_content,
+    proposedCategory: row.proposed_category,
+    proposedTags: parseJson(row.proposed_tags_json, []),
+    proposedImportance: row.proposed_importance,
+    reason: row.reason,
+    confidence: row.confidence,
+    sourceSessionId: row.source_session_id,
+    sourceCheckpointId: row.source_checkpoint_id,
+    sourceCandidateId: row.source_candidate_id,
+    correction: row.correction,
+    basisJson: parseJson(row.basis_json, []),
+    reviewReason: row.review_reason,
+    reviewMetadata: parseJson(row.review_metadata_json, {}),
+    appliedMemoryId: row.applied_memory_id,
+    createdAt: row.created_at,
+    reviewedAt: row.reviewed_at,
   };
 }
 
@@ -533,6 +563,35 @@ export class ContextForgeStore {
         UNIQUE (scope_type, scope_key, merge_key)
       );
 
+      CREATE TABLE IF NOT EXISTS memory_update_candidates (
+        id TEXT PRIMARY KEY,
+        scope_type TEXT NOT NULL CHECK (scope_type IN ('shared', 'repo', 'local')),
+        scope_key TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'applied', 'rejected', 'skipped')),
+        action TEXT NOT NULL CHECK (action IN ('correct_memory', 'deactivate_memory', 'merge_duplicate_memories', 'add_corrective_note')),
+        target_memory_id TEXT,
+        target_memory_key TEXT,
+        proposed_key TEXT,
+        proposed_content TEXT,
+        proposed_category TEXT,
+        proposed_tags_json TEXT NOT NULL DEFAULT '[]',
+        proposed_importance INTEGER,
+        reason TEXT NOT NULL DEFAULT '',
+        confidence REAL,
+        source_session_id TEXT,
+        source_checkpoint_id TEXT,
+        source_candidate_id TEXT,
+        correction TEXT,
+        basis_json TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        reviewed_at TEXT,
+        review_reason TEXT,
+        review_metadata_json TEXT NOT NULL DEFAULT '{}',
+        applied_memory_id TEXT,
+        FOREIGN KEY (target_memory_id) REFERENCES memories(id) ON DELETE SET NULL,
+        FOREIGN KEY (applied_memory_id) REFERENCES memories(id) ON DELETE SET NULL
+      );
+
       CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
         memory_id UNINDEXED,
         scope_type UNINDEXED,
@@ -561,6 +620,8 @@ export class ContextForgeStore {
         ON memory_candidate_index(checkpoint_id, candidate_index);
       CREATE INDEX IF NOT EXISTS idx_preference_occurrences_scope
         ON preference_occurrences(scope_type, scope_key, status, updated_at);
+      CREATE INDEX IF NOT EXISTS idx_memory_update_candidates_scope
+        ON memory_update_candidates(scope_type, scope_key, status, created_at);
     `);
 
     this.ensureColumn('checkpoints', 'distill_run_id', 'TEXT');
@@ -585,6 +646,9 @@ export class ContextForgeStore {
     this.ensureColumn('preference_occurrences', 'last_correction', 'TEXT');
     this.ensureColumn('preference_occurrences', 'review_reason', 'TEXT');
     this.ensureColumn('preference_occurrences', 'metadata_json', "TEXT NOT NULL DEFAULT '{}'");
+    this.ensureColumn('memory_update_candidates', 'review_reason', 'TEXT');
+    this.ensureColumn('memory_update_candidates', 'review_metadata_json', "TEXT NOT NULL DEFAULT '{}'");
+    this.ensureColumn('memory_update_candidates', 'applied_memory_id', 'TEXT');
     this.backfillMemoryCandidateIndexOnce();
     this.backfillPreferenceOccurrencesOnce();
     this.ensureMemoryFts();
@@ -622,6 +686,7 @@ export class ContextForgeStore {
         memoryEvents: count('memory_events'),
         memoryCandidates: count('memory_candidate_index'),
         preferenceOccurrences: count('preference_occurrences'),
+        memoryUpdateCandidates: count('memory_update_candidates'),
         embeddings: embeddingIndexExists ? count('embedding_index') : 0,
       },
       vector: {
@@ -1883,6 +1948,131 @@ export class ContextForgeStore {
       `)
       .run(correction, reason, updatedAt, existing.id);
     return this.getPreferenceOccurrence({ scopeType, scopeKey, mergeKey: existing.mergeKey });
+  }
+
+  createMemoryUpdateCandidate({
+    scopeType,
+    scopeKey,
+    action,
+    targetMemoryId = null,
+    targetMemoryKey = null,
+    proposedKey = null,
+    proposedContent = null,
+    proposedCategory = null,
+    proposedTags = [],
+    proposedImportance = null,
+    reason = '',
+    confidence = null,
+    sourceSessionId = null,
+    sourceCheckpointId = null,
+    sourceCandidateId = null,
+    correction = null,
+    basis = [],
+  }) {
+    const id = randomUUID();
+    const timestamp = nowIso();
+    this.db
+      .prepare(`
+        INSERT INTO memory_update_candidates (
+          id, scope_type, scope_key, status, action, target_memory_id, target_memory_key,
+          proposed_key, proposed_content, proposed_category, proposed_tags_json,
+          proposed_importance, reason, confidence, source_session_id, source_checkpoint_id,
+          source_candidate_id, correction, basis_json, created_at
+        )
+        VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        id,
+        scopeType,
+        scopeKey,
+        action,
+        targetMemoryId,
+        targetMemoryKey,
+        proposedKey,
+        proposedContent,
+        proposedCategory,
+        json(proposedTags, []),
+        proposedImportance,
+        reason,
+        confidence,
+        sourceSessionId,
+        sourceCheckpointId,
+        sourceCandidateId,
+        correction,
+        json(basis, []),
+        timestamp,
+      );
+    return this.getMemoryUpdateCandidate({ scopeType, scopeKey, candidateId: id });
+  }
+
+  listMemoryUpdateCandidates({ scopeType, scopeKey, status = null, action = null, limit = null }) {
+    const conditions = ['scope_type = ?', 'scope_key = ?'];
+    const values = [scopeType, scopeKey];
+    if (status) {
+      conditions.push('status = ?');
+      values.push(status);
+    }
+    if (action) {
+      conditions.push('action = ?');
+      values.push(action);
+    }
+    const parsedLimit = limit == null ? null : Number(limit);
+    const limitClause = Number.isInteger(parsedLimit) && parsedLimit > 0 ? 'LIMIT ?' : '';
+    if (limitClause) {
+      values.push(parsedLimit);
+    }
+    return this.db
+      .prepare(`
+        SELECT * FROM memory_update_candidates
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY created_at DESC, id DESC
+        ${limitClause}
+      `)
+      .all(...values)
+      .map(hydrateMemoryUpdateCandidate);
+  }
+
+  getMemoryUpdateCandidate({ scopeType, scopeKey, candidateId }) {
+    const row = this.db
+      .prepare(`
+        SELECT * FROM memory_update_candidates
+        WHERE scope_type = ? AND scope_key = ? AND id = ?
+      `)
+      .get(scopeType, scopeKey, candidateId);
+    return hydrateMemoryUpdateCandidate(row);
+  }
+
+  markMemoryUpdateCandidateReviewed({
+    scopeType,
+    scopeKey,
+    candidateId,
+    status,
+    reason = null,
+    metadata = {},
+    appliedMemoryId = null,
+    allowStatusOverride = false,
+  }) {
+    const existing = this.getMemoryUpdateCandidate({ scopeType, scopeKey, candidateId });
+    if (!existing) {
+      throw new Error(`Memory update candidate not found: ${candidateId}`);
+    }
+    if (!allowStatusOverride && existing.status !== 'pending') {
+      throw new Error(
+        `Memory update candidate ${candidateId} is ${existing.status}; expected pending. Pass allowStatusOverride to change it anyway.`,
+      );
+    }
+    this.db
+      .prepare(`
+        UPDATE memory_update_candidates
+        SET status = ?,
+            reviewed_at = ?,
+            review_reason = ?,
+            review_metadata_json = ?,
+            applied_memory_id = ?
+        WHERE scope_type = ? AND scope_key = ? AND id = ?
+      `)
+      .run(status, nowIso(), reason, json(metadata, {}), appliedMemoryId, scopeType, scopeKey, candidateId);
+    return this.getMemoryUpdateCandidate({ scopeType, scopeKey, candidateId });
   }
 
   getMemoryCandidate({ scopeType, scopeKey, candidateId }) {

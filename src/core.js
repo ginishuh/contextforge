@@ -696,6 +696,34 @@ function promotionProposal(indexedCandidate, warnings, rank) {
   };
 }
 
+function memoryUpdateCandidateProposal(candidate) {
+  return {
+    candidateId: candidate.id,
+    action: candidate.action,
+    status: candidate.status,
+    targetMemoryKey: candidate.targetMemoryKey,
+    proposedKey: candidate.proposedKey,
+    proposedContent: candidate.proposedContent,
+    proposedCategory: candidate.proposedCategory,
+    proposedTags: candidate.proposedTags,
+    proposedImportance: candidate.proposedImportance,
+    reason: candidate.reason,
+    correction: candidate.correction,
+    source: {
+      sessionId: candidate.sourceSessionId,
+      checkpointId: candidate.sourceCheckpointId,
+      candidateId: candidate.sourceCandidateId,
+    },
+    recommendedAction: 'ask_user',
+  };
+}
+
+function memoryUpdateActionForReconcile(item, liveState) {
+  if (item.type === 'checkpoint') return 'add_corrective_note';
+  if (liveState) return null;
+  return 'correct_memory';
+}
+
 function normalizeAllowedCategories(value, defaultCategories = SAFE_AUTO_PROMOTE_CATEGORIES) {
   const raw = Array.isArray(value)
     ? value
@@ -1521,6 +1549,148 @@ export function createContextForge(options = {}) {
       );
     },
 
+    listMemoryUpdateCandidates(options) {
+      const scope = normalizeScopeOptions(options, config);
+      return useStore((store) =>
+        store.listMemoryUpdateCandidates({
+          ...scope,
+          status: options.status || null,
+          action: options.action || null,
+          limit: options.limit == null ? null : Number(options.limit),
+        }),
+      );
+    },
+
+    rejectMemoryUpdateCandidate(options) {
+      const scope = normalizeScopeOptions(options, config);
+      requireOption(options.candidateId, 'candidateId');
+      requireOption(options.reason, 'reason');
+      return useStore((store) =>
+        store.markMemoryUpdateCandidateReviewed({
+          ...scope,
+          candidateId: options.candidateId,
+          status: 'rejected',
+          reason: options.reason,
+          allowStatusOverride: truthyOption(options.allowStatusOverride),
+        }),
+      );
+    },
+
+    skipMemoryUpdateCandidate(options) {
+      const scope = normalizeScopeOptions(options, config);
+      requireOption(options.candidateId, 'candidateId');
+      return useStore((store) =>
+        store.markMemoryUpdateCandidateReviewed({
+          ...scope,
+          candidateId: options.candidateId,
+          status: 'skipped',
+          reason: options.reason || 'Skipped by reviewer.',
+          allowStatusOverride: truthyOption(options.allowStatusOverride),
+        }),
+      );
+    },
+
+    applyMemoryUpdateCandidate(options) {
+      const scope = normalizeScopeOptions(options, config);
+      requireOption(options.candidateId, 'candidateId');
+      return useStore((store) =>
+        store.withTransaction(() => {
+        const candidate = store.getMemoryUpdateCandidate({
+          ...scope,
+          candidateId: options.candidateId,
+        });
+        if (!candidate) {
+          throw new Error(`Memory update candidate not found: ${options.candidateId}`);
+        }
+        if (candidate.status !== 'pending' && !truthyOption(options.allowStatusOverride)) {
+          throw new Error(
+            `Memory update candidate ${candidate.id} is ${candidate.status}; expected pending. Pass allowStatusOverride to change it anyway.`,
+          );
+        }
+        let memory = null;
+        const reason = options.reason || candidate.reason || 'Applied reviewed memory update candidate.';
+        if (candidate.action === 'correct_memory') {
+          const key = options.key || candidate.targetMemoryKey || candidate.proposedKey;
+          requireOption(key, 'key');
+          const previous = store.getMemory({ ...scope, key });
+          if (!previous) {
+            throw new Error(`Memory not found: ${key}`);
+          }
+          memory = store.rememberMemory({
+            ...scope,
+            key,
+            content: options.content || candidate.proposedContent,
+            category: options.category || candidate.proposedCategory || previous.category,
+            tags: options.tags?.length
+              ? options.tags
+              : candidate.proposedTags?.length
+                ? candidate.proposedTags
+                : previous.tags,
+            importance:
+              options.importance == null
+                ? candidate.proposedImportance == null
+                  ? previous.importance
+                  : candidate.proposedImportance
+                : options.importance,
+            supersedesMemoryId: previous.id,
+            eventType: 'correct',
+            eventMetadata: {
+              sourceUpdateCandidateId: candidate.id,
+              previousMemoryId: previous.id,
+              previousContent: previous.content,
+              correction: candidate.correction,
+              reason,
+            },
+          });
+        } else if (candidate.action === 'deactivate_memory') {
+          const key = options.key || candidate.targetMemoryKey;
+          requireOption(key, 'key');
+          memory = store.deactivateMemory({
+            ...scope,
+            key,
+            reason,
+          });
+        } else if (candidate.action === 'add_corrective_note') {
+          const key = options.key || candidate.proposedKey || `corrective-note-${candidate.id}`;
+          memory = store.rememberMemory({
+            ...scope,
+            key,
+            content: options.content || candidate.proposedContent,
+            category: options.category || candidate.proposedCategory || 'note',
+            tags: options.tags || candidate.proposedTags || [],
+            importance: options.importance == null ? candidate.proposedImportance || 0 : options.importance,
+            eventType: 'promote',
+            eventMetadata: {
+              sourceUpdateCandidateId: candidate.id,
+              sourceCheckpointId: candidate.sourceCheckpointId,
+              correction: candidate.correction,
+              reason,
+            },
+          });
+        } else {
+          throw new Error(`Unsupported memory update candidate action: ${candidate.action}`);
+        }
+        const reviewed = store.markMemoryUpdateCandidateReviewed({
+          ...scope,
+          candidateId: candidate.id,
+          status: 'applied',
+          reason,
+          appliedMemoryId: memory?.id || null,
+          allowStatusOverride: truthyOption(options.allowStatusOverride),
+          metadata: {
+            memoryId: memory?.id || null,
+            memoryKey: memory?.key || null,
+          },
+        });
+        return {
+          kind: 'memory_update_candidate_apply_result',
+          candidate: reviewed,
+          memory,
+        };
+        }),
+      );
+    },
+
     async suggestMemoryPromotions(options = {}) {
       const scope = normalizeScopeOptions(options, config);
       const trigger = options.trigger;
@@ -1865,6 +2035,7 @@ export function createContextForge(options = {}) {
         const durableBasis = basis.filter((item) => item.type === 'memory');
         const checkpointBasis = basis.filter((item) => item.type === 'checkpoint');
         const candidateBasis = basis.filter((item) => item.type === 'memory_candidate').slice(0, candidateLimit);
+        const updateCandidates = [];
         const conflicts = basis.map((item) => ({
           type: item.type,
           key: item.key,
@@ -1882,7 +2053,10 @@ export function createContextForge(options = {}) {
             reason: 'User correction conflicts with existing durable memory.',
           })),
           ...candidateBasis.map((item) => ({
-            action: item.category === 'preference' ? 'reject_memory_candidate_and_weaken_preference_occurrence' : 'reject_memory_candidate',
+            action:
+              item.category === 'preference'
+                ? 'reject_memory_candidate_and_weaken_preference_occurrence'
+                : 'reject_memory_candidate',
             candidateId: item.candidateId,
             reason: 'User correction indicates this candidate should not become durable truth.',
           })),
@@ -1901,6 +2075,35 @@ export function createContextForge(options = {}) {
             code: 'live_state_verification_required',
             message: 'Correction appears to involve mutable live state; verify git/GitHub/CI/runtime/migrations first.',
           });
+        }
+
+        if (mode === 'propose') {
+          for (const item of [...durableBasis, ...checkpointBasis]) {
+            const action = memoryUpdateActionForReconcile(item, liveState);
+            if (!action) {
+              continue;
+            }
+            const updateCandidate = store.createMemoryUpdateCandidate({
+              ...scope,
+              action,
+              targetMemoryId: item.memoryId || null,
+              targetMemoryKey: item.type === 'memory' ? item.key : null,
+              proposedKey: item.type === 'memory' ? item.key : null,
+              proposedContent: options.correction,
+              proposedCategory: item.category || 'note',
+              reason:
+                item.type === 'checkpoint'
+                  ? 'Checkpoint is immutable; propose a corrective durable note instead.'
+                  : 'User correction may require updating existing durable memory.',
+              confidence: item.type === 'memory' ? 0.7 : 0.55,
+              sourceSessionId: options.sessionId || item.sessionId || null,
+              sourceCheckpointId: item.checkpointId || null,
+              sourceCandidateId: item.candidateId || null,
+              correction: options.correction,
+              basis: [item],
+            });
+            updateCandidates.push(memoryUpdateCandidateProposal(updateCandidate));
+          }
         }
 
         if (mode === 'apply_safe') {
@@ -2000,6 +2203,7 @@ export function createContextForge(options = {}) {
           basis,
           conflicts,
           proposedActions,
+          updateCandidates,
           appliedActions,
           warnings,
           trustPolicy: {

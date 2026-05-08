@@ -4958,7 +4958,31 @@ test('reconcileMemory proposes by default and apply_safe only changes unambiguou
   assert.ok(proposed.basis.some((item) => item.type === 'memory_candidate'));
   assert.ok(proposed.proposedActions.some((item) => item.action === 'correct_memory'));
   assert.ok(proposed.proposedActions.some((item) => item.action === 'reject_memory_candidate'));
+  assert.ok(proposed.updateCandidates.some((item) => item.action === 'correct_memory'));
+  assert.ok(proposed.updateCandidates.some((item) => item.action === 'add_corrective_note'));
+  const pendingUpdates = app.listMemoryUpdateCandidates({
+    scope: 'repo',
+    scopeKey: 'reconcile-repo',
+    status: 'pending',
+  });
+  assert.equal(pendingUpdates.length, 2);
+  assert.ok(pendingUpdates.some((item) => item.targetMemoryKey === 'api-transport'));
   assert.equal(app.getMemory({ scope: 'repo', scopeKey: 'reconcile-repo', key: 'api-transport' }).content, 'The API uses REST only.');
+
+  const updateCandidate = pendingUpdates.find((item) => item.action === 'correct_memory');
+  const appliedUpdate = app.applyMemoryUpdateCandidate({
+    scope: 'repo',
+    scopeKey: 'reconcile-repo',
+    candidateId: updateCandidate.id,
+    content: 'The API supports REST, GraphQL, and webhooks.',
+    reason: 'Approved correction candidate in test.',
+  });
+  assert.equal(appliedUpdate.kind, 'memory_update_candidate_apply_result');
+  assert.equal(appliedUpdate.candidate.status, 'applied');
+  assert.equal(
+    app.getMemory({ scope: 'repo', scopeKey: 'reconcile-repo', key: 'api-transport' }).content,
+    'The API supports REST, GraphQL, and webhooks.',
+  );
 
   const applied = await app.reconcileMemory({
     scope: 'repo',
@@ -4988,6 +5012,75 @@ test('reconcileMemory proposes by default and apply_safe only changes unambiguou
   });
   assert.ok(live.warnings.some((warning) => warning.code === 'live_state_verification_required'));
   assert.equal(live.appliedActions.length, 0);
+});
+
+test('memory update candidates can be rejected without mutating memory', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+  const original = app.remember({
+    scope: 'repo',
+    scopeKey: 'update-reject-repo',
+    key: 'closeout-rule',
+    content: 'Closeout requires local tests.',
+    category: 'runbook',
+  });
+  const store = new ContextForgeStore({ dataDir });
+  try {
+    store.createMemoryUpdateCandidate({
+      scopeType: 'repo',
+      scopeKey: 'update-reject-repo',
+      action: 'deactivate_memory',
+      targetMemoryId: original.id,
+      targetMemoryKey: original.key,
+      reason: 'Proposed stale rule deactivation.',
+      confidence: 0.6,
+    });
+  } finally {
+    store.close();
+  }
+
+  const candidates = app.listMemoryUpdateCandidates({
+    scope: 'repo',
+    scopeKey: 'update-reject-repo',
+    status: 'pending',
+  });
+  assert.equal(candidates.length, 1);
+  const rejected = app.rejectMemoryUpdateCandidate({
+    scope: 'repo',
+    scopeKey: 'update-reject-repo',
+    candidateId: candidates[0].id,
+    reason: 'Keep the runbook active.',
+  });
+  assert.equal(rejected.status, 'rejected');
+  assert.equal(
+    app.getMemory({ scope: 'repo', scopeKey: 'update-reject-repo', key: 'closeout-rule' }).status,
+    'active',
+  );
+
+  const storeAgain = new ContextForgeStore({ dataDir });
+  try {
+    storeAgain.createMemoryUpdateCandidate({
+      scopeType: 'repo',
+      scopeKey: 'update-reject-repo',
+      action: 'add_corrective_note',
+      proposedKey: 'closeout-rule-note',
+      proposedContent: 'Closeout requirements were reviewed but not changed.',
+      reason: 'Optional note.',
+    });
+  } finally {
+    storeAgain.close();
+  }
+  const skippedCandidate = app.listMemoryUpdateCandidates({
+    scope: 'repo',
+    scopeKey: 'update-reject-repo',
+    status: 'pending',
+  })[0];
+  const skipped = app.skipMemoryUpdateCandidate({
+    scope: 'repo',
+    scopeKey: 'update-reject-repo',
+    candidateId: skippedCandidate.id,
+  });
+  assert.equal(skipped.status, 'skipped');
 });
 
 test('reconcileMemory apply_safe rejects matching candidates when no durable memory matches', async () => {
@@ -5058,6 +5151,10 @@ test('REMOTE_METHODS exposes resume, suggestion, auto-promotion, and reconciliat
   assert.ok(REMOTE_METHODS.includes('autoPromoteMemoryCandidates'));
   assert.ok(REMOTE_METHODS.includes('reconcileMemory'));
   assert.ok(REMOTE_METHODS.includes('listPreferenceOccurrences'));
+  assert.ok(REMOTE_METHODS.includes('listMemoryUpdateCandidates'));
+  assert.ok(REMOTE_METHODS.includes('applyMemoryUpdateCandidate'));
+  assert.ok(REMOTE_METHODS.includes('rejectMemoryUpdateCandidate'));
+  assert.ok(REMOTE_METHODS.includes('skipMemoryUpdateCandidate'));
   assert.ok(REMOTE_METHODS.includes('listCheckpoints'));
   assert.ok(REMOTE_METHODS.includes('getSessionWorkingContext'));
   assert.ok(REMOTE_METHODS.includes('upsertSessionWorkingContext'));
@@ -5210,6 +5307,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     const toolNames = toolList.tools.map((tool) => tool.name).sort();
     assert.deepEqual(toolNames, [
       'append_raw',
+      'apply_memory_update_candidate',
       'auto_promote_memory_candidates',
       'begin_session',
       'bootstrap_context',
@@ -5224,6 +5322,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'list_checkpoints',
       'list_memory_candidates',
       'list_memory_events',
+      'list_memory_update_candidates',
       'list_preference_occurrences',
       'promote_memory',
       'promote_memory_candidate',
@@ -5231,9 +5330,11 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'rebuild_embeddings',
       'reconcile_memory',
       'reject_memory_candidate',
+      'reject_memory_update_candidate',
       'remember',
       'search',
       'session_status',
+      'skip_memory_update_candidate',
       'suggest_memory_promotions',
       'sync_resume_context',
       'upsert_session_working_context',
@@ -5266,6 +5367,15 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     const preferenceOccurrencesTool = toolList.tools.find((tool) => tool.name === 'list_preference_occurrences');
     assert.ok(preferenceOccurrencesTool.inputSchema.properties.status);
     assert.ok(preferenceOccurrencesTool.inputSchema.properties.limit);
+    const updateCandidatesTool = toolList.tools.find((tool) => tool.name === 'list_memory_update_candidates');
+    assert.ok(updateCandidatesTool.inputSchema.properties.status);
+    assert.ok(updateCandidatesTool.inputSchema.properties.action);
+    const applyUpdateTool = toolList.tools.find((tool) => tool.name === 'apply_memory_update_candidate');
+    assert.ok(applyUpdateTool.inputSchema.properties.candidateId);
+    const rejectUpdateTool = toolList.tools.find((tool) => tool.name === 'reject_memory_update_candidate');
+    assert.ok(rejectUpdateTool.inputSchema.properties.reason);
+    const skipUpdateTool = toolList.tools.find((tool) => tool.name === 'skip_memory_update_candidate');
+    assert.ok(skipUpdateTool.inputSchema.properties.candidateId);
     const autoPromoteTool = toolList.tools.find((tool) => tool.name === 'auto_promote_memory_candidates');
     assert.ok(autoPromoteTool.inputSchema.properties.dryRun);
     assert.ok(autoPromoteTool.inputSchema.properties.minConfidence);

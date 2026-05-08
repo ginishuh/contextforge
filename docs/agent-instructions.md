@@ -416,6 +416,14 @@ evidence is not durable memory by itself. Corrections handled through
 `reconcile_memory` can weaken preference occurrences when contradicted
 candidates are rejected.
 
+For existing durable memory that may need correction, deactivation, duplicate
+merging, or a corrective note, use the memory update candidate lane. These
+candidates point at the target durable memory where applicable and remain
+review proposals until the user approves. Use `apply_memory_update_candidate`
+only after explicit approval; use `reject_memory_update_candidate` when the
+candidate should not mutate durable memory, or `skip_memory_update_candidate`
+when it should remain non-applied without being treated as wrong.
+
 If a candidate key looks wrong, too broad, or belongs to the wrong repo, do not
 promote it as-is. Use `remember` with a corrected key/content or leave it as a
 checkpoint candidate.
@@ -513,6 +521,14 @@ Prefer distilling at meaningful boundaries:
   candidates.
 - `list_preference_occurrences`: inspect merged preference evidence recorded
   from preference-like candidates.
+- `list_memory_update_candidates`: inspect proposed corrections,
+  deactivations, duplicate merges, or corrective notes for durable memory.
+- `apply_memory_update_candidate`: apply a reviewed memory update candidate
+  after explicit user approval.
+- `reject_memory_update_candidate`: reject a memory update candidate without
+  mutating durable memory.
+- `skip_memory_update_candidate`: mark a memory update candidate skipped
+  without mutating durable memory.
 - `suggest_memory_promotions`: closeout-only selector that proposes at most one
   to three durable memory promotions and never promotes automatically.
 - `auto_promote_memory_candidates`: closeout-only strict automatic promotion
