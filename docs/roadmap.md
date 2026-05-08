@@ -103,7 +103,7 @@ Follow-on providers:
 
 Tracking issue: #4.
 
-Status: initial implementation in progress.
+Status: broad 0.3.x surface implemented.
 
 Goals:
 
@@ -112,29 +112,48 @@ Goals:
 - include examples for agent integration
 - document context budget guidance
 
-Initial tool surface:
+Tool surface:
 
 - `begin_session`
+- `session_status`
+- `sync_resume_context`
 - `search`
 - `get_memory`
 - `remember`
+- `list_memory_events`
+- `list_memory_candidates`
+- `list_memory_update_candidates`
 - `append_raw`
+- `prune_raw_events`
 - `distill_checkpoint`
+- `distill_usage`
+- `suggest_memory_promotions`
+- `auto_promote_memory_candidates`
+- `reconcile_memory`
 - `promote_memory`
+- `promote_memory_candidate`
+- `reject_memory_candidate`
+- `correct_memory`
+- `deactivate_memory`
+- `process_embedding_jobs`
+- `list_embedding_jobs`
+- `rebuild_embeddings`
 
 Initial implementation:
 
 - stdio MCP server entrypoint for local agent integrations
+- Streamable HTTP MCP endpoint for remote canonical deployments
 - package binary `contextforge-mcp`
 - tool schemas for stable core methods
 - structured JSON results plus text fallback content
-- explicit `promote_memory` primitive for reviewed durable-memory writes
+- start/resume, closeout promotion review, safe auto-promotion dry-run/apply,
+  and memory reconciliation wrappers over the lower-level memory primitives
 
 ## Milestone 6: Promotion Workflow
 
 Tracking issue: #10.
 
-Status: initial implementation in progress.
+Status: 0.3.x implementation in place.
 
 Goals:
 
@@ -146,6 +165,13 @@ Goals:
 Initial implementation:
 
 - checkpoint `memoryCandidates` can be listed without promotion
+- `suggestMemoryPromotions` proposes at most one to three high-signal closeout
+  candidates without scope-wide fallback by default
+- `autoPromoteMemoryCandidates` supports strict closeout-scoped automatic
+  promotion with dry-run defaults and environment-gated real promotion
+- `reconcileMemory` surfaces prior knowledge basis and applies only safe,
+  explicit user corrections
+- preference candidates can record repeated occurrences for later merge/review
 - `promoteMemory` writes durable memory with source checkpoint/session/candidate metadata
 - `correctMemory` updates a durable key while preserving previous content in memory-event metadata
 - `deactivateMemory` marks memories inactive instead of deleting them
@@ -156,7 +182,7 @@ Initial implementation:
 
 Tracking issue: #9.
 
-Status: initial implementation in progress.
+Status: 0.3.x hybrid retrieval and embedding queue implemented.
 
 Possible improvements:
 
@@ -174,7 +200,29 @@ Initial implementation:
 - canonical memory remains in `memories`; FTS is rebuilt/updated as a retrieval index
 - weighted FTS rank is combined with explainable lexical scoring
 - result metadata includes `why` token/field/match-type details and `retrieval.ftsRank`
+- sqlite-vec hybrid retrieval is available when embeddings are configured
+- embedding jobs decouple vector indexing from memory/checkpoint writes
+- `processEmbeddingJobs` retries failed work and resets stale `processing` jobs
+- `dbInfo` and bootstrap storage metadata report vector readiness, stale
+  sources, failed jobs, and degraded retrieval state
 - inactive memories remain excluded from search
+
+## Milestone 8: Embedding Queue Operations
+
+Tracking issues: #77 and #82.
+
+Status: implemented in PR #98.
+
+Delivered:
+
+- persistent `embedding_jobs` table with status, attempts, content hash, and
+  last-error metadata
+- queueing from durable memory, checkpoint, and memory-candidate write paths
+- explicit processing through CLI, remote API, and MCP
+- atomic job claiming for multi-worker safety
+- stale `processing` reset with configurable
+  `CONTEXTFORGE_EMBEDDINGS_STALE_AFTER_MS`
+- rebuild path that enqueues and processes derived vector work
 
 ## Open Decisions
 
@@ -187,10 +235,11 @@ Initial implementation:
   runs; future providers should expose the same metadata contract.
 - `codex_exec` can be checked with a dry doctor command and an opt-in live
   structured smoke before users enable it as the distillation provider.
-- Should checkpoint memory candidates require explicit human approval or allow a
-  configurable auto-promote policy?
 - What is the minimum auth model for remote mode?
-- Should MCP ship before or after the first real provider?
+- Should embedding queue dead-letter/max-attempt behavior preserve stale reset
+  attempts, reset them, or introduce a separate retry budget?
+- Should large-store coverage and `dbInfo` checks move to SQL aggregation or
+  cached counters?
 
 ## Follow-Up Issue Split
 
@@ -205,5 +254,7 @@ Each milestone after v0 has a focused tracking issue:
 - #9: retrieval quality improvements
 - #19: default repo scope key inference
 - #21: distillation provider prompt versioning
+- #77: embedding queue separation
+- #82: embedding job processing operations
 
 Those issues should stay narrow enough to produce reviewable PRs.

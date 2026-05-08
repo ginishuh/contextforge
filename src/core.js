@@ -284,9 +284,7 @@ function resultTextForVerification(result) {
 }
 
 function requiresLiveStateVerification(result) {
-  return /\b(branch\w*|prs?|pull requests?|issues?|ci|checks?|runtimes?|deploy\w*|deployments?|migrations?|migrate\w*|servers?|services?|queues?|status|drafts?|merge\w*|merged|commits?|tags?|releases?|rollbacks?)\b/i.test(
-    resultTextForVerification(result),
-  );
+  return liveStateTermsMatch(resultTextForVerification(result));
 }
 
 function bootstrapTrustForType(type) {
@@ -466,10 +464,17 @@ function bootstrapSummary(results) {
 
 function storageBootstrapInfo(config, info) {
   const vectorReady = Boolean(info.vector?.sqliteVecAvailable && info.embeddings?.enabled);
+  const staleSources = Number(info.embeddings?.coverage?.staleSources || 0);
+  const pendingJobs = Number(info.embeddings?.jobs?.pending || 0);
+  const failedJobs = Number(info.embeddings?.jobs?.failed || 0);
   return {
     mode: config.storageMode,
     authority: config.storageMode === 'remote' ? 'canonical' : config.storageMode === 'local' ? 'local' : 'project-local',
     vectorReady,
+    vectorState: vectorReady && staleSources === 0 && failedJobs === 0 ? 'ready' : 'degraded',
+    vectorStaleSources: staleSources,
+    vectorPendingJobs: pendingJobs,
+    vectorFailedJobs: failedJobs,
     sqliteVecAvailable: Boolean(info.vector?.sqliteVecAvailable),
     sqliteVecVersion: info.vector?.sqliteVecVersion || null,
     embeddingProvider: info.embeddings?.provider || 'none',
@@ -1007,7 +1012,13 @@ function isLiveStateCorrection(text) {
     /\b(merged?|deployed|released|rolled back|rollback)\s+(to|into|from|on|in)\b/i,
     /\b(ci|check run|github action|workflow run|migration|runtime|deployment|server|service|queue)\s+(failed|passing|passed|running|stopped|down|up|merged|deployed|current|pending)\b/i,
     /\b(alembic|migration|migrations)\s+(current|heads?|upgraded?|downgraded?|applied|pending)\b/i,
-  ].some((pattern) => pattern.test(value));
+  ].some((pattern) => pattern.test(value)) || liveStateTermsMatch(value);
+}
+
+function liveStateTermsMatch(text) {
+  return /(\b(branch\w*|prs?|pull requests?|issues?|ci|checks?|runtimes?|deploy\w*|deployments?|migrations?|migrate\w*|servers?|services?|queues?|status|drafts?|merge\w*|merged|commits?|tags?|releases?|rollbacks?)\b|브랜치|원격|머지|이슈|배포|런타임|마이그레이션|마이그레이트|커밋|릴리즈|롤백|서버|서비스|큐|상태)/i.test(
+    String(text || ''),
+  );
 }
 
 function checkpointTimestamp(checkpoint) {
@@ -1182,14 +1193,28 @@ export function createContextForge(options = {}) {
   let lastRawPruneAt = 0;
 
   function buildDbInfo(store) {
+    const storeInfo = store.dbInfo();
+    const jobs = store.countEmbeddingJobs();
+    const coverage =
+      embeddingProvider && storeInfo.vector.sqliteVecAvailable
+        ? store.embeddingCoverage({
+            model: embeddingProvider.model,
+            dimensions: embeddingProvider.dimensions,
+          })
+        : null;
     return {
-      ...store.dbInfo(),
+      ...storeInfo,
       storageMode: config.storageMode,
       embeddings: {
         provider: config.embeddings.provider,
         model: config.embeddings.model,
         dimensions: config.embeddings.dimensions,
+        staleAfterMs: config.embeddings.staleAfterMs,
         enabled: Boolean(embeddingProvider),
+        requiredForQuality: true,
+        degraded: !embeddingProvider || !storeInfo.vector.sqliteVecAvailable || Boolean(coverage?.staleSources) || Boolean(jobs.failed),
+        jobs,
+        coverage,
       },
       rawRetention: {
         ttlDays: config.rawRetention.ttlDays,
@@ -1210,55 +1235,126 @@ export function createContextForge(options = {}) {
     return store.pruneRawEventsOlderThan(rawTtlCutoffIso(config.rawRetention.ttlDays, now));
   }
 
-  async function embedSources(store, sources, { batchSize = 32 } = {}) {
+  function enqueueEmbeddingSources(store, sources, { force = false } = {}) {
     if (!embeddingProvider) {
       return {
         provider: config.embeddings.provider,
         skipped: true,
         reason: 'embeddings_disabled',
-        embedded: 0,
+        model: null,
+        dimensions: null,
+        queued: 0,
         bySourceType: {},
       };
     }
-    store.ensureEmbeddingIndex(embeddingProvider.dimensions);
-    let embedded = 0;
+    const jobs = store.enqueueEmbeddingJobs(sources, {
+      model: embeddingProvider.model,
+      dimensions: embeddingProvider.dimensions,
+      force,
+    });
     const bySourceType = {};
-    try {
-      for (let index = 0; index < sources.length; index += batchSize) {
-        const batch = sources.slice(index, index + batchSize);
-        const embeddings = await embeddingProvider.embed(batch.map((source) => source.text));
-        for (const [offset, source] of batch.entries()) {
-          store.upsertEmbedding({
-            sourceType: source.sourceType,
-            recordId: source.recordId,
-            scopeType: source.scopeType,
-            scopeKey: source.scopeKey,
-            model: embeddingProvider.model,
-            dimensions: embeddingProvider.dimensions,
-            contentHash: source.contentHash,
-            embedding: embeddings[offset],
-          });
-          embedded += 1;
-          bySourceType[source.sourceType] = (bySourceType[source.sourceType] || 0) + 1;
-        }
-      }
-    } catch (error) {
-      error.embeddingProgress = {
-        scanned: sources.length,
-        embedded,
-        bySourceType,
-      };
-      throw error;
+    for (const job of jobs) {
+      bySourceType[job.sourceType] = (bySourceType[job.sourceType] || 0) + 1;
     }
     return {
       provider: embeddingProvider.name,
       model: embeddingProvider.model,
       dimensions: embeddingProvider.dimensions,
-      scanned: sources.length,
-      embedded,
-      bySourceType,
       skipped: false,
+      queued: jobs.length,
+      bySourceType,
     };
+  }
+
+  function embeddingSourceForJob(store, job) {
+    if (job.sourceType === 'memory') {
+      const memory = store.getMemoryById({
+        scopeType: job.scopeType,
+        scopeKey: job.scopeKey,
+        memoryId: job.recordId,
+      });
+      return memory && store.embeddingSourceForMemory(memory);
+    }
+    if (job.sourceType === 'checkpoint') {
+      const checkpoint = store.getCheckpointById({
+        scopeType: job.scopeType,
+        scopeKey: job.scopeKey,
+        checkpointId: job.recordId,
+      });
+      return checkpoint && store.embeddingSourceForCheckpoint(checkpoint);
+    }
+    const candidate = store.getMemoryCandidate({
+      scopeType: job.scopeType,
+      scopeKey: job.scopeKey,
+      candidateId: job.recordId,
+    });
+    return candidate && store.embeddingSourceForMemoryCandidate(candidate);
+  }
+
+  async function processEmbeddingJobBatch(store, jobs) {
+    const result = {
+      processed: 0,
+      embedded: 0,
+      failed: 0,
+      missingSources: 0,
+      bySourceType: {},
+      errors: [],
+    };
+    const active = [];
+    for (const job of jobs) {
+      const claimedJob = store.markEmbeddingJobProcessing(job.id);
+      if (!claimedJob) {
+        continue;
+      }
+      const source = embeddingSourceForJob(store, job);
+      if (!source || source.contentHash !== job.contentHash) {
+        store.markEmbeddingJobFailed(
+          job.id,
+          new Error(source ? 'Embedding job source content changed; enqueue a fresh job.' : 'Embedding job source not found.'),
+        );
+        result.failed += 1;
+        result.missingSources += source ? 0 : 1;
+        continue;
+      }
+      active.push({ job: claimedJob, source });
+    }
+    if (active.length === 0) {
+      return result;
+    }
+    let embeddings;
+    try {
+      embeddings = await embeddingProvider.embed(active.map((item) => item.source.text));
+    } catch (error) {
+      for (const item of active) {
+        store.markEmbeddingJobFailed(item.job.id, error);
+        result.failed += 1;
+      }
+      result.errors.push({ message: error.message, count: active.length });
+      return result;
+    }
+    for (const [index, item] of active.entries()) {
+      try {
+        store.upsertEmbedding({
+          sourceType: item.source.sourceType,
+          recordId: item.source.recordId,
+          scopeType: item.source.scopeType,
+          scopeKey: item.source.scopeKey,
+          model: embeddingProvider.model,
+          dimensions: embeddingProvider.dimensions,
+          contentHash: item.source.contentHash,
+          embedding: embeddings[index],
+        });
+        store.markEmbeddingJobCompleted(item.job.id);
+        result.processed += 1;
+        result.embedded += 1;
+        result.bySourceType[item.source.sourceType] = (result.bySourceType[item.source.sourceType] || 0) + 1;
+      } catch (error) {
+        store.markEmbeddingJobFailed(item.job.id, error);
+        result.failed += 1;
+        result.errors.push({ message: error.message, sourceType: item.source.sourceType, recordId: item.source.recordId });
+      }
+    }
+    return result;
   }
 
   function searchStoreWithScope(store, scope, options, queryEmbedding = null) {
@@ -1540,16 +1636,18 @@ export function createContextForge(options = {}) {
 
     remember(options) {
       const scope = normalizeScopeOptions(options, config);
-      return useStore((store) =>
-        store.rememberMemory({
+      return useStore((store) => {
+        const memory = store.rememberMemory({
           ...scope,
           key: options.key,
           content: options.content,
           category: options.category,
           tags: options.tags,
           importance: options.importance,
-        }),
-      );
+        });
+        enqueueEmbeddingSources(store, [store.embeddingSourceForMemory(memory)]);
+        return memory;
+      });
     },
 
     promoteMemory(options) {
@@ -1557,8 +1655,8 @@ export function createContextForge(options = {}) {
       requireOption(options.key, 'key');
       requireOption(options.content, 'content');
 
-      return useStore((store) =>
-        store.rememberMemory({
+      return useStore((store) => {
+        const memory = store.rememberMemory({
           ...scope,
           key: options.key,
           content: options.content,
@@ -1574,8 +1672,10 @@ export function createContextForge(options = {}) {
             sourceCandidateIndex: options.sourceCandidateIndex ?? null,
             reason: options.reason || null,
           },
-        }),
-      );
+        });
+        enqueueEmbeddingSources(store, [store.embeddingSourceForMemory(memory)]);
+        return memory;
+      });
     },
 
     correctMemory(options) {
@@ -1589,7 +1689,7 @@ export function createContextForge(options = {}) {
           throw new Error(`Memory not found: ${options.key}`);
         }
 
-        return store.rememberMemory({
+        const memory = store.rememberMemory({
           ...scope,
           key: options.key,
           content: options.content,
@@ -1605,6 +1705,8 @@ export function createContextForge(options = {}) {
             reason: options.reason || null,
           },
         });
+        enqueueEmbeddingSources(store, [store.embeddingSourceForMemory(memory)]);
+        return memory;
       });
     },
 
@@ -2123,8 +2225,8 @@ export function createContextForge(options = {}) {
 
     async reconcileMemory(options = {}) {
       const scope = normalizeScopeOptions(options, config);
-      requireOption(options.query, 'query');
       requireOption(options.correction, 'correction');
+      const baseQuery = options.query || options.correction;
       const mode = options.mode || 'propose';
       if (!['propose', 'apply_safe'].includes(mode)) {
         throw new Error('mode must be propose or apply_safe.');
@@ -2136,14 +2238,14 @@ export function createContextForge(options = {}) {
       );
       const includeShared = truthyOption(options.includeShared);
       const createUpdateCandidates = truthyOption(options.createUpdateCandidates);
-      const reconciliationQuery = `${options.query}\n${options.correction}`;
+      const reconciliationQuery = `${baseQuery}\n${options.correction}`;
       const bootstrap = await this.bootstrapContext({
         ...options,
         query: reconciliationQuery,
         includeShared,
         limit,
       });
-      const liveState = isLiveStateCorrection(`${options.query}\n${options.correction}`);
+      const liveState = isLiveStateCorrection(reconciliationQuery);
       return useStore((store) => {
         const basis = (bootstrap.results || []).slice(0, limit).map(summarizeBasisResult);
         const latestCheckpoint = options.sessionId
@@ -2306,7 +2408,7 @@ export function createContextForge(options = {}) {
                   reason: 'Rejected via reconcile_memory apply_safe after user correction.',
                   metadata: {
                     correction: options.correction,
-                    query: options.query,
+                    query: baseQuery,
                   },
                 });
                 appliedActions.push({
@@ -2340,7 +2442,7 @@ export function createContextForge(options = {}) {
           mode,
           scope: bootstrap.scope,
           storage: bootstrap.storage,
-          query: options.query,
+          query: baseQuery,
           correction: options.correction,
           basis,
           conflicts,
@@ -2529,8 +2631,106 @@ export function createContextForge(options = {}) {
           ...store.listCheckpointEmbeddingSources(sourceOptions),
           ...store.listMemoryCandidateEmbeddingSources(sourceOptions),
         ];
-        return embedSources(store, sources, { batchSize });
+        const queued = enqueueEmbeddingSources(store, sources, { force: truthyOption(options.force) });
+        const processed = await this.processEmbeddingJobs({
+          ...(shouldNarrowScope ? { scope: scope.scopeType, scopeKey: scope.scopeKey } : {}),
+          batchSize,
+          limit: Math.max(sources.length, 1),
+        });
+        return {
+          ...processed,
+          provider: embeddingProvider.name,
+          model: embeddingProvider.model,
+          dimensions: embeddingProvider.dimensions,
+          scanned: sources.length,
+          queued: queued.queued,
+          bySourceType: processed.bySourceType,
+          skipped: false,
+        };
       });
+    },
+
+    async processEmbeddingJobs(options = {}) {
+      const scope = normalizeScopeOptions(options, config);
+      if (!embeddingProvider) {
+        return {
+          provider: config.embeddings.provider,
+          skipped: true,
+          reason: 'embeddings_disabled',
+          processed: 0,
+          embedded: 0,
+          failed: 0,
+        };
+      }
+      const batchSize = positiveNumber(options.batchSize == null ? 32 : Number(options.batchSize), 'batchSize');
+      const limit = positiveNumber(options.limit == null ? 50 : Number(options.limit), 'limit');
+      const staleAfterMs =
+        options.staleAfterMs == null
+          ? config.embeddings.staleAfterMs
+          : positiveNumber(Number(options.staleAfterMs), 'staleAfterMs');
+      return useStore(async (store) => {
+        store.ensureEmbeddingIndex(embeddingProvider.dimensions, { resetOnDimensionChange: truthyOption(options.force) });
+        const shouldNarrowScope = Boolean(options.scope || options.scopeKey || options.cwd || options.repoPath);
+        const listOptions = {
+          scopeType: shouldNarrowScope ? scope.scopeType : null,
+          scopeKey: shouldNarrowScope ? scope.scopeKey : null,
+          limit,
+        };
+        const staleReset = store.resetStaleEmbeddingJobs({
+          scopeType: listOptions.scopeType,
+          scopeKey: listOptions.scopeKey,
+          staleBeforeIso: new Date(Date.now() - staleAfterMs).toISOString(),
+        });
+        const pending = store.listEmbeddingJobs({ ...listOptions, status: 'pending' });
+        const failed = truthyOption(options.retryFailed)
+          ? store.listEmbeddingJobs({ ...listOptions, status: 'failed', limit: Math.max(0, limit - pending.length) })
+          : [];
+        const jobs = [...pending, ...failed].slice(0, limit);
+        const aggregate = {
+          provider: embeddingProvider.name,
+          model: embeddingProvider.model,
+          dimensions: embeddingProvider.dimensions,
+          skipped: false,
+          scanned: jobs.length,
+          processed: 0,
+          embedded: 0,
+          failed: 0,
+          missingSources: 0,
+          bySourceType: {},
+          errors: [],
+          staleReset,
+        };
+        for (let index = 0; index < jobs.length; index += batchSize) {
+          const batch = jobs.slice(index, index + batchSize);
+          const result = await processEmbeddingJobBatch(store, batch);
+          aggregate.processed += result.processed;
+          aggregate.embedded += result.embedded;
+          aggregate.failed += result.failed;
+          aggregate.missingSources += result.missingSources;
+          aggregate.errors.push(...result.errors);
+          for (const [sourceType, count] of Object.entries(result.bySourceType)) {
+            aggregate.bySourceType[sourceType] = (aggregate.bySourceType[sourceType] || 0) + count;
+          }
+        }
+        aggregate.jobs = store.countEmbeddingJobs({
+          scopeType: listOptions.scopeType,
+          scopeKey: listOptions.scopeKey,
+        });
+        return aggregate;
+      });
+    },
+
+    listEmbeddingJobs(options = {}) {
+      const scope = normalizeScopeOptions(options, config);
+      const shouldNarrowScope = Boolean(options.scope || options.scopeKey || options.cwd || options.repoPath);
+      return useStore((store) =>
+        store.listEmbeddingJobs({
+          scopeType: shouldNarrowScope ? scope.scopeType : null,
+          scopeKey: shouldNarrowScope ? scope.scopeKey : null,
+          status: options.status || null,
+          limit: options.limit == null ? null : Number(options.limit),
+        }),
+      );
     },
 
     appendRaw(options) {
@@ -2850,7 +3050,7 @@ export function createContextForge(options = {}) {
           provider: config.embeddings.provider,
           skipped: true,
           reason: 'embeddings_disabled',
-          embedded: 0,
+          queued: 0,
           bySourceType: {},
         };
         if (embeddingProvider) {
@@ -2859,14 +3059,14 @@ export function createContextForge(options = {}) {
               ...scope,
               checkpointId: checkpoint.id,
             });
-            embedding = await embedSources(
+            embedding = enqueueEmbeddingSources(
               store,
               [
                 store.embeddingSourceForCheckpoint(checkpoint),
                 ...candidates.map((candidate) => store.embeddingSourceForMemoryCandidate(candidate)),
               ],
-              { batchSize: 32 },
             );
+            embedding.reason = 'queued';
           } catch (error) {
             embedding = embeddingFailureResult(error);
           }

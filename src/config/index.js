@@ -183,6 +183,11 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
     'CONTEXTFORGE_EMBEDDINGS_DIMENSIONS',
     1536,
   );
+  const embeddingsStaleAfterMs = parsePositiveInteger(
+    env.CONTEXTFORGE_EMBEDDINGS_STALE_AFTER_MS,
+    'CONTEXTFORGE_EMBEDDINGS_STALE_AFTER_MS',
+    10 * 60 * 1000,
+  );
   const distillMinIntervalMs = parsePositiveInteger(
     env.CONTEXTFORGE_DISTILL_MIN_INTERVAL_MS,
     'CONTEXTFORGE_DISTILL_MIN_INTERVAL_MS',
@@ -211,6 +216,7 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
         'CONTEXTFORGE_EMBEDDINGS_TIMEOUT_MS',
         30000,
       ),
+      staleAfterMs: embeddingsStaleAfterMs,
     },
     remote: {
       url: env.CONTEXTFORGE_REMOTE_URL || null,

@@ -26,6 +26,8 @@ const REMOTE_METHODS = [
   'getMemory',
   'search',
   'rebuildEmbeddings',
+  'processEmbeddingJobs',
+  'listEmbeddingJobs',
   'appendRaw',
   'listRawEvents',
   'listCheckpoints',

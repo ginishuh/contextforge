@@ -17,6 +17,11 @@ ContextForge is a sidecar memory runtime. It complements existing agent memory
 systems by providing canonical project/repo memory, evidence retention, and
 LLM-backed distillation.
 
+Current 0.3.x builds add remote-first MCP workflows, start/resume handoff
+tools, closeout memory promotion review, correction reconciliation, hybrid
+retrieval, and an embedding job queue so vector indexing can recover
+independently from memory or checkpoint writes.
+
 ## Goals
 
 - Keep durable memory in a canonical local store.
@@ -45,7 +50,7 @@ Codex / Claude Code / OpenClaw
 ## Storage Modes
 
 - `project-local`: repo-bound SQLite storage in a gitignored directory. This is
-  the default v0 mode.
+  the default zero-friction mode.
 - `local`: single-machine SQLite storage under the user's home directory.
 - `remote`: first-class VPS or server-backed canonical memory for multiple
   machines.
@@ -70,7 +75,7 @@ bring-your-own distillation providers, such as:
 - direct model APIs
 - local model runners
 
-The v0 implementation ships with a deterministic `mock` provider and a
+The current implementation ships with a deterministic `mock` provider and a
 `codex_exec` provider. The `codex_exec` provider shells out to `codex exec`,
 requests JSON-only output with a schema, validates the result, and records
 provider run metadata, including prompt and output schema versions.
@@ -200,7 +205,7 @@ reads and writes for `shared`, `repo`, and `local` scopes, and the client sends
 the requested scope explicitly with each operation. If a token is configured on
 the server, clients must send it with `CONTEXTFORGE_REMOTE_TOKEN`.
 
-Current v0 remote behavior is deliberately simple:
+Current remote behavior is deliberately simple:
 
 - `CONTEXTFORGE_STORAGE_MODE=remote` delegates core calls to
   `CONTEXTFORGE_REMOTE_URL`.
@@ -270,12 +275,15 @@ CONTEXTFORGE_OPENAI_API_KEY=sk-...
 CONTEXTFORGE_EMBEDDINGS_MODEL=text-embedding-3-small
 CONTEXTFORGE_EMBEDDINGS_DIMENSIONS=1536
 CONTEXTFORGE_EMBEDDINGS_TIMEOUT_MS=30000
+CONTEXTFORGE_EMBEDDINGS_STALE_AFTER_MS=600000
 ```
 
 The default and recommended embedding model is `text-embedding-3-small`.
 `CONTEXTFORGE_EMBEDDINGS_DIMENSIONS` is sent to OpenAI only for
 `text-embedding-3-*` models; legacy models such as `text-embedding-ada-002` do
 not support that request field and must return the configured dimension count.
+`CONTEXTFORGE_EMBEDDINGS_STALE_AFTER_MS` controls when a stuck `processing`
+embedding job is returned to `pending`; the default is 10 minutes.
 
 Use a long random token and store the same value on client machines as
 `CONTEXTFORGE_REMOTE_TOKEN`. Treat this token as an administrator credential:
@@ -388,19 +396,34 @@ the ContextForge API, but it is not a replacement for TLS on untrusted networks
 or for operator-only handling of admin-capable credentials.
 
 When embeddings are enabled on the server, successful `distillCheckpoint` calls
-immediately embed the new checkpoint and any memory candidates from that
-checkpoint into the derived sqlite-vec index. The canonical tables remain
-SQLite memory/checkpoint tables; the vector index is rebuildable with:
+immediately queue embedding work for the new checkpoint and its memory
+candidates. Durable memory writes also queue their own embedding work. The
+actual sqlite-vec index write is processed by the embedding worker, so vector
+indexing can retry or recover independently from the canonical write path:
+
+```bash
+node src/cli.js processEmbeddingJobs --scope repo --scopeKey github.com/example/repo
+```
+
+Inspect queue state with `listEmbeddingJobs`, or with `dbInfo` for aggregate
+job counts and degraded retrieval signals. The canonical tables remain SQLite
+memory/checkpoint tables; the vector index is rebuildable with:
 
 ```bash
 node src/cli.js rebuildEmbeddings --scope repo --scopeKey github.com/example/repo
 ```
 
-If embedding fails after a successful distillation, the checkpoint remains
-stored and the result reports `embedding.reason = "embedding_failed"`. If some
-rows were already written before the failure, the response also includes
-`embedding.embedded`, `embedding.bySourceType`, and
-`embedding.partialFailure = true` so operators can see the partial DB state.
+If embedding fails after a successful write or distillation, the canonical
+memory/checkpoint data remains stored and the embedding job records `failed`
+with attempts and the last error. Retry failed jobs with:
+
+```bash
+node src/cli.js processEmbeddingJobs --retryFailed true
+```
+
+Stuck `processing` jobs are reset to `pending` after the configured stale
+timeout. Set `CONTEXTFORGE_EMBEDDINGS_STALE_AFTER_MS` on the worker/server, or
+pass `--staleAfterMs` for one run.
 
 If the configured embedding dimensions change, ContextForge refuses to silently
 drop the existing vector index. Run a forced rebuild only when you intentionally
@@ -1102,20 +1125,28 @@ The MCP server exposes a narrow tool surface over the same core API:
 
 - `begin_session`
 - `session_status`
+- `sync_resume_context`
 - `search`
 - `get_memory`
 - `remember`
 - `list_memory_events`
 - `list_memory_candidates`
+- `list_memory_update_candidates`
 - `append_raw`
 - `prune_raw_events`
 - `distill_checkpoint`
 - `distill_usage`
+- `suggest_memory_promotions`
+- `auto_promote_memory_candidates`
+- `reconcile_memory`
 - `promote_memory`
 - `promote_memory_candidate`
 - `reject_memory_candidate`
 - `correct_memory`
 - `deactivate_memory`
+- `process_embedding_jobs`
+- `list_embedding_jobs`
+- `rebuild_embeddings`
 
 Example MCP client configuration:
 
@@ -1249,9 +1280,11 @@ operators can tell which prompt contract produced the result.
 
 ## Status
 
-Early v0 core. The current implementation includes SQLite migrations, scoped
-durable memories, raw event capture, FTS-backed explainable search, mock
-checkpoint distillation, `codex_exec` checkpoint distillation, and a minimal
-remote HTTP mode for server-backed canonical memory. Search can combine repo and
-shared memory while keeping local memory opt-in. MCP stdio integration and an
-explicit promotion workflow are available. Additional providers are future work.
+0.3.x runtime. The current implementation includes SQLite migrations, scoped
+durable memories, raw event capture, rolling working summaries, checkpoint
+distillation with `mock` and `codex_exec` providers, remote HTTP mode for
+server-backed canonical memory, stdio and Streamable HTTP MCP, explainable
+hybrid retrieval, embedding job processing, closeout promotion review, strict
+safe auto-promotion controls, and memory reconciliation for user corrections.
+Additional distillation providers and large-store performance hardening remain
+future work.

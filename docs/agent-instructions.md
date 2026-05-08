@@ -129,9 +129,10 @@ github.com/example/repo unless the user says otherwise. Include shared scope
 only for user-wide policy, deployment, credential-location, or cross-repo
 conventions.
 
-Interpret search result types by trust level:
+Interpret search result types by trust role:
 - memory: reviewed durable fact or decision.
-- checkpoint: recent session continuity; verify important claims before acting.
+- checkpoint: credible recent handoff state for continuity and planning; verify
+  mutable live state before acting.
 - memory_candidate: unreviewed promotion candidate and review material.
 
 For loose continuation prompts such as "yesterday", "continue", "previous
@@ -343,8 +344,9 @@ it.
 
 ## Checkpoints And Candidates
 
-Checkpoints are recent continuity. They are useful for handoff, but they are
-not canonical truth.
+Checkpoints are credible recent handoff state. Use them actively for
+continuity, planning, prior intent, recent decisions, and unfinished work, while
+verifying mutable live state separately.
 
 Good checkpoints are compressed retrieval indexes, not generic summaries. They
 should preserve the names, numbers, intervals, commands, paths, APIs, error
@@ -551,3 +553,10 @@ Prefer distilling at meaningful boundaries:
   durable memories, checkpoints, and memory candidates. If embedding dimensions
   changed, pass `force=true` only when the operator intentionally wants to reset
   the derived sqlite-vec index.
+- `process_embedding_jobs`: process queued embedding jobs independently from
+  checkpoint or memory writes. Use `retryFailed=true` when retrying failed
+  embedding provider or vector-index work. A per-call `staleAfterMs` override
+  is available; otherwise ContextForge uses
+  `CONTEXTFORGE_EMBEDDINGS_STALE_AFTER_MS` with a 10 minute default.
+- `list_embedding_jobs`: inspect embedding job status, attempts, last error,
+  source type/id, and completion time.

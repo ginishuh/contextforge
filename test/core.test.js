@@ -192,7 +192,25 @@ test('dbInfo initializes a fresh SQLite store', async () => {
 
   assert.equal(info.schemaVersion, SCHEMA_VERSION);
   assert.equal(info.tables.memories, 0);
+  assert.equal(info.tables.embeddingJobs, 0);
+  assert.equal(info.embeddings.requiredForQuality, true);
+  assert.equal(info.embeddings.staleAfterMs, 10 * 60 * 1000);
+  assert.equal(info.embeddings.degraded, true);
+  assert.deepEqual(info.embeddings.jobs, { pending: 0, processing: 0, completed: 0, failed: 0 });
   assert.match(info.dbPath, /contextforge\.db$/);
+});
+
+test('dbInfo reports configured embedding stale timeout', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_EMBEDDINGS_STALE_AFTER_MS: '1234',
+    },
+    cwd: process.cwd(),
+  });
+
+  assert.equal(app.dbInfo().embeddings.staleAfterMs, 1234);
 });
 
 test('ContextForgeStore.withTransaction returns results and rolls back on throw', async () => {
@@ -228,6 +246,43 @@ test('ContextForgeStore.withTransaction returns results and rolls back on throw'
       /rollback please/,
     );
     assert.equal(store.getMemory({ scopeType: 'repo', scopeKey: 'tx-repo', key: 'rolled-back-memory' }), null);
+  } finally {
+    store.close();
+  }
+});
+
+test('embedding jobs claim atomically and stale processing jobs reset', async () => {
+  const dataDir = await makeTempDir();
+  const store = new ContextForgeStore({ dataDir });
+  try {
+    const [job] = store.enqueueEmbeddingJobs(
+      [
+        {
+          sourceType: 'memory',
+          scopeType: 'repo',
+          scopeKey: 'embedding-job-repo',
+          recordId: 'memory-1',
+          contentHash: 'hash-1',
+        },
+      ],
+      { model: 'test-embedding', dimensions: 3 },
+    );
+
+    const claimed = store.markEmbeddingJobProcessing(job.id);
+    assert.equal(claimed.status, 'processing');
+    assert.equal(claimed.attempts, 1);
+    assert.equal(store.markEmbeddingJobProcessing(job.id), null);
+
+    store.db.prepare("UPDATE embedding_jobs SET updated_at = '2000-01-01T00:00:00.000Z' WHERE id = ?").run(job.id);
+    const reset = store.resetStaleEmbeddingJobs({
+      scopeType: 'repo',
+      scopeKey: 'embedding-job-repo',
+      staleBeforeIso: '2000-01-01T00:00:01.000Z',
+    });
+    assert.equal(reset.reset, 1);
+    const reclaimed = store.markEmbeddingJobProcessing(job.id);
+    assert.equal(reclaimed.status, 'processing');
+    assert.equal(reclaimed.attempts, 2);
   } finally {
     store.close();
   }
@@ -2487,7 +2542,7 @@ test('hybrid ranking keeps strong lexical matches ahead of weak vector-only matc
   assert.equal(results[1].retrieval.method, 'vector');
 });
 
-test('distillCheckpoint embeds the new checkpoint and candidates when embeddings are enabled', async () => {
+test('distillCheckpoint queues embedding jobs and processEmbeddingJobs indexes them', async () => {
   const dataDir = await makeTempDir();
   const embeddingProvider = {
     name: 'test-vector',
@@ -2547,12 +2602,27 @@ test('distillCheckpoint embeds the new checkpoint and candidates when embeddings
     sessionId: 'distill-vector-session',
   });
 
-  assert.equal(checkpoint.embedding.embedded, 2);
+  assert.equal(checkpoint.embedding.reason, 'queued');
+  assert.equal(checkpoint.embedding.queued, 2);
   assert.deepEqual(checkpoint.embedding.bySourceType, {
     checkpoint: 1,
     memory_candidate: 1,
   });
+  assert.equal(app.dbInfo().tables.embeddings, 0);
+  assert.equal(app.dbInfo().embeddings.jobs.pending, 2);
+
+  const processed = await app.processEmbeddingJobs({
+    scope: 'repo',
+    scopeKey: 'repo-distill-vector',
+  });
+  assert.equal(processed.embedded, 2);
+  assert.deepEqual(processed.bySourceType, {
+    checkpoint: 1,
+    memory_candidate: 1,
+  });
   assert.equal(app.dbInfo().tables.embeddings, 2);
+  assert.equal(app.dbInfo().embeddings.jobs.completed, 2);
+  assert.equal(app.dbInfo().embeddings.coverage.staleSources, 0);
 
   const checkpointResults = await app.search({
     scope: 'repo',
@@ -2562,6 +2632,15 @@ test('distillCheckpoint embeds the new checkpoint and candidates when embeddings
   assert.equal(checkpointResults[0].type, 'checkpoint');
   assert.equal(checkpointResults[0].checkpoint.id, checkpoint.id);
   assert.equal(checkpointResults[0].retrieval.method, 'vector');
+
+  const bootstrap = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-distill-vector',
+    query: 'checkpoint search',
+  });
+  const bootstrapCheckpoint = bootstrap.results.find((item) => item.type === 'checkpoint');
+  assert.equal(bootstrapCheckpoint.trust, 'credible_recent_handoff');
+  assert.match(bootstrapCheckpoint.whyUse, /Credible recent handoff state/);
 
   const candidateResults = await app.search({
     scope: 'repo',
@@ -2573,14 +2652,14 @@ test('distillCheckpoint embeds the new checkpoint and candidates when embeddings
   assert.equal(candidateResults[0].retrieval.vectorModel, 'test-embedding');
 });
 
-test('distillCheckpoint reports partial embedding progress when a later upsert fails', async () => {
+test('embedding jobs can fail and be retried independently after distill succeeds', async () => {
   const dataDir = await makeTempDir();
   const embeddingProvider = {
     name: 'test-vector',
     model: 'test-embedding',
     dimensions: 3,
     async embed(texts) {
-      return texts.map((_, index) => (index === 0 ? [1, 0, 0] : [0, 1]));
+      return texts.map((text) => (String(text).includes('bad-candidate-vector') ? [0, 1] : [1, 0, 0]));
     },
   };
   const app = createContextForge({
@@ -2628,10 +2707,23 @@ test('distillCheckpoint reports partial embedding progress when a later upsert f
     sessionId: 'partial-embedding-session',
   });
 
-  assert.equal(checkpoint.embedding.reason, 'embedding_failed');
-  assert.equal(checkpoint.embedding.embedded, 1);
-  assert.equal(checkpoint.embedding.partialFailure, true);
-  assert.deepEqual(checkpoint.embedding.bySourceType, { checkpoint: 1 });
+  assert.equal(checkpoint.embedding.reason, 'queued');
+  assert.equal(checkpoint.embedding.queued, 2);
+  const processed = await app.processEmbeddingJobs({
+    scope: 'repo',
+    scopeKey: 'repo-partial-embedding',
+  });
+  assert.equal(processed.embedded, 1);
+  assert.equal(processed.failed, 1);
+  assert.deepEqual(processed.bySourceType, { checkpoint: 1 });
+  const failedJobs = app.listEmbeddingJobs({
+    scope: 'repo',
+    scopeKey: 'repo-partial-embedding',
+    status: 'failed',
+  });
+  assert.equal(failedJobs.length, 1);
+  assert.match(failedJobs[0].lastError, /dimensions/);
+  assert.equal(app.dbInfo().embeddings.coverage.staleSources, 1);
 });
 
 test('search unions lexical candidates with FTS candidates', () => {
@@ -4949,6 +5041,18 @@ test('reconcileMemory proposes by default and apply_safe only changes unambiguou
     sessionId: 'reconcile-session',
   });
 
+  const proposedWithoutQuery = await app.reconcileMemory({
+    scope: 'repo',
+    scopeKey: 'reconcile-repo',
+    sessionId: 'reconcile-session',
+    correction: 'API REST only transport is wrong; the API supports REST and GraphQL.',
+  });
+  assert.equal(
+    proposedWithoutQuery.query,
+    'API REST only transport is wrong; the API supports REST and GraphQL.',
+  );
+  assert.ok(proposedWithoutQuery.basis.some((item) => item.type === 'memory'));
+
   const proposed = await app.reconcileMemory({
     scope: 'repo',
     scopeKey: 'reconcile-repo',
@@ -5041,6 +5145,16 @@ test('reconcileMemory proposes by default and apply_safe only changes unambiguou
   });
   assert.ok(live.warnings.some((warning) => warning.code === 'live_state_verification_required'));
   assert.equal(live.appliedActions.length, 0);
+
+  const koreanLive = await app.reconcileMemory({
+    scope: 'repo',
+    scopeKey: 'reconcile-repo',
+    sessionId: 'reconcile-session',
+    correction: '그 PR 아직 안 머지됐잖아. 이슈 상태랑 원격 브랜치를 확인해야 해.',
+    mode: 'apply_safe',
+  });
+  assert.ok(koreanLive.warnings.some((warning) => warning.code === 'live_state_verification_required'));
+  assert.equal(koreanLive.appliedActions.length, 0);
 });
 
 test('memory update candidates can be rejected without mutating memory', async () => {
@@ -5258,6 +5372,8 @@ test('REMOTE_METHODS exposes resume, suggestion, auto-promotion, and reconciliat
   assert.ok(REMOTE_METHODS.includes('applyMemoryUpdateCandidate'));
   assert.ok(REMOTE_METHODS.includes('rejectMemoryUpdateCandidate'));
   assert.ok(REMOTE_METHODS.includes('skipMemoryUpdateCandidate'));
+  assert.ok(REMOTE_METHODS.includes('processEmbeddingJobs'));
+  assert.ok(REMOTE_METHODS.includes('listEmbeddingJobs'));
   assert.ok(REMOTE_METHODS.includes('listCheckpoints'));
   assert.ok(REMOTE_METHODS.includes('getSessionWorkingContext'));
   assert.ok(REMOTE_METHODS.includes('upsertSessionWorkingContext'));
@@ -5423,10 +5539,12 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'get_session_working_context',
       'get_working_summary',
       'list_checkpoints',
+      'list_embedding_jobs',
       'list_memory_candidates',
       'list_memory_events',
       'list_memory_update_candidates',
       'list_preference_occurrences',
+      'process_embedding_jobs',
       'promote_memory',
       'promote_memory_candidate',
       'prune_raw_events',
@@ -5456,6 +5574,10 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.ok(listCheckpointsTool.inputSchema.properties.level);
     const distillUsageTool = toolList.tools.find((tool) => tool.name === 'distill_usage');
     assert.ok(distillUsageTool.inputSchema.properties.charsPerToken);
+    const processEmbeddingJobsTool = toolList.tools.find((tool) => tool.name === 'process_embedding_jobs');
+    assert.ok(processEmbeddingJobsTool.inputSchema.properties.retryFailed);
+    const listEmbeddingJobsTool = toolList.tools.find((tool) => tool.name === 'list_embedding_jobs');
+    assert.ok(listEmbeddingJobsTool.inputSchema.properties.status);
     const bootstrapTool = toolList.tools.find((tool) => tool.name === 'bootstrap_context');
     assert.ok(bootstrapTool.inputSchema.properties.sessionId);
     assert.ok(bootstrapTool.inputSchema.properties.rawTailLimit);
@@ -5486,6 +5608,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.ok(autoPromoteTool.inputSchema.properties.allowedCategories);
     const reconcileTool = toolList.tools.find((tool) => tool.name === 'reconcile_memory');
     assert.ok(reconcileTool.inputSchema.properties.correction);
+    assert.ok(!reconcileTool.inputSchema.required?.includes('query'));
     assert.ok(reconcileTool.inputSchema.properties.mode);
     assert.ok(reconcileTool.inputSchema.properties.createUpdateCandidates);
     const appendRawTool = toolList.tools.find((tool) => tool.name === 'append_raw');
