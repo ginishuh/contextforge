@@ -551,3 +551,8 @@ Prefer distilling at meaningful boundaries:
   durable memories, checkpoints, and memory candidates. If embedding dimensions
   changed, pass `force=true` only when the operator intentionally wants to reset
   the derived sqlite-vec index.
+- `process_embedding_jobs`: process queued embedding jobs independently from
+  checkpoint or memory writes. Use `retryFailed=true` when retrying failed
+  embedding provider or vector-index work.
+- `list_embedding_jobs`: inspect embedding job status, attempts, last error,
+  source type/id, and completion time.

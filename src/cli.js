@@ -156,6 +156,7 @@ function toCoreOptions(options) {
     confidence: options.confidence == null ? undefined : Number(options.confidence),
     batchSize: options.batchSize == null ? undefined : Number(options.batchSize),
     force: options.force === true || options.force === 'true',
+    retryFailed: options.retryFailed === true || options.retryFailed === 'true',
   };
 }
 
@@ -187,6 +188,8 @@ async function main() {
     autoPromoteMemoryCandidates: (app, coreOptions) => app.autoPromoteMemoryCandidates(coreOptions),
     search: (app, coreOptions) => app.search(coreOptions),
     rebuildEmbeddings: (app, coreOptions) => app.rebuildEmbeddings(coreOptions),
+    processEmbeddingJobs: (app, coreOptions) => app.processEmbeddingJobs(coreOptions),
+    listEmbeddingJobs: (app, coreOptions) => app.listEmbeddingJobs(coreOptions),
     getMemory: (app, coreOptions) => app.getMemory(coreOptions),
     appendRaw: (app, coreOptions) => app.appendRaw(coreOptions),
     listRawEvents: (app, coreOptions) => app.listRawEvents(coreOptions),

@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 
-export const SCHEMA_VERSION = 13;
+export const SCHEMA_VERSION = 14;
 
 function nowIso() {
   return new Date().toISOString();
@@ -257,6 +257,26 @@ function hydrateMemoryUpdateCandidate(row) {
     appliedMemoryId: row.applied_memory_id,
     createdAt: row.created_at,
     reviewedAt: row.reviewed_at,
+  };
+}
+
+function hydrateEmbeddingJob(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    sourceType: row.source_type,
+    scopeType: row.scope_type,
+    scopeKey: row.scope_key,
+    recordId: row.record_id,
+    model: row.model,
+    dimensions: row.dimensions,
+    contentHash: row.content_hash,
+    status: row.status,
+    attempts: row.attempts,
+    lastError: row.last_error,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    completedAt: row.completed_at,
   };
 }
 
@@ -563,6 +583,24 @@ export class ContextForgeStore {
         UNIQUE (scope_type, scope_key, merge_key)
       );
 
+      CREATE TABLE IF NOT EXISTS embedding_jobs (
+        id TEXT PRIMARY KEY,
+        source_type TEXT NOT NULL CHECK (source_type IN ('memory', 'checkpoint', 'memory_candidate')),
+        scope_type TEXT NOT NULL CHECK (scope_type IN ('shared', 'repo', 'local')),
+        scope_key TEXT NOT NULL,
+        record_id TEXT NOT NULL,
+        model TEXT NOT NULL,
+        dimensions INTEGER NOT NULL,
+        content_hash TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT,
+        UNIQUE (source_type, record_id, model, dimensions)
+      );
+
       CREATE TABLE IF NOT EXISTS memory_update_candidates (
         id TEXT PRIMARY KEY,
         scope_type TEXT NOT NULL CHECK (scope_type IN ('shared', 'repo', 'local')),
@@ -620,6 +658,10 @@ export class ContextForgeStore {
         ON memory_candidate_index(checkpoint_id, candidate_index);
       CREATE INDEX IF NOT EXISTS idx_preference_occurrences_scope
         ON preference_occurrences(scope_type, scope_key, status, updated_at);
+      CREATE INDEX IF NOT EXISTS idx_embedding_jobs_status
+        ON embedding_jobs(status, updated_at);
+      CREATE INDEX IF NOT EXISTS idx_embedding_jobs_scope
+        ON embedding_jobs(scope_type, scope_key, status);
       CREATE INDEX IF NOT EXISTS idx_memory_update_candidates_scope
         ON memory_update_candidates(scope_type, scope_key, status, created_at);
     `);
@@ -649,6 +691,8 @@ export class ContextForgeStore {
     this.ensureColumn('memory_update_candidates', 'review_reason', 'TEXT');
     this.ensureColumn('memory_update_candidates', 'review_metadata_json', "TEXT NOT NULL DEFAULT '{}'");
     this.ensureColumn('memory_update_candidates', 'applied_memory_id', 'TEXT');
+    this.ensureColumn('embedding_jobs', 'last_error', 'TEXT');
+    this.ensureColumn('embedding_jobs', 'completed_at', 'TEXT');
     this.backfillMemoryCandidateIndexOnce();
     this.backfillPreferenceOccurrencesOnce();
     this.ensureMemoryFts();
@@ -687,6 +731,7 @@ export class ContextForgeStore {
         memoryCandidates: count('memory_candidate_index'),
         preferenceOccurrences: count('preference_occurrences'),
         memoryUpdateCandidates: count('memory_update_candidates'),
+        embeddingJobs: count('embedding_jobs'),
         embeddings: embeddingIndexExists ? count('embedding_index') : 0,
       },
       vector: {
@@ -943,6 +988,272 @@ export class ContextForgeStore {
         };
       })
       .filter((source) => force || source.indexedContentHash !== source.contentHash);
+  }
+
+  countEmbeddingSourceTotals({ scopeType = null, scopeKey = null } = {}) {
+    const scopedWhere = (alias, values) => {
+      const conditions = [];
+      if (scopeType) {
+        conditions.push(`${alias}.scope_type = ?`);
+        values.push(scopeType);
+      }
+      if (scopeKey) {
+        conditions.push(`${alias}.scope_key = ?`);
+        values.push(scopeKey);
+      }
+      return conditions.length ? `AND ${conditions.join(' AND ')}` : '';
+    };
+    const memoryValues = [];
+    const checkpointValues = [];
+    const candidateValues = [];
+    const memory = this.db
+      .prepare(`
+        SELECT COUNT(*) AS count FROM memories
+        WHERE status = 'active' ${scopedWhere('memories', memoryValues)}
+      `)
+      .get(...memoryValues).count;
+    const checkpoint = this.db
+      .prepare(`
+        SELECT COUNT(*) AS count FROM checkpoints
+        WHERE 1 = 1 ${scopedWhere('checkpoints', checkpointValues)}
+      `)
+      .get(...checkpointValues).count;
+    const memoryCandidate = this.db
+      .prepare(`
+        SELECT COUNT(*) AS count FROM memory_candidate_index
+        WHERE status IN ('pending', 'promoted') ${scopedWhere('memory_candidate_index', candidateValues)}
+      `)
+      .get(...candidateValues).count;
+    return {
+      total: memory + checkpoint + memoryCandidate,
+      bySourceType: {
+        memory,
+        checkpoint,
+        memory_candidate: memoryCandidate,
+      },
+    };
+  }
+
+  embeddingCoverage({ scopeType = null, scopeKey = null, model, dimensions }) {
+    const totals = this.countEmbeddingSourceTotals({ scopeType, scopeKey });
+    const embeddingIndexExists = this.db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'embedding_index'")
+      .get();
+    if (!embeddingIndexExists) {
+      return {
+        model,
+        dimensions,
+        totalSources: totals.total,
+        indexedSources: 0,
+        staleSources: totals.total,
+        bySourceType: Object.fromEntries(
+          Object.entries(totals.bySourceType).map(([sourceType, total]) => [
+            sourceType,
+            { total, indexed: 0, stale: total },
+          ]),
+        ),
+      };
+    }
+    const sourceOptions = { scopeType, scopeKey, model, dimensions, force: true };
+    const sources = [
+      ...this.listMemoryEmbeddingSources(sourceOptions),
+      ...this.listCheckpointEmbeddingSources(sourceOptions),
+      ...this.listMemoryCandidateEmbeddingSources(sourceOptions),
+    ];
+    const bySourceType = {};
+    let indexedSources = 0;
+    let staleSources = 0;
+    for (const source of sources) {
+      const entry = bySourceType[source.sourceType] || { total: 0, indexed: 0, stale: 0 };
+      entry.total += 1;
+      if (source.indexedContentHash === source.contentHash) {
+        entry.indexed += 1;
+        indexedSources += 1;
+      } else {
+        entry.stale += 1;
+        staleSources += 1;
+      }
+      bySourceType[source.sourceType] = entry;
+    }
+    return {
+      model,
+      dimensions,
+      totalSources: sources.length,
+      indexedSources,
+      staleSources,
+      bySourceType,
+    };
+  }
+
+  enqueueEmbeddingJobs(sources, { model, dimensions, force = false } = {}) {
+    if (!model) throw new Error('model is required.');
+    const parsedDimensions = validateDimensions(dimensions);
+    const timestamp = nowIso();
+    const upsert = this.db.prepare(`
+      INSERT INTO embedding_jobs (
+        id, source_type, scope_type, scope_key, record_id, model, dimensions,
+        content_hash, status, attempts, last_error, created_at, updated_at, completed_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, NULL, ?, ?, NULL)
+      ON CONFLICT(source_type, record_id, model, dimensions) DO UPDATE SET
+        scope_type = excluded.scope_type,
+        scope_key = excluded.scope_key,
+        content_hash = excluded.content_hash,
+        status = CASE
+          WHEN ? THEN 'pending'
+          WHEN embedding_jobs.content_hash != excluded.content_hash THEN 'pending'
+          WHEN embedding_jobs.status = 'failed' THEN 'pending'
+          ELSE embedding_jobs.status
+        END,
+        last_error = CASE
+          WHEN ? OR embedding_jobs.content_hash != excluded.content_hash OR embedding_jobs.status = 'failed' THEN NULL
+          ELSE embedding_jobs.last_error
+        END,
+        completed_at = CASE
+          WHEN ? OR embedding_jobs.content_hash != excluded.content_hash OR embedding_jobs.status = 'failed' THEN NULL
+          ELSE embedding_jobs.completed_at
+        END,
+        updated_at = excluded.updated_at
+    `);
+    const jobs = [];
+    for (const source of sources) {
+      upsert.run(
+        randomUUID(),
+        source.sourceType,
+        source.scopeType,
+        source.scopeKey,
+        source.recordId,
+        model,
+        parsedDimensions,
+        source.contentHash,
+        timestamp,
+        timestamp,
+        force ? 1 : 0,
+        force ? 1 : 0,
+        force ? 1 : 0,
+      );
+      jobs.push(
+        this.getEmbeddingJob({
+          sourceType: source.sourceType,
+          recordId: source.recordId,
+          model,
+          dimensions: parsedDimensions,
+        }),
+      );
+    }
+    return jobs;
+  }
+
+  getEmbeddingJob({ sourceType, recordId, model, dimensions }) {
+    const row = this.db
+      .prepare(`
+        SELECT * FROM embedding_jobs
+        WHERE source_type = ? AND record_id = ? AND model = ? AND dimensions = ?
+      `)
+      .get(sourceType, recordId, model, Number(dimensions));
+    return hydrateEmbeddingJob(row);
+  }
+
+  listEmbeddingJobs({ scopeType = null, scopeKey = null, status = null, limit = null } = {}) {
+    const conditions = [];
+    const values = [];
+    if (scopeType) {
+      conditions.push('scope_type = ?');
+      values.push(scopeType);
+    }
+    if (scopeKey) {
+      conditions.push('scope_key = ?');
+      values.push(scopeKey);
+    }
+    if (status) {
+      conditions.push('status = ?');
+      values.push(status);
+    }
+    const parsedLimit = limit == null ? null : Number(limit);
+    const limitClause = Number.isInteger(parsedLimit) && parsedLimit > 0 ? 'LIMIT ?' : '';
+    if (limitClause) {
+      values.push(parsedLimit);
+    }
+    return this.db
+      .prepare(`
+        SELECT * FROM embedding_jobs
+        ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
+        ORDER BY updated_at ASC, id ASC
+        ${limitClause}
+      `)
+      .all(...values)
+      .map(hydrateEmbeddingJob);
+  }
+
+  countEmbeddingJobs({ scopeType = null, scopeKey = null } = {}) {
+    const conditions = [];
+    const values = [];
+    if (scopeType) {
+      conditions.push('scope_type = ?');
+      values.push(scopeType);
+    }
+    if (scopeKey) {
+      conditions.push('scope_key = ?');
+      values.push(scopeKey);
+    }
+    const rows = this.db
+      .prepare(`
+        SELECT status, COUNT(*) AS count FROM embedding_jobs
+        ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
+        GROUP BY status
+      `)
+      .all(...values);
+    const result = { pending: 0, processing: 0, completed: 0, failed: 0 };
+    for (const row of rows) {
+      result[row.status] = row.count;
+    }
+    return result;
+  }
+
+  markEmbeddingJobProcessing(jobId) {
+    const timestamp = nowIso();
+    const row = this.db
+      .prepare(`
+        UPDATE embedding_jobs
+        SET status = 'processing',
+            attempts = attempts + 1,
+            updated_at = ?
+        WHERE id = ?
+        RETURNING *
+      `)
+      .get(timestamp, jobId);
+    return hydrateEmbeddingJob(row);
+  }
+
+  markEmbeddingJobCompleted(jobId) {
+    const timestamp = nowIso();
+    const row = this.db
+      .prepare(`
+        UPDATE embedding_jobs
+        SET status = 'completed',
+            last_error = NULL,
+            completed_at = ?,
+            updated_at = ?
+        WHERE id = ?
+        RETURNING *
+      `)
+      .get(timestamp, timestamp, jobId);
+    return hydrateEmbeddingJob(row);
+  }
+
+  markEmbeddingJobFailed(jobId, error) {
+    const timestamp = nowIso();
+    const row = this.db
+      .prepare(`
+        UPDATE embedding_jobs
+        SET status = 'failed',
+            last_error = ?,
+            updated_at = ?
+        WHERE id = ?
+        RETURNING *
+      `)
+      .get(String(error?.message || error || 'Embedding job failed.'), timestamp, jobId);
+    return hydrateEmbeddingJob(row);
   }
 
   upsertEmbedding({
@@ -1455,6 +1766,26 @@ export class ContextForgeStore {
       `)
       .get(scopeType, scopeKey, key);
     return hydrateMemory(row);
+  }
+
+  getMemoryById({ scopeType, scopeKey, memoryId }) {
+    const row = this.db
+      .prepare(`
+        SELECT * FROM memories
+        WHERE scope_type = ? AND scope_key = ? AND id = ?
+      `)
+      .get(scopeType, scopeKey, memoryId);
+    return hydrateMemory(row);
+  }
+
+  getCheckpointById({ scopeType, scopeKey, checkpointId }) {
+    const row = this.db
+      .prepare(`
+        SELECT * FROM checkpoints
+        WHERE scope_type = ? AND scope_key = ? AND id = ?
+      `)
+      .get(scopeType, scopeKey, checkpointId);
+    return hydrateCheckpoint(row);
   }
 
   searchMemoryIndex({ scopeType, scopeKey, ftsQuery, limit = 50 }) {
