@@ -4294,7 +4294,7 @@ test('autoPromoteMemoryCandidates requires closeout scope and defaults to dry-ru
     role: 'assistant',
     content: 'Strict auto promotion candidate.',
   });
-  await app.distillCheckpoint({
+  const checkpoint = await app.distillCheckpoint({
     scope: 'repo',
     scopeKey: 'auto-repo',
     sessionId: 'auto-session',
@@ -4317,9 +4317,43 @@ test('autoPromoteMemoryCandidates requires closeout scope and defaults to dry-ru
   });
   assert.equal(dryRun.dryRun, true);
   assert.equal(dryRun.wouldPromote.length, 1);
+  assert.deepEqual(dryRun.promoted, []);
   assert.equal(dryRun.wouldPromote[0].key, 'auto-runbook');
   assert.ok(dryRun.requestWarnings.some((warning) => warning.code === 'limit_capped'));
   assert.equal(app.listMemoryCandidates({ scope: 'repo', scopeKey: 'auto-repo', status: 'promoted' }).length, 0);
+
+  const checkpointOnly = await app.autoPromoteMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'auto-repo',
+    checkpointId: checkpoint.id,
+    trigger: 'manual_closeout',
+  });
+  assert.equal(checkpointOnly.source.mode, 'checkpoint');
+  assert.equal(checkpointOnly.wouldPromote.length, 1);
+
+  await assert.rejects(
+    () =>
+      app.autoPromoteMemoryCandidates({
+        scope: 'repo',
+        scopeKey: 'auto-repo',
+        sessionId: 'auto-session',
+        trigger: 'manual_closeout',
+        minConfidence: 1.5,
+      }),
+    /minConfidence/,
+  );
+
+  await assert.rejects(
+    () =>
+      app.autoPromoteMemoryCandidates({
+        scope: 'repo',
+        scopeKey: 'auto-repo',
+        sessionId: 'auto-session',
+        trigger: 'manual_closeout',
+        minStability: -1,
+      }),
+    /minStability/,
+  );
 
   await assert.rejects(
     () =>
@@ -4332,6 +4366,52 @@ test('autoPromoteMemoryCandidates requires closeout scope and defaults to dry-ru
       }),
     /CONTEXTFORGE_AUTO_PROMOTE_ENABLED/,
   );
+});
+
+test('autoPromoteMemoryCandidates returns stable empty arrays and preference input warnings', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'auto_empty_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      auto_empty_provider: async () => ({
+        summaryShort: 'No candidates.',
+        summaryText: 'Closeout produced no memory candidates.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [],
+      }),
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'auto-empty-repo',
+    sessionId: 'auto-empty-session',
+    role: 'assistant',
+    content: 'No candidates here.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'auto-empty-repo',
+    sessionId: 'auto-empty-session',
+  });
+
+  const result = await app.autoPromoteMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'auto-empty-repo',
+    sessionId: 'auto-empty-session',
+    trigger: 'manual_closeout',
+    allowedCategories: ['preference'],
+  });
+
+  assert.deepEqual(result.wouldPromote, []);
+  assert.deepEqual(result.promoted, []);
+  assert.deepEqual(result.policy.allowedCategories, []);
+  assert.ok(result.requestWarnings.some((warning) => warning.code === 'preference_input_stripped'));
 });
 
 test('autoPromoteMemoryCandidates promotes only strict safe candidates when enabled', async () => {
@@ -4407,10 +4487,13 @@ test('autoPromoteMemoryCandidates promotes only strict safe candidates when enab
   });
 
   assert.equal(result.dryRun, false);
+  assert.deepEqual(result.wouldPromote, []);
   assert.deepEqual(
     result.promoted.map((item) => item.key),
     ['safe-api-contract'],
   );
+  assert.ok(result.promoted[0].evidence);
+  assert.equal(result.promoted[0].promotionResult.status, 'promoted');
   assert.ok(result.skipped.some((item) => item.reason.includes('preference_auto_excluded')));
   assert.ok(result.skipped.some((item) => item.reason.includes('auto_low_confidence')));
   assert.equal(app.getMemory({ scope: 'repo', scopeKey: 'auto-enabled-repo', key: 'safe-api-contract' }).status, 'active');

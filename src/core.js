@@ -456,11 +456,15 @@ const AUTO_SKIP_WARNING_CODES = new Set([
   'recommendation_not_promote',
   'low_confidence',
   'low_stability',
+  'temporary_candidate',
+]);
+
+const AUTO_PROMOTE_SKIP_WARNING_CODES = new Set([
+  ...AUTO_SKIP_WARNING_CODES,
   'auto_low_confidence',
   'auto_low_stability',
   'auto_disallowed_category',
   'preference_auto_excluded',
-  'temporary_candidate',
 ]);
 
 const DURABLE_PROPOSAL_CATEGORIES = new Set([
@@ -604,8 +608,8 @@ function candidateWarningReason(warnings) {
   return warnings.map((warning) => warning.code).join(', ');
 }
 
-function scorePromotionCandidate(indexedCandidate, warnings) {
-  if (warnings.some((warning) => AUTO_SKIP_WARNING_CODES.has(warning.code))) {
+function scorePromotionCandidate(indexedCandidate, warnings, skipWarningCodes = AUTO_SKIP_WARNING_CODES) {
+  if (warnings.some((warning) => skipWarningCodes.has(warning.code))) {
     return 0;
   }
   const candidate = indexedCandidate.candidate || {};
@@ -651,12 +655,15 @@ function normalizeAllowedCategories(value, defaultCategories = SAFE_AUTO_PROMOTE
           .map((item) => item.trim())
           .filter(Boolean)
       : Array.from(defaultCategories);
-  return new Set(raw.filter((category) => category !== 'preference'));
+  return {
+    allowedCategories: new Set(raw.filter((category) => category !== 'preference')),
+    strippedPreference: raw.includes('preference'),
+  };
 }
 
 function autoPromotionWarnings(store, scope, indexedCandidate, policy) {
   const candidate = indexedCandidate.candidate || {};
-  const warnings = promotionCandidateWarnings(store, scope, indexedCandidate);
+  const warnings = [...promotionCandidateWarnings(store, scope, indexedCandidate)];
   if (Number(candidate.confidence || 0) < policy.minConfidence) {
     warnings.push({
       code: 'auto_low_confidence',
@@ -696,41 +703,43 @@ function autoPromotionWouldPromote(indexedCandidate, warnings, rank) {
   };
 }
 
-function autoPromoteIndexedCandidate(store, scope, indexedCandidate, reason) {
+function autoPromoteIndexedCandidate(store, scope, indexedCandidate, warnings, reason) {
   const candidate = indexedCandidate.candidate || {};
-  const memory = store.rememberMemory({
-    ...scope,
-    key: candidate.key,
-    content: candidate.content,
-    category: candidate.category || 'note',
-    tags: candidate.tags || [],
-    importance: candidate.importance || 0,
-    eventType: 'promote',
-    eventMetadata: {
-      sourceCheckpointId: indexedCandidate.checkpointId,
-      sourceSessionId: indexedCandidate.sessionId,
-      sourceCandidateIndex: indexedCandidate.index,
-      sourceCandidateId: indexedCandidate.id,
-      candidateSourceEventIds: candidate.sourceEventIds || [],
-      promotionWarnings: [],
+  return store.db.transaction(() => {
+    const memory = store.rememberMemory({
+      ...scope,
+      key: candidate.key,
+      content: candidate.content,
+      category: candidate.category || 'note',
+      tags: candidate.tags || [],
+      importance: candidate.importance ?? 0,
+      eventType: 'promote',
+      eventMetadata: {
+        sourceCheckpointId: indexedCandidate.checkpointId,
+        sourceSessionId: indexedCandidate.sessionId,
+        sourceCandidateIndex: indexedCandidate.index,
+        sourceCandidateId: indexedCandidate.id,
+        candidateSourceEventIds: candidate.sourceEventIds || [],
+        promotionWarnings: warnings,
+        reason,
+        autoPromoted: true,
+      },
+    });
+    store.markMemoryCandidateReviewed({
+      ...scope,
+      candidateId: indexedCandidate.id,
+      status: 'promoted',
       reason,
-      autoPromoted: true,
-    },
-  });
-  store.markMemoryCandidateReviewed({
-    ...scope,
-    candidateId: indexedCandidate.id,
-    status: 'promoted',
-    reason,
-    promotedMemoryId: memory.id,
-    metadata: {
-      memoryKey: memory.key,
-      memoryId: memory.id,
-      promotionWarnings: [],
-      autoPromoted: true,
-    },
-  });
-  return memory;
+      promotedMemoryId: memory.id,
+      metadata: {
+        memoryKey: memory.key,
+        memoryId: memory.id,
+        promotionWarnings: warnings,
+        autoPromoted: true,
+      },
+    });
+    return memory;
+  })();
 }
 
 function summarizeBasisResult(result) {
@@ -1544,7 +1553,14 @@ export function createContextForge(options = {}) {
       if (!Number.isFinite(minStability) || minStability < 0 || minStability > 1) {
         throw new Error('minStability must be between 0 and 1.');
       }
-      const allowedCategories = normalizeAllowedCategories(options.allowedCategories);
+      const categoryPolicy = normalizeAllowedCategories(options.allowedCategories);
+      const allowedCategories = categoryPolicy.allowedCategories;
+      if (categoryPolicy.strippedPreference) {
+        requestWarnings.push({
+          code: 'preference_input_stripped',
+          message: 'Preference candidates cannot be auto-promoted until occurrence/merge tracking exists.',
+        });
+      }
       const scanLimit = positiveNumber(options.scanLimit == null ? 10 : Number(options.scanLimit), 'scanLimit');
       if (!options.sessionId && !options.checkpointId) {
         return {
@@ -1563,8 +1579,8 @@ export function createContextForge(options = {}) {
             scopeFallback: false,
             realPromotionEnabled: config.autoPromote.enabled,
           },
-          wouldPromote: dryRun ? [] : undefined,
-          promoted: dryRun ? undefined : [],
+          wouldPromote: [],
+          promoted: [],
           skipped: [],
           requestWarnings,
           nextActions: [
@@ -1601,8 +1617,8 @@ export function createContextForge(options = {}) {
               scopeFallback: false,
               realPromotionEnabled: config.autoPromote.enabled,
             },
-            wouldPromote: dryRun ? [] : undefined,
-            promoted: dryRun ? undefined : [],
+            wouldPromote: [],
+            promoted: [],
             skipped: [],
             requestWarnings,
             nextActions: [
@@ -1624,7 +1640,7 @@ export function createContextForge(options = {}) {
         });
         const assessed = candidates.map((candidate) => {
           const warnings = autoPromotionWarnings(store, scope, candidate, policy);
-          const score = scorePromotionCandidate(candidate, warnings);
+          const score = scorePromotionCandidate(candidate, warnings, AUTO_PROMOTE_SKIP_WARNING_CODES);
           return { candidate, warnings, score };
         });
         const selected = assessed
@@ -1650,19 +1666,21 @@ export function createContextForge(options = {}) {
           },
           wouldPromote: dryRun
             ? selected.map((item, index) => autoPromotionWouldPromote(item.candidate, item.warnings, index + 1))
-            : undefined,
+            : [],
           promoted: dryRun
-            ? undefined
+            ? []
             : selected.map((item, index) => {
                 const reason =
                   'Auto-promoted by auto_promote_memory_candidates after strict closeout-scoped safety checks.';
-                const memory = autoPromoteIndexedCandidate(store, scope, item.candidate, reason);
+                const memory = autoPromoteIndexedCandidate(store, scope, item.candidate, item.warnings, reason);
                 return {
-                  rank: index + 1,
-                  candidateId: item.candidate.id,
+                  ...promotionProposal(item.candidate, item.warnings, index + 1),
                   memoryId: memory.id,
-                  key: memory.key,
-                  category: memory.category,
+                  promotionResult: {
+                    memoryId: memory.id,
+                    memoryKey: memory.key,
+                    status: 'promoted',
+                  },
                   auditReason: reason,
                 };
               }),
