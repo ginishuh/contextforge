@@ -788,6 +788,7 @@ jobs:
             printf 'review_bytes=%s\n' "$(wc -c < "$REVIEW_DIR/review.md")"
             printf 'stderr_bytes=%s\n' "$(wc -c < "$REVIEW_DIR/review.stderr.log")"
           } > "$REVIEW_DIR/review.run-debug.txt"
+          cat "$REVIEW_DIR/review.run-debug.txt"
           exit 0
 
       - name: Install Claude Code CLI
@@ -882,10 +883,23 @@ jobs:
                   (review_dir / "review_exit_code").write_text(str(exit_code))
               else:
                   exit_code = 1
-                  raw = (
-                      "OpenCode review output was empty, too short, or looked like an execution error "
-                      "after filtering. Treating this run as failed."
-                  )
+                  debug = ""
+                  debug_path = review_dir / "review.run-debug.txt"
+                  if debug_path.exists():
+                      debug = debug_path.read_text(encoding="utf-8", errors="replace").strip()
+                  if raw:
+                      raw = (
+                          "OpenCode review output did not pass validation.\n\n"
+                          "```text\n"
+                          f"{raw[:4000]}\n"
+                          "```\n"
+                          + (f"\nDebug:\n```text\n{debug}\n```" if debug else "")
+                      )
+                  else:
+                      raw = (
+                          "OpenCode review output was empty after filtering."
+                          + (f"\n\nDebug:\n```text\n{debug}\n```" if debug else "")
+                      )
                   (review_dir / "review_exit_code").write_text(str(exit_code))
 
           status = "완료" if exit_code == 0 else "실패"
