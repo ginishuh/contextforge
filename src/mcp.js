@@ -34,12 +34,12 @@ const MCP_INSTRUCTIONS = [
   'For user corrections such as "너 잘못 알고 있잖아", "그거 아니야", "그건 X가 아니라 Y야", or "기억 수정해", call reconcile_memory. Show the basis for prior knowledge, assess conflicts, and only apply safe corrections when the user explicitly asks to fix memory.',
   'Use list_memory_update_candidates to review proposed durable-memory corrections, deactivations, duplicate merges, or corrective notes. reconcile_memory propose mode is read-only by default; pass createUpdateCandidates=true only when persistent review proposals are wanted. Apply or reject update candidates only after explicit user approval.',
   'When resuming a known session, pass sessionId to bootstrap_context or call get_working_summary and get_session_working_context to load latest rolling handoff state separately from durable memory and checkpoint search results.',
-  'Embeddings are the supported retrieval-quality path. If db_info or bootstrap_context reports stale vector sources or failed embedding jobs, call list_embedding_jobs and process_embedding_jobs instead of treating lexical fallback as equivalent.',
+  'Embeddings are the supported retrieval-quality path. Successful distill_checkpoint calls queue embedding jobs for the new checkpoint and memory candidates; process queued jobs with process_embedding_jobs. If db_info or bootstrap_context reports stale vector sources or failed embedding jobs, call list_embedding_jobs and process_embedding_jobs instead of treating lexical fallback as equivalent.',
   'If working on a repository while the MCP process cwd is elsewhere, pass repoPath or cwd so repo scope resolves to that checkout; repoPath takes precedence when both are provided.',
   'Treat scopeKey as the canonical repo memory key; pass an explicit normalized GitHub key when local paths differ across machines or the checkout cannot infer the right remote.',
   'Use remember for reviewed durable facts the user or assistant intentionally wants saved.',
-  'After distill_checkpoint, check memoryCandidateCount; if it is greater than zero, call list_memory_candidates and promote only reviewed durable facts with promote_memory_candidate or reject unsuitable candidates with reject_memory_candidate.',
-  'When session_status reports latestCheckpointMemoryCandidateCount, use list_memory_candidates before deciding what should become durable memory.',
+  'At closeout after distill_checkpoint, check memoryCandidateCount; if it is greater than zero, prefer suggest_memory_promotions and promote only reviewed durable facts with promote_memory_candidate or reject unsuitable candidates with reject_memory_candidate.',
+  'When session_status reports latestCheckpointMemoryCandidateCount at closeout, use suggest_memory_promotions or list_memory_candidates before deciding what should become durable memory.',
   'Keep local scope opt-in.',
 ].join(' ');
 

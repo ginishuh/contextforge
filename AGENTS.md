@@ -29,7 +29,8 @@ Private agent-memory systems may be useful reference material, but do not mutate
 - Keep prompt preload small. Retrieve details on demand.
 - Store runtime data locally by default and keep it out of git.
 - Support `shared`, `repo`, and `local` scopes explicitly.
-- Treat checkpoints as recent continuity, not canonical truth.
+- Treat checkpoints as credible recent handoff state for continuity and
+  planning; verify mutable live state before acting.
 - Treat distilled checkpoints as compressed retrieval indexes: preserve
   concrete names, numbers, intervals, APIs, paths, commands, error strings,
   decisions, rationale, risks, conditions, next actions, and retrieval hooks.
@@ -100,19 +101,32 @@ storage is canonical shared memory for the configured scope; local or
 project-local storage is machine/check-out local context unless the user says
 otherwise.
 
-Interpret search result types by trust level:
-- `memory`: reviewed durable fact or decision.
-- `checkpoint`: recent session continuity, not canonical truth.
-- `memory_candidate`: unreviewed promotion candidate and review material.
+Interpret search result types by trust role:
+- `memory`: reviewed durable fact, decision, preference, or runbook note.
+- `checkpoint`: credible recent handoff state for continuity, planning, prior
+  intent, recent decisions, and unfinished work. Verify mutable live state such
+  as git, GitHub, CI, runtime, and migrations before acting.
+- `memory_candidate`: unreviewed promotion material and review context, not
+  durable truth.
 
-Keep durable memory intentional. After distilling a checkpoint, review
-`list_memory_candidates` and promote only stable, reviewed facts.
+For start/resume wording such as "지난 환경 작업과 동기화", "어제 하던 거
+이어서", "previous work", or "continue", call `sync_resume_context` when
+available. Use checkpoints actively as handoff notes, then verify live state.
+Do not propose memory promotions during resume sync.
+
+Keep durable memory intentional. At closeout triggers only, call
+`suggest_memory_promotions` when available and propose at most one to three
+stable durable facts. Use `auto_promote_memory_candidates` only when the user
+explicitly wants strict closeout-scoped automatic promotion and the configured
+safety gates allow it.
 
 Use `remember` for new reviewed durable facts, decisions, preferences, or
 runbook notes. Use `promote_memory_candidate` only after reviewing a checkpoint
 candidate and confirming it is stable beyond the current task, scoped correctly,
-and free of secrets or private data. Use `correct_memory` for changed facts and
-`deactivate_memory` for stale facts.
+and free of secrets or private data. Use `reconcile_memory` for user
+corrections when available, `correct_memory` for changed durable facts,
+`deactivate_memory` for stale facts, and `reject_memory_candidate` for
+incorrect candidates.
 
 For full ContextForge MCP usage rules, follow
 `docs/agent-instructions.md`. That guide covers startup bootstrap, retrieval
