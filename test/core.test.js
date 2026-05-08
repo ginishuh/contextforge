@@ -5842,6 +5842,18 @@ test('MCP streamable HTTP endpoint exposes core tools with bearer auth', async (
     assert.equal(bootstrap.structuredContent.result.storage.connection.transport, 'http-mcp');
     assert.equal(bootstrap.structuredContent.result.storage.connection.server.mode, 'direct-local');
 
+    const syncResume = await client.callTool({
+      name: 'sync_resume_context',
+      arguments: {
+        scope: 'repo',
+        scopeKey: 'http-mcp-repo',
+        query: 'canonical remote previous work',
+      },
+    });
+    assert.equal(syncResume.structuredContent.result.storage.connection.mode, 'remote-client');
+    assert.equal(syncResume.structuredContent.result.storage.connection.transport, 'http-mcp');
+    assert.equal(syncResume.structuredContent.result.storage.connection.server.mode, 'direct-local');
+
     await client.callTool({
       name: 'append_raw',
       arguments: {
@@ -5934,6 +5946,24 @@ test('HTTP v0 callers see remote-client connection metadata', async () => {
     assert.equal(body.result.connection.transport, 'http-api');
     assert.equal(body.result.connection.server.mode, 'http-server');
     assert.equal(body.result.connection.server.storageMode, 'project-local');
+
+    const resumeResponse = await fetch(`${remote.url}/v0/syncResumeContext`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer test-token',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        scope: 'repo',
+        scopeKey: 'http-api-repo',
+        query: 'previous work',
+      }),
+    });
+    assert.equal(resumeResponse.status, 200);
+    const resumeBody = await resumeResponse.json();
+    assert.equal(resumeBody.result.storage.connection.mode, 'remote-client');
+    assert.equal(resumeBody.result.storage.connection.transport, 'http-api');
+    assert.equal(resumeBody.result.storage.connection.server.mode, 'http-server');
   } finally {
     await remote.close();
   }

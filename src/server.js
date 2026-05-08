@@ -106,29 +106,30 @@ function wrapRemoteAccessResult(result, transport) {
   if (!result || typeof result !== 'object') {
     return result;
   }
+  let wrapped = result;
   if (result.connection) {
-    return {
-      ...result,
+    wrapped = {
+      ...wrapped,
       connection: remoteAccessConnection(result.connection, transport),
     };
   }
-  if (result.storage?.connection) {
-    return {
-      ...result,
+  if (wrapped.storage?.connection) {
+    wrapped = {
+      ...wrapped,
       storage: {
-        ...result.storage,
-        connection: remoteAccessConnection(result.storage.connection, transport),
+        ...wrapped.storage,
+        connection: remoteAccessConnection(wrapped.storage.connection, transport),
       },
     };
   }
-  return result;
+  return wrapped;
 }
 
 function createRemoteAccessApp(app, transport) {
   return new Proxy(app, {
     get(target, property, receiver) {
       const value = Reflect.get(target, property, receiver);
-      if (!['dbInfo', 'bootstrapContext', 'syncResumeContext'].includes(property) || typeof value !== 'function') {
+      if (typeof value !== 'function') {
         return value;
       }
       return async (...args) => wrapRemoteAccessResult(await value.apply(target, args), transport);
