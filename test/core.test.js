@@ -5600,6 +5600,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     const bootstrapTool = toolList.tools.find((tool) => tool.name === 'bootstrap_context');
     assert.ok(bootstrapTool.inputSchema.properties.sessionId);
     assert.ok(bootstrapTool.inputSchema.properties.rawTailLimit);
+    assert.ok(bootstrapTool.description.includes('Does not create a session'));
     const syncResumeTool = toolList.tools.find((tool) => tool.name === 'sync_resume_context');
     assert.ok(syncResumeTool.inputSchema.properties.sessionId);
     const sessionWorkingContextTool = toolList.tools.find((tool) => tool.name === 'upsert_session_working_context');

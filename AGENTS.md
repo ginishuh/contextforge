@@ -96,18 +96,17 @@ search shared memory only when cross-repo or user-wide policy may matter. Use
 the inferred repo scope key, or an explicit `github.com/owner/repo` key when
 cross-machine continuity matters.
 
-Before relying on retrieval, distinguish storage authority. Remote ContextForge
-storage is canonical shared memory for the configured scope; local or
-project-local storage is machine/check-out local context unless the user says
-otherwise.
+Use the `contextforge-memory` skill for full ContextForge MCP workflow details:
+storage authority, scopes, bootstrap/search, resume, session IDs, raw evidence,
+distillation, checkpoint candidates, closeout promotion, correction, and
+embedding maintenance.
 
-Interpret search result types by trust role:
-- `memory`: reviewed durable fact, decision, preference, or runbook note.
-- `checkpoint`: credible recent handoff state for continuity, planning, prior
-  intent, recent decisions, and unfinished work. Verify mutable live state such
-  as git, GitHub, CI, runtime, and migrations before acting.
-- `memory_candidate`: unreviewed promotion material and review context, not
-  durable truth.
+Critical session invariant: `bootstrap_context` does not create a session. In
+Codex/Claude auto-ingest flows, use the adapter session id such as
+`codex:<id>` or `claude_code:<id>` for `session_status`,
+`distill_checkpoint`, and closeout promotion. Use `begin_session` only for a
+manual `append_raw` evidence stream. Do not create a fresh `cf_...` session at
+closeout to review candidates from an existing Codex/Claude session.
 
 For start/resume wording such as "지난 환경 작업과 동기화", "어제 하던 거
 이어서", "previous work", or "continue", call `sync_resume_context` when

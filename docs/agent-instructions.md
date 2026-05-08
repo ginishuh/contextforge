@@ -187,16 +187,23 @@ trust levels.
 3. Include shared scope only if user-wide conventions, deployment
    policy, credentials locations, or cross-repo decisions may matter. Shared
    bootstrap results are capped at three items.
-4. If `bootstrap_context` is unavailable, call `db_info` when storage mode,
+4. `bootstrap_context` does not create a session. In Codex or Claude Code
+   auto-ingest environments, preserve or recover the adapter session id (for
+   example `codex:<native-session-id>` or `claude_code:<native-session-id>`)
+   before `session_status`, `distill_checkpoint`, or closeout promotion. Use
+   `begin_session` only for a manual ContextForge evidence stream where the
+   agent will call `append_raw` itself. Do not create a fresh `cf_...` session
+   at closeout to review candidates from an existing Codex/Claude session.
+5. If `bootstrap_context` is unavailable, call `db_info` when storage mode,
    remote/local authority, schema version, raw retention, or vector readiness
    may affect the task, then call `search`.
-5. If resuming a known session, call `session_status` for that `sessionId` to
+6. If resuming a known session, call `session_status` for that `sessionId` to
    inspect recent checkpoint state.
-6. If the task needs live handoff state, pass `sessionId` to
+7. If the task needs live handoff state, pass `sessionId` to
    `bootstrap_context` or call `get_working_summary` and
    `get_session_working_context`. Treat returned working state as current
    session state, not durable truth.
-7. If the task depends on recent handoff state, call `sync_resume_context` when
+8. If the task depends on recent handoff state, call `sync_resume_context` when
    available. Treat checkpoints as credible recent handoff state and memory
    candidates as review material only. Do not propose promotions during resume
    sync.
@@ -504,7 +511,8 @@ Prefer distilling at meaningful boundaries:
   and sqlite-vec/embedding readiness.
 - `bootstrap_context`: resolve scoped startup context in one call. It searches
   repo memory/checkpoints/candidates semantically, optionally includes up to
-  three shared-scope results, and annotates trust plus verification hints.
+  three shared-scope results, and annotates trust plus verification hints. It
+  does not create a session.
 - `sync_resume_context`: build a start/resume handoff package. Checkpoints are
   credible recent handoff state; structured working context is mutable session
   state; candidates are review material only.
