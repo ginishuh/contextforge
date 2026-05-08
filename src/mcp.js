@@ -32,6 +32,7 @@ const MCP_INSTRUCTIONS = [
   'For strict closeout-scoped safe automatic promotion, call auto_promote_memory_candidates only when the user wants automatic promotion. By default use dryRun=true. Use dryRun=false only when CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true is intentionally configured; never use scope-wide backlog fallback and never auto-promote preference candidates.',
   'Preference-like candidates are tracked as merged occurrences; use list_preference_occurrences to review repeated evidence and weakened corrections, but do not treat occurrence evidence alone as durable preference truth.',
   'For user corrections such as "너 잘못 알고 있잖아", "그거 아니야", "그건 X가 아니라 Y야", or "기억 수정해", call reconcile_memory. Show the basis for prior knowledge, assess conflicts, and only apply safe corrections when the user explicitly asks to fix memory.',
+  'Use list_memory_update_candidates to review proposed durable-memory corrections, deactivations, duplicate merges, or corrective notes. reconcile_memory propose mode is read-only by default; pass createUpdateCandidates=true only when persistent review proposals are wanted. Apply or reject update candidates only after explicit user approval.',
   'When resuming a known session, pass sessionId to bootstrap_context or call get_working_summary and get_session_working_context to load latest rolling handoff state separately from durable memory and checkpoint search results.',
   'If working on a repository while the MCP process cwd is elsewhere, pass repoPath or cwd so repo scope resolves to that checkout; repoPath takes precedence when both are provided.',
   'Treat scopeKey as the canonical repo memory key; pass an explicit normalized GitHub key when local paths differ across machines or the checkout cannot infer the right remote.',
@@ -483,6 +484,96 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
   );
 
   server.registerTool(
+    'list_memory_update_candidates',
+    {
+      title: 'List Memory Update Candidates',
+      description:
+        'List pending or reviewed candidates for updating existing durable memory. These are review proposals only and do not mutate memory.',
+      inputSchema: {
+        ...scopedSchema,
+        status: z.enum(['pending', 'applied', 'rejected', 'skipped']).optional(),
+        action: z
+          .enum(['correct_memory', 'deactivate_memory', 'merge_duplicate_memories', 'add_corrective_note'])
+          .optional(),
+        limit: z.number().int().positive().optional(),
+      },
+      annotations: {
+        title: 'List Memory Update Candidates',
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.listMemoryUpdateCandidates(args)),
+  );
+
+  server.registerTool(
+    'apply_memory_update_candidate',
+    {
+      title: 'Apply Memory Update Candidate',
+      description:
+        'Apply a reviewed memory update candidate by correcting, deactivating, or adding a corrective durable memory note. Use only after explicit user approval.',
+      inputSchema: {
+        ...scopedSchema,
+        candidateId: z.string(),
+        key: z.string().optional(),
+        mergeTargetKey: z.string().optional(),
+        content: z.string().optional(),
+        category: z.string().optional(),
+        tags: optionalTags,
+        importance: z.number().int().optional(),
+        reason: z.string().optional(),
+        allowStatusOverride: z.boolean().optional(),
+      },
+      annotations: {
+        title: 'Apply Memory Update Candidate',
+        readOnlyHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.applyMemoryUpdateCandidate(args)),
+  );
+
+  server.registerTool(
+    'reject_memory_update_candidate',
+    {
+      title: 'Reject Memory Update Candidate',
+      description: 'Reject a reviewed memory update candidate without mutating durable memory.',
+      inputSchema: {
+        ...scopedSchema,
+        candidateId: z.string(),
+        reason: z.string(),
+        allowStatusOverride: z.boolean().optional(),
+      },
+      annotations: {
+        title: 'Reject Memory Update Candidate',
+        readOnlyHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.rejectMemoryUpdateCandidate(args)),
+  );
+
+  server.registerTool(
+    'skip_memory_update_candidate',
+    {
+      title: 'Skip Memory Update Candidate',
+      description: 'Mark a memory update candidate skipped without mutating durable memory.',
+      inputSchema: {
+        ...scopedSchema,
+        candidateId: z.string(),
+        reason: z.string().optional(),
+        allowStatusOverride: z.boolean().optional(),
+      },
+      annotations: {
+        title: 'Skip Memory Update Candidate',
+        readOnlyHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.skipMemoryUpdateCandidate(args)),
+  );
+
+  server.registerTool(
     'suggest_memory_promotions',
     {
       title: 'Suggest Memory Promotions',
@@ -550,13 +641,14 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Reconcile Memory',
       description:
-        'Search relevant durable memories, checkpoints, and memory candidates for a user correction; explain the basis for existing knowledge, assess conflicts, and optionally apply safe memory corrections only when explicitly requested. Default mode=propose is read-only; mode=apply_safe may correct durable memory or reject candidates when the correction is unambiguous.',
+        'Search relevant durable memories, checkpoints, and memory candidates for a user correction; explain the basis for existing knowledge, assess conflicts, and optionally apply safe memory corrections only when explicitly requested. Default mode=propose is read-only unless createUpdateCandidates=true persists review proposals; mode=apply_safe may correct durable memory or reject candidates when the correction is unambiguous.',
       inputSchema: {
         ...scopedSchema,
         query: z.string(),
         correction: z.string(),
         mode: z.enum(['propose', 'apply_safe']).optional(),
         sessionId: z.string().optional(),
+        createUpdateCandidates: z.boolean().optional(),
         includeShared: z.boolean().optional(),
         limit: z.number().int().positive().optional(),
         candidateLimit: z.number().int().positive().optional(),
