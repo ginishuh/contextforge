@@ -10,6 +10,18 @@
   storage/vector readiness, trust hints, and live-state verification reminders
   in one call.
 
+## 0.3.1 - 2026-05-08
+
+- Fixed the `codex_exec` structured output schema so root fields and
+  `sessionWorkingContext` fields satisfy Codex response-schema strictness,
+  restoring live checkpoint distillation after the session working context
+  addition.
+- Added regression coverage for the full required-field schema contract used by
+  `codex_exec`.
+- Added `examples/server.env.example` and documented
+  `CONTEXTFORGE_AUTO_PROMOTE_ENABLED`, embedding worker settings, and server
+  env guidance for trusted deployments.
+
 ## 0.2.0 - 2026-05-01
 
 - Added sqlite-vec backed derived embedding storage with startup `vec_version`

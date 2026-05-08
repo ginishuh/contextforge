@@ -258,7 +258,7 @@ sudo install -m 640 -o root -g contextforge /dev/null /etc/contextforge/server.e
 sudoedit /etc/contextforge/server.env
 ```
 
-Example contents:
+Use `examples/server.env.example` as the public template. Example contents:
 
 ```bash
 CONTEXTFORGE_REMOTE_HOST=127.0.0.1
@@ -276,6 +276,9 @@ CONTEXTFORGE_EMBEDDINGS_MODEL=text-embedding-3-small
 CONTEXTFORGE_EMBEDDINGS_DIMENSIONS=1536
 CONTEXTFORGE_EMBEDDINGS_TIMEOUT_MS=30000
 CONTEXTFORGE_EMBEDDINGS_STALE_AFTER_MS=600000
+# Keep false unless this trusted deployment should allow dryRun=false
+# closeout-scoped safe auto-promotion.
+CONTEXTFORGE_AUTO_PROMOTE_ENABLED=false
 ```
 
 The default and recommended embedding model is `text-embedding-3-small`.
@@ -284,6 +287,9 @@ The default and recommended embedding model is `text-embedding-3-small`.
 not support that request field and must return the configured dimension count.
 `CONTEXTFORGE_EMBEDDINGS_STALE_AFTER_MS` controls when a stuck `processing`
 embedding job is returned to `pending`; the default is 10 minutes.
+`CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true` is required before
+`auto_promote_memory_candidates` can run with `dryRun=false`; even then, the
+tool only promotes strict closeout-scoped safe candidates.
 
 Use a long random token and store the same value on client machines as
 `CONTEXTFORGE_REMOTE_TOKEN`. Treat this token as an administrator credential:
