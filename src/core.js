@@ -2243,6 +2243,7 @@ export function createContextForge(options = {}) {
                 const reason =
                   'Auto-promoted by auto_promote_memory_candidates after strict closeout-scoped safety checks.';
                 const memory = autoPromoteIndexedCandidate(store, scope, item.candidate, item.warnings, reason);
+                enqueueEmbeddingSources(store, [store.embeddingSourceForMemory(memory)]);
                 return {
                   ...promotionProposal(item.candidate, item.warnings, index + 1),
                   memoryId: memory.id,
@@ -2582,7 +2583,7 @@ export function createContextForge(options = {}) {
           error.warnings = warnings;
           throw error;
         }
-        return promoteCandidateToMemory(store, scope, {
+        const memory = promoteCandidateToMemory(store, scope, {
           candidate,
           checkpointId: checkpoint.id,
           sessionId: checkpoint.sessionId,
@@ -2598,6 +2599,8 @@ export function createContextForge(options = {}) {
           sourceRawEventIds: options.sourceRawEventIds || [],
           allowStatusOverride: truthyOption(options.allowStatusOverride),
         });
+        enqueueEmbeddingSources(store, [store.embeddingSourceForMemory(memory)]);
+        return memory;
       });
     },
 
