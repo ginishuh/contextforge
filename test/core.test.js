@@ -501,12 +501,25 @@ test('promoteMemory writes durable memory with explicit provenance', async () =>
 
 test('memory candidates require explicit promotion and can be corrected or deactivated', async () => {
   const dataDir = await makeTempDir();
+  const embeddingProvider = {
+    name: 'test-vector',
+    model: 'test-embedding',
+    dimensions: 3,
+    async embed(texts) {
+      return texts.map((text) => (String(text).includes('candidate-rule') ? [1, 0, 0] : [0, 1, 0]));
+    },
+  };
   const app = createContextForge({
     env: {
       CONTEXTFORGE_DATA_DIR: dataDir,
       CONTEXTFORGE_DISTILL_PROVIDER: 'candidate_provider',
+      CONTEXTFORGE_EMBEDDINGS_PROVIDER: 'openai',
+      CONTEXTFORGE_EMBEDDINGS_DIMENSIONS: '3',
     },
     cwd: process.cwd(),
+    embeddingProviders: {
+      openai: embeddingProvider,
+    },
     distillProviders: {
       candidate_provider: async () => ({
         summaryShort: 'Candidate checkpoint.',
@@ -559,6 +572,10 @@ test('memory candidates require explicit promotion and can be corrected or deact
     sessionId: 'candidate-session',
   });
   assert.equal(checkpoint.memoryCandidateCount, 2);
+  await app.processEmbeddingJobs({
+    scope: 'repo',
+    scopeKey: 'repo-promote',
+  });
 
   const status = app.sessionStatus({
     scope: 'repo',
@@ -640,6 +657,19 @@ test('memory candidates require explicit promotion and can be corrected or deact
   });
   assert.equal(promotedFromCandidate.key, 'candidate-rule-via-helper');
   assert.equal(promotedFromCandidate.content, candidateRule.candidate.content);
+  const helperEmbeddingJobs = await app.listEmbeddingJobs({
+    scope: 'repo',
+    scopeKey: 'repo-promote',
+    status: 'pending',
+  });
+  assert.deepEqual(
+    helperEmbeddingJobs.map((job) => job.sourceType),
+    ['memory'],
+  );
+  await app.processEmbeddingJobs({
+    scope: 'repo',
+    scopeKey: 'repo-promote',
+  });
 
   const helperEvents = app.listMemoryEvents({
     scope: 'repo',
@@ -736,6 +766,12 @@ test('memory candidates require explicit promotion and can be corrected or deact
   });
   assert.equal(promoted.status, 'active');
   assert.equal(promoted.key, 'candidate-rule');
+  const promoteMemoryEmbeddingJobs = await app.listEmbeddingJobs({
+    scope: 'repo',
+    scopeKey: 'repo-promote',
+    status: 'pending',
+  });
+  assert.ok(promoteMemoryEmbeddingJobs.some((job) => job.sourceType === 'memory'));
 
   const promoteEvents = app.listMemoryEvents({
     scope: 'repo',
@@ -765,14 +801,20 @@ test('memory candidates require explicit promotion and can be corrected or deact
   assert.equal(correctEvents.length, 2);
   assert.equal(correctEvents[1].eventType, 'correct');
   assert.equal(correctEvents[1].metadata.previousContent, promoted.content);
+  const processedPromoteMemoryEmbedding = await app.processEmbeddingJobs({
+    scope: 'repo',
+    scopeKey: 'repo-promote',
+  });
+  assert.ok(processedPromoteMemoryEmbedding.bySourceType.memory >= 1);
 
-  const searchBeforeDeactivate = app.search({
+  const searchBeforeDeactivate = await app.search({
     scope: 'repo',
     scopeKey: 'repo-promote',
     query: 'human agent review',
   });
-  assert.equal(searchBeforeDeactivate.length, 1);
-  assert.equal(searchBeforeDeactivate[0].memory.key, 'candidate-rule');
+  const memoryBeforeDeactivate = searchBeforeDeactivate.find((result) => result.type === 'memory');
+  assert.ok(memoryBeforeDeactivate, 'expected memory result before deactivation');
+  assert.equal(memoryBeforeDeactivate.memory.key, 'candidate-rule');
 
   const inactive = app.deactivateMemory({
     scope: 'repo',
@@ -791,12 +833,12 @@ test('memory candidates require explicit promotion and can be corrected or deact
   assert.equal(deactivateEvents.length, 3);
   assert.equal(deactivateEvents[2].eventType, 'deactivate');
 
-  const searchAfterDeactivate = app.search({
+  const searchAfterDeactivate = await app.search({
     scope: 'repo',
     scopeKey: 'repo-promote',
     query: 'agent review',
   });
-  assert.deepEqual(searchAfterDeactivate, []);
+  assert.equal(searchAfterDeactivate.find((result) => result.type === 'memory'), undefined);
 });
 
 test('CLI supports promoteMemory', async () => {
@@ -4717,13 +4759,26 @@ test('autoPromoteMemoryCandidates returns stable empty arrays and preference inp
 
 test('autoPromoteMemoryCandidates promotes only strict safe candidates when enabled', async () => {
   const dataDir = await makeTempDir();
+  const embeddingProvider = {
+    name: 'test-vector',
+    model: 'test-embedding',
+    dimensions: 3,
+    async embed(texts) {
+      return texts.map((text) => (String(text).includes('safe-api-contract') ? [1, 0, 0] : [0, 1, 0]));
+    },
+  };
   const app = createContextForge({
     env: {
       CONTEXTFORGE_DATA_DIR: dataDir,
       CONTEXTFORGE_DISTILL_PROVIDER: 'auto_enabled_provider',
       CONTEXTFORGE_AUTO_PROMOTE_ENABLED: 'true',
+      CONTEXTFORGE_EMBEDDINGS_PROVIDER: 'openai',
+      CONTEXTFORGE_EMBEDDINGS_DIMENSIONS: '3',
     },
     cwd: process.cwd(),
+    embeddingProviders: {
+      openai: embeddingProvider,
+    },
     distillProviders: {
       auto_enabled_provider: async () => ({
         summaryShort: 'Auto enabled checkpoint.',
@@ -4739,6 +4794,16 @@ test('autoPromoteMemoryCandidates promotes only strict safe candidates when enab
             candidateType: 'api-contract',
             confidence: 0.96,
             stability: 0.96,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+          {
+            key: 'safe-runbook',
+            content: 'The runbook requires processing embeddings after promoted memory writes.',
+            category: 'runbook',
+            candidateType: 'runbook',
+            confidence: 0.94,
+            stability: 0.93,
             sensitivity: 'low',
             promotionRecommendation: 'promote',
           },
@@ -4778,6 +4843,14 @@ test('autoPromoteMemoryCandidates promotes only strict safe candidates when enab
     scopeKey: 'auto-enabled-repo',
     sessionId: 'auto-enabled-session',
   });
+  const processedDistillEmbeddings = await app.processEmbeddingJobs({
+    scope: 'repo',
+    scopeKey: 'auto-enabled-repo',
+  });
+  assert.deepEqual(processedDistillEmbeddings.bySourceType, {
+    checkpoint: 1,
+    memory_candidate: 4,
+  });
 
   const result = await app.autoPromoteMemoryCandidates({
     scope: 'repo',
@@ -4792,25 +4865,56 @@ test('autoPromoteMemoryCandidates promotes only strict safe candidates when enab
   assert.deepEqual(result.wouldPromote, []);
   assert.deepEqual(
     result.promoted.map((item) => item.key),
-    ['safe-api-contract'],
+    ['safe-api-contract', 'safe-runbook'],
   );
   assert.ok(result.promoted[0].evidence);
   assert.equal(result.promoted[0].promotionResult.status, 'promoted');
+  const pendingEmbeddingJobs = await app.listEmbeddingJobs({
+    scope: 'repo',
+    scopeKey: 'auto-enabled-repo',
+    status: 'pending',
+  });
+  assert.deepEqual(
+    pendingEmbeddingJobs.map((job) => job.sourceType),
+    ['memory', 'memory'],
+  );
   assert.ok(result.skipped.some((item) => item.reason.includes('preference_auto_excluded')));
   assert.ok(result.skipped.some((item) => item.reason.includes('auto_low_confidence')));
   assert.equal(app.getMemory({ scope: 'repo', scopeKey: 'auto-enabled-repo', key: 'safe-api-contract' }).status, 'active');
   assert.equal(app.getMemory({ scope: 'repo', scopeKey: 'auto-enabled-repo', key: 'user-pref' }), null);
   const promotedCandidates = app.listMemoryCandidates({ scope: 'repo', scopeKey: 'auto-enabled-repo', status: 'promoted' });
-  assert.equal(promotedCandidates.length, 1);
-  assert.equal(promotedCandidates[0].reviewMetadata.autoPromoted, true);
-  assert.equal(promotedCandidates[0].reviewMetadata.memoryId, result.promoted[0].memoryId);
+  assert.equal(promotedCandidates.length, 2);
+  assert.ok(promotedCandidates.every((candidate) => candidate.reviewMetadata.autoPromoted === true));
+  assert.deepEqual(
+    promotedCandidates.map((candidate) => candidate.reviewMetadata.memoryId).sort(),
+    result.promoted.map((item) => item.memoryId).sort(),
+  );
+  const promotedApiCandidate = promotedCandidates.find((candidate) => candidate.candidate.key === 'safe-api-contract');
+  assert.ok(promotedApiCandidate, 'expected safe-api-contract promoted candidate');
   const autoEvents = app.listMemoryEvents({
     scope: 'repo',
     scopeKey: 'auto-enabled-repo',
     key: 'safe-api-contract',
   });
-  assert.equal(autoEvents[0].metadata.sourceCandidateId, promotedCandidates[0].id);
+  assert.equal(autoEvents[0].metadata.sourceCandidateId, promotedApiCandidate.id);
   assert.equal(autoEvents[0].metadata.autoPromoted, true);
+  const processedMemoryEmbedding = await app.processEmbeddingJobs({
+    scope: 'repo',
+    scopeKey: 'auto-enabled-repo',
+  });
+  assert.deepEqual(processedMemoryEmbedding.bySourceType, {
+    memory: 2,
+  });
+  const memoryResults = await app.search({
+    scope: 'repo',
+    scopeKey: 'auto-enabled-repo',
+    query: 'safe-api-contract',
+  });
+  const safeApiMemoryResult = memoryResults.find(
+    (result) => result.type === 'memory' && result.memory.key === 'safe-api-contract',
+  );
+  assert.ok(safeApiMemoryResult, 'expected safe-api-contract memory result');
+  assert.equal(safeApiMemoryResult.retrieval.vectorModel, 'test-embedding');
 });
 
 test('preference candidates record merged occurrences across checkpoints', async () => {
