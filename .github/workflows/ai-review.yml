@@ -394,8 +394,21 @@ jobs:
         shell: bash
         run: |
           set +e
+          run_with_timeout() {
+            local seconds="$1"
+            shift
+            timeout --preserve-status --kill-after=10s "$seconds" "$@"
+            local status=$?
+            case "$status" in
+              124|137|143)
+                echo "command timed out after ${seconds}" >&2
+                ;;
+            esac
+            return "$status"
+          }
+
           run_builtin_smoke() {
-            "$OPENCODE_BIN" run \
+            run_with_timeout 45s "$OPENCODE_BIN" run \
               --model zai-coding-plan/glm-5.1 \
               --dir "$REVIEW_DIR" \
               "Reply exactly with ZAI_BUILTIN_READY." \
@@ -404,7 +417,7 @@ jobs:
           }
 
           run_builtin_json_smoke() {
-            "$OPENCODE_BIN" run \
+            run_with_timeout 45s "$OPENCODE_BIN" run \
               --model zai-coding-plan/glm-5.1 \
               --dir "$REVIEW_DIR" \
               --format json \
@@ -415,7 +428,7 @@ jobs:
           }
 
           run_default_smoke() {
-            "$OPENCODE_BIN" run \
+            run_with_timeout 45s "$OPENCODE_BIN" run \
               --dir "$REVIEW_DIR" \
               "Reply exactly with ZAI_DEFAULT_READY." \
               > "$REVIEW_DIR/opencode-zai-default-smoke.md" \
@@ -649,7 +662,7 @@ jobs:
           COMMAND
 
           run_opencode_builtin_model_review() {
-            "$OPENCODE_BIN" run "$(cat "$REVIEW_DIR/review_prompt.md")" \
+            timeout --preserve-status --kill-after=10s 300s "$OPENCODE_BIN" run "$(cat "$REVIEW_DIR/review_prompt.md")" \
               --model zai-coding-plan/glm-5.1 \
               --dir "$CODE_DIR" \
               --file "$REVIEW_DIR/context.md" \
@@ -657,7 +670,7 @@ jobs:
           }
 
           run_opencode_default_review() {
-            "$OPENCODE_BIN" run "$(cat "$REVIEW_DIR/review_prompt.md")" \
+            timeout --preserve-status --kill-after=10s 300s "$OPENCODE_BIN" run "$(cat "$REVIEW_DIR/review_prompt.md")" \
               --dir "$CODE_DIR" \
               --file "$REVIEW_DIR/context.md" \
               --file "$REVIEW_DIR/pr.diff"
@@ -754,6 +767,13 @@ jobs:
             echo "OpenCode built-in Z.AI smoke failed and raw Z.AI smoke failed." > "$REVIEW_DIR/review.stderr.log"
             exit_code=1
             mode="opencode-zai-unavailable"
+          fi
+
+          if [[ "$exit_code" =~ ^(124|137|143)$ && "${ZAI_RAW_OK:-false}" == "true" ]]; then
+            echo "OpenCode review timed out with exit ${exit_code}; falling back to raw Z.AI review." >> "$REVIEW_DIR/review.stderr.log"
+            run_zai_raw_review > "$REVIEW_DIR/zai-raw-review.runner.log" 2>&1
+            exit_code=$?
+            mode="zai-raw-fallback-after-opencode-timeout"
           fi
 
           if [[ "$mode" == "opencode-zai-builtin" && ! -s "$REVIEW_DIR/review.md" && ! -s "$REVIEW_DIR/review.stderr.log" ]]; then
