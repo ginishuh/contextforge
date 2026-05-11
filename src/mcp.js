@@ -76,12 +76,12 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Bootstrap Context',
       description:
-        'Resolve scoped ContextForge memory for a task in one call. Searches repo scope semantically across memory, checkpoint, and memory_candidate results, optionally includes up to 3 shared-scope results, and annotates trust and verification hints for agents. Does not create a session; pass a known Codex/Claude/ContextForge sessionId only to load session working state and raw tail.',
+        'Resolve scoped ContextForge memory for a task in one call. Searches repo scope semantically across memory, checkpoint, and memory_candidate results, optionally includes up to 3 shared-scope results, and annotates trust and verification hints for agents. Does not create a session; pass a known Codex/Claude/ContextForge sessionId to load session working state. rawTailLimit defaults to 0; set a positive value to include raw tail.',
       inputSchema: {
         ...scopedSchema,
         query: z.string(),
         sessionId: z.string().optional(),
-        rawTailLimit: z.number().int().positive().optional(),
+        rawTailLimit: z.number().int().nonnegative().optional(),
         includeShared: z.boolean().optional(),
         limit: z.number().int().positive().optional(),
         sharedScopeKey: z.string().optional(),
@@ -100,14 +100,14 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Sync Resume Context',
       description:
-        'Build a start/resume handoff package for continuing work across machines or agent environments. Use checkpoints as credible recent handoff notes, durable memories as canonical long-term context, and memory candidates only as review material. This tool must not propose or perform durable memory promotion.',
+        'Build a start/resume handoff package for continuing work across machines or agent environments. Use checkpoints as credible recent handoff notes, durable memories as canonical long-term context, and memory candidates only as review material. rawTailLimit defaults to 0; set a positive value to include raw tail. This tool must not propose or perform durable memory promotion.',
       inputSchema: {
         ...scopedSchema,
         query: z.string(),
         sessionId: z.string().optional(),
         includeShared: z.boolean().optional(),
         limit: z.number().int().positive().optional(),
-        rawTailLimit: z.number().int().positive().optional(),
+        rawTailLimit: z.number().int().nonnegative().optional(),
         sharedScopeKey: z.string().optional(),
       },
       annotations: {

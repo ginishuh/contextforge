@@ -101,6 +101,13 @@ function positiveNumber(value, name) {
   return value;
 }
 
+function nonnegativeNumber(value, name) {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`${name} must be a non-negative number.`);
+  }
+  return value;
+}
+
 function withStore(config, fn) {
   const store = new ContextForgeStore({ dataDir: config.dataDir });
   try {
@@ -1450,9 +1457,7 @@ export function createContextForge(options = {}) {
       const includeShared = truthyOption(options.includeShared);
       const sessionId = options.sessionId || null;
       const rawTailLimit = sessionId
-        ? options.rawTailLimit == null
-          ? 5
-          : positiveNumber(Number(options.rawTailLimit), 'rawTailLimit')
+        ? nonnegativeNumber(options.rawTailLimit == null ? 0 : Number(options.rawTailLimit), 'rawTailLimit')
         : null;
       return useStore(async (store) => {
         const info = buildDbInfo(store);
@@ -1500,7 +1505,7 @@ export function createContextForge(options = {}) {
         const structuredWorkingContext = sessionId
           ? bootstrapSessionWorkingContext(store.getSessionWorkingContext({ ...scope, sessionId }))
           : null;
-        const rawTail = sessionId
+        const rawTail = sessionId && rawTailLimit > 0
           ? store
               .listRecentRawEvents({ ...scope, sessionId, limit: rawTailLimit })
               .map((event) => bootstrapRawTailEvent(event))
