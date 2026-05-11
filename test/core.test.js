@@ -3128,6 +3128,25 @@ test('bootstrapContext includes working summary and recent raw tail separately f
     content: 'Bootstrap wiring is now in progress.',
   });
 
+  const defaultBootstrap = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-working',
+    sessionId: 'working-session',
+    query: 'durable working summary bootstrap',
+  });
+  assert.deepEqual(defaultBootstrap.rawTail, []);
+  assert.equal(defaultBootstrap.rawTailLimit, 0);
+
+  const zeroBootstrap = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-working',
+    sessionId: 'working-session',
+    query: 'durable working summary bootstrap',
+    rawTailLimit: 0,
+  });
+  assert.deepEqual(zeroBootstrap.rawTail, []);
+  assert.equal(zeroBootstrap.rawTailLimit, 0);
+
   const bootstrap = await app.bootstrapContext({
     scope: 'repo',
     scopeKey: 'repo-working',
@@ -5829,6 +5848,19 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     });
     assert.equal(invalidAppendResult.isError, true);
     assert.match(invalidAppendResult.content[0].text, /Invalid arguments|tool_result/);
+
+    const zeroRawTailBootstrap = await client.callTool({
+      name: 'bootstrap_context',
+      arguments: {
+        scope: 'repo',
+        scopeKey: 'mcp-repo',
+        sessionId: 'mcp-session',
+        query: 'session status before distilling',
+        rawTailLimit: 0,
+      },
+    });
+    assert.equal(zeroRawTailBootstrap.structuredContent.result.rawTailLimit, 0);
+    assert.deepEqual(zeroRawTailBootstrap.structuredContent.result.rawTail, []);
 
     const statusResult = await client.callTool({
       name: 'session_status',

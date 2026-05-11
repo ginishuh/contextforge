@@ -879,6 +879,9 @@ node src/cli.js bootstrapContext \
   --rawTailLimit 5
 ```
 
+`rawTailLimit` defaults to `0`, which omits raw events. Set a positive value
+only when last-mile transcript continuity is needed.
+
 The bootstrap response keeps these channels separate:
 
 - `results`: durable memories, checkpoints, and memory candidates from search.
