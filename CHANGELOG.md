@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+## 0.4.0 - 2026-05-14
+
+- Added a Korean operator UI at `/ui/` for runtime dashboards, provider
+  settings, distillation policy controls, memory management, candidate review,
+  and recent distillation run inspection.
+- Added DB-backed runtime settings that override environment defaults for new
+  server-side calls, while keeping provider API keys write-only and redacted
+  from read APIs.
+- Added an OpenAI-compatible Chat Completions distillation provider for
+  DeepSeek-style APIs, including DeepSeek presets, manual model entry,
+  JSON-output modes, local checkpoint schema validation, and one repair retry.
+- Kept `codex_exec` as a first-class selectable distillation provider with UI
+  controls for command, model, reasoning effort, sandbox, timeout, and input
+  limits.
+- Added conservative automatic memory-promotion auditing through a separate
+  `codex_exec` audit runner, defaulting to `gpt-5.5` with reasoning effort
+  `low`, and rejecting unsupported audit provider configuration.
+- Added admin login sessions, login state restoration, logout, no-store UI
+  responses, scope-key dropdowns, bulk memory/candidate actions, and dashboard
+  recent-run loading across remote-client deployments.
+- Added `listDistillRuns` newest-first ordering support for dashboards and CLI
+  inspection.
+
 ## 0.3.6 - 2026-05-08
 
 - Added explicit ContextForge connection metadata to `dbInfo`, distinguishing

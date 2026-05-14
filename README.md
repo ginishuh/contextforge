@@ -17,10 +17,12 @@ ContextForge is a sidecar memory runtime. It complements existing agent memory
 systems by providing canonical project/repo memory, evidence retention, and
 LLM-backed distillation.
 
-Current 0.3.x builds add remote-first MCP workflows, start/resume handoff
-tools, closeout memory promotion review, correction reconciliation, hybrid
-retrieval, and an embedding job queue so vector indexing can recover
-independently from memory or checkpoint writes.
+Current 0.4.x builds add a server-hosted operator UI, DB-backed runtime
+settings, OpenAI-compatible distillation for DeepSeek-style Chat Completions
+APIs, separate auto-promotion audit runners, remote-first MCP workflows,
+start/resume handoff tools, correction reconciliation, hybrid retrieval, and an
+embedding job queue so vector indexing can recover independently from memory or
+checkpoint writes.
 
 ## Goals
 
@@ -77,10 +79,13 @@ bring-your-own distillation providers, such as:
 - direct model APIs
 - local model runners
 
-The current implementation ships with a deterministic `mock` provider and a
-`codex_exec` provider. The `codex_exec` provider shells out to `codex exec`,
-requests JSON-only output with a schema, validates the result, and records
-provider run metadata, including prompt and output schema versions.
+The current implementation ships with a deterministic `mock` provider,
+`codex_exec`, and `openai_compatible`. The `codex_exec` provider shells out to
+`codex exec`, requests JSON-only output with a schema, validates the result,
+and records provider run metadata, including prompt and output schema versions.
+The OpenAI-compatible provider calls Chat Completions APIs such as DeepSeek at
+`{baseUrl}/chat/completions`, validates the same checkpoint contract locally,
+and records provider metadata without returning API keys.
 
 ## Quick Start
 
@@ -318,13 +323,16 @@ it can call every remote API method, including pruning raw evidence and running
 provider health checks. Do not put this file in git.
 
 The HTTP server also serves an operator UI at `/ui/`. The UI can inspect
-runtime/storage state, update DB-backed runtime settings, select `codex_exec` or
-OpenAI-compatible distillation, tune distillation thresholds, review memory
-candidates, promote candidates manually, correct durable memories, and
-deactivate wrong memories with provenance. Runtime settings saved in the UI
-override env defaults for new calls without restarting the server. API keys are
-write-only in the UI/API: callers can set, replace, clear, and test them, but
-stored values are never returned.
+runtime/storage state, view recent distillation runs, update DB-backed runtime
+settings, select `codex_exec` or OpenAI-compatible distillation, pick preset or
+manual distillation models, tune distillation thresholds, review memory
+candidates, promote candidates manually, correct durable memories, bulk reject
+or deactivate bad memory material, and deactivate wrong memories with
+provenance. Runtime settings saved in the UI override env defaults for new
+calls without restarting the server. API keys are write-only in the UI/API:
+callers can set, replace, clear, and test them, but stored values are never
+returned. Optional admin password login is cookie-session based; bearer-token
+access remains available for API clients.
 
 `CONTEXTFORGE_OPENAI_API_KEY` is only needed on the process that performs
 embedding calls. In remote/server-backed deployments, keep that key only in the
@@ -1381,11 +1389,11 @@ deleting raw evidence.
 
 ## Status
 
-0.3.x runtime. The current implementation includes SQLite migrations, scoped
+0.4.x runtime. The current implementation includes SQLite migrations, scoped
 durable memories, raw event capture, rolling working summaries, checkpoint
-distillation with `mock` and `codex_exec` providers, remote HTTP mode for
-server-backed canonical memory, stdio and Streamable HTTP MCP, explainable
-hybrid retrieval, embedding job processing, closeout promotion review, strict
-safe auto-promotion controls, and memory reconciliation for user corrections.
-Additional distillation providers and large-store performance hardening remain
-future work.
+distillation with `mock`, `codex_exec`, and `openai_compatible` providers,
+remote HTTP mode for server-backed canonical memory, an operator UI, stdio and
+Streamable HTTP MCP, explainable hybrid retrieval, embedding job processing,
+closeout promotion review, audited strict safe auto-promotion controls, and
+memory reconciliation for user corrections. Further provider adapters and
+large-store performance hardening remain future work.
