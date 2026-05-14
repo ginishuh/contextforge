@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
 import http from 'node:http';
-import { pathToFileURL } from 'node:url';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createContextForge } from './core.js';
 import { createContextForgeMcpServer } from './mcp.js';
@@ -9,6 +11,18 @@ import { REMOTE_METHODS } from './remote/client.js';
 
 const METHOD_SET = new Set(REMOTE_METHODS);
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
+const UI_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'admin-ui');
+const DEFAULT_ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const DEFAULT_ADMIN_LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const DEFAULT_ADMIN_LOGIN_MAX_FAILURES = 5;
+const ADMIN_COOKIE_NAME = 'contextforge_admin';
+const UI_TYPES = {
+  '.html': 'text/html; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+};
 
 class RequestBodyTooLargeError extends Error {
   constructor() {
@@ -23,6 +37,38 @@ function sendJson(response, statusCode, body) {
     'content-type': 'application/json',
   });
   response.end(`${JSON.stringify(body, null, 2)}\n`);
+}
+
+async function sendStaticUi(requestUrl, response) {
+  const pathname = requestUrl.pathname === '/ui' ? '/ui/' : requestUrl.pathname;
+  let relative;
+  try {
+    relative = pathname === '/ui/' ? 'index.html' : decodeURIComponent(pathname.slice('/ui/'.length));
+  } catch {
+    sendJson(response, 404, { error: { message: 'Not found.' } });
+    return;
+  }
+  const safePath = path.normalize(relative);
+  const filePath = path.join(UI_DIR, safePath);
+  const fileRelative = path.relative(UI_DIR, filePath);
+  if (fileRelative.startsWith('..') || path.isAbsolute(fileRelative)) {
+    sendJson(response, 404, { error: { message: 'Not found.' } });
+    return;
+  }
+  try {
+    const content = await fs.readFile(filePath);
+    response.writeHead(200, {
+      'content-type': UI_TYPES[path.extname(filePath)] || 'application/octet-stream',
+      'cache-control': 'no-store',
+    });
+    response.end(content);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      sendJson(response, 404, { error: { message: 'Not found.' } });
+      return;
+    }
+    sendJson(response, 500, { error: { message: error.message } });
+  }
 }
 
 function parseMaxBodyBytes(env) {
@@ -88,6 +134,112 @@ function timingSafeStringEqual(actual, expected) {
 function isAuthorized(request, token) {
   if (!token) return true;
   return timingSafeStringEqual(request.headers.authorization, `Bearer ${token}`);
+}
+
+function originMatchesHost(request) {
+  const origin = request.headers.origin;
+  if (!origin) return true;
+  try {
+    return new URL(origin).host === request.headers.host;
+  } catch {
+    return false;
+  }
+}
+
+function parsePositiveInteger(value, fallback) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function makeCookie(name, value, { maxAge = null, secure = true } = {}) {
+  return [
+    `${name}=${encodeURIComponent(value)}`,
+    'HttpOnly',
+    'SameSite=Strict',
+    'Path=/',
+    secure ? 'Secure' : null,
+    maxAge == null ? null : `Max-Age=${maxAge}`,
+  ]
+    .filter(Boolean)
+    .join('; ');
+}
+
+function parseAdminPasswordHash(env) {
+  if (!env.CONTEXTFORGE_ADMIN_USER) {
+    return null;
+  }
+  const pbkdf2 = env.CONTEXTFORGE_ADMIN_PASSWORD_PBKDF2;
+  if (!pbkdf2) {
+    throw new Error('CONTEXTFORGE_ADMIN_PASSWORD_PBKDF2 is required when CONTEXTFORGE_ADMIN_USER is set.');
+  }
+  const [iterationsText, saltHex, hashHex] = String(pbkdf2).split(':');
+  const iterations = Number(iterationsText);
+  if (!Number.isInteger(iterations) || iterations < 100000 || !saltHex || !hashHex) {
+    throw new Error(
+      'CONTEXTFORGE_ADMIN_PASSWORD_PBKDF2 must use format iterations:saltHex:hashHex with at least 100000 iterations.',
+    );
+  }
+  return {
+    iterations,
+    salt: Buffer.from(saltHex, 'hex'),
+    hash: Buffer.from(hashHex, 'hex'),
+  };
+}
+
+function verifyAdminPassword(password, passwordHash) {
+  if (!passwordHash) return false;
+  const derived = crypto.pbkdf2Sync(
+    String(password || ''),
+    passwordHash.salt,
+    passwordHash.iterations,
+    passwordHash.hash.length,
+    'sha256',
+  );
+  return crypto.timingSafeEqual(derived, passwordHash.hash);
+}
+
+function requestIp(request) {
+  return String(request.headers['x-forwarded-for'] || request.socket.remoteAddress || '')
+    .split(',')[0]
+    .trim();
+}
+
+function parseCookies(request) {
+  const cookies = {};
+  for (const item of String(request.headers.cookie || '')
+    .split(';')
+    .map((cookie) => cookie.trim())
+    .filter(Boolean)) {
+    try {
+        const index = item.indexOf('=');
+      const key = index === -1 ? item : item.slice(0, index);
+      const value = index === -1 ? '' : decodeURIComponent(item.slice(index + 1));
+      cookies[key] = value;
+    } catch {
+      // Ignore malformed cookies instead of turning auth checks into 500s.
+    }
+  }
+  return cookies;
+}
+
+function getAdminSessionEntry(request, sessions) {
+  const session = parseCookies(request)[ADMIN_COOKIE_NAME];
+  const entry = session ? sessions.get(session) : null;
+  if (!entry) return false;
+  if (Date.now() > entry.expiresAt) {
+    sessions.delete(session);
+    return null;
+  }
+  return entry;
+}
+
+function isAdminSessionAuthorized(request, sessions) {
+  const entry = getAdminSessionEntry(request, sessions);
+  return Boolean(entry);
+}
+
+function isRequestAuthorized(request, token, sessions) {
+  return isAuthorized(request, token) || (originMatchesHost(request) && isAdminSessionAuthorized(request, sessions));
 }
 
 function connectionServerRole(connection) {
@@ -159,6 +311,50 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
   const serverApp = app || createContextForge({ env: serverStorageEnv(env), reuseStore: true });
   const authToken = env.CONTEXTFORGE_REMOTE_TOKEN || null;
   const maxBodyBytes = parseMaxBodyBytes(env);
+  const adminUser = env.CONTEXTFORGE_ADMIN_USER || null;
+  const adminPasswordHash = parseAdminPasswordHash(env);
+  const adminSessionTtlMs = parsePositiveInteger(env.CONTEXTFORGE_ADMIN_SESSION_TTL_MS, DEFAULT_ADMIN_SESSION_TTL_MS);
+  const adminLoginWindowMs = parsePositiveInteger(
+    env.CONTEXTFORGE_ADMIN_LOGIN_WINDOW_MS,
+    DEFAULT_ADMIN_LOGIN_WINDOW_MS,
+  );
+  const adminLoginMaxFailures = parsePositiveInteger(
+    env.CONTEXTFORGE_ADMIN_LOGIN_MAX_FAILURES,
+    DEFAULT_ADMIN_LOGIN_MAX_FAILURES,
+  );
+  const adminCookieSecure = env.CONTEXTFORGE_ADMIN_COOKIE_SECURE !== 'false';
+  const adminSessions = new Map();
+  const failedAdminLogins = new Map();
+
+  function pruneAdminSessions(now = Date.now()) {
+    for (const [session, entry] of adminSessions.entries()) {
+      if (now > entry.expiresAt) {
+        adminSessions.delete(session);
+      }
+    }
+  }
+
+  function loginAttemptKey(request, username) {
+    return `${requestIp(request)}:${String(username || '')}`;
+  }
+
+  function loginAllowed(key, now = Date.now()) {
+    const entry = failedAdminLogins.get(key);
+    if (!entry || now > entry.resetAt) {
+      failedAdminLogins.delete(key);
+      return true;
+    }
+    return entry.count < adminLoginMaxFailures;
+  }
+
+  function recordFailedLogin(key, now = Date.now()) {
+    const entry = failedAdminLogins.get(key);
+    if (!entry || now > entry.resetAt) {
+      failedAdminLogins.set(key, { count: 1, resetAt: now + adminLoginWindowMs });
+      return;
+    }
+    entry.count += 1;
+  }
 
   const server = http.createServer(async (request, response) => {
     const requestUrl = new URL(request.url, 'http://localhost');
@@ -168,8 +364,78 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
       return;
     }
 
+    if (request.method === 'GET' && requestUrl.pathname === '/ui/session') {
+      const entry = originMatchesHost(request) ? getAdminSessionEntry(request, adminSessions) : null;
+      if (!entry) {
+        sendJson(response, 401, { ok: false });
+        return;
+      }
+      response.writeHead(200, {
+        'content-type': 'application/json',
+        'cache-control': 'no-store',
+      });
+      response.end(`${JSON.stringify({ ok: true, username: adminUser || '관리자' })}\n`);
+      return;
+    }
+
+    if (request.method === 'POST' && requestUrl.pathname === '/ui/login') {
+      try {
+        if (!adminUser || !adminPasswordHash) {
+          sendJson(response, 403, { error: { message: 'Admin login is not configured.' } });
+          return;
+        }
+        const body = await readJsonBody(request, { maxBodyBytes });
+        const attemptKey = loginAttemptKey(request, body.username);
+        if (!loginAllowed(attemptKey)) {
+          sendJson(response, 429, { error: { message: 'Too many failed login attempts.' } });
+          return;
+        }
+        const ok =
+          timingSafeStringEqual(body.username, adminUser) &&
+          verifyAdminPassword(body.password, adminPasswordHash);
+        if (!ok) {
+          recordFailedLogin(attemptKey);
+          sendJson(response, 401, { error: { message: 'Invalid login.' } });
+          return;
+        }
+        failedAdminLogins.delete(attemptKey);
+        pruneAdminSessions();
+        const session = crypto.randomBytes(32).toString('hex');
+        adminSessions.set(session, { createdAt: Date.now(), expiresAt: Date.now() + adminSessionTtlMs });
+        response.writeHead(200, {
+          'content-type': 'application/json',
+          'cache-control': 'no-store',
+          'set-cookie': makeCookie(ADMIN_COOKIE_NAME, session, {
+            maxAge: Math.ceil(adminSessionTtlMs / 1000),
+            secure: adminCookieSecure,
+          }),
+        });
+        response.end(`${JSON.stringify({ ok: true })}\n`);
+      } catch (error) {
+        sendJson(response, error.statusCode || 500, { error: { message: error.message, name: error.name } });
+      }
+      return;
+    }
+
+    if (request.method === 'POST' && requestUrl.pathname === '/ui/logout') {
+      const session = parseCookies(request)[ADMIN_COOKIE_NAME];
+      if (session) adminSessions.delete(session);
+      response.writeHead(200, {
+        'content-type': 'application/json',
+        'cache-control': 'no-store',
+        'set-cookie': makeCookie(ADMIN_COOKIE_NAME, '', { maxAge: 0, secure: adminCookieSecure }),
+      });
+      response.end('{"ok":true}\n');
+      return;
+    }
+
+    if (request.method === 'GET' && (requestUrl.pathname === '/ui' || requestUrl.pathname.startsWith('/ui/'))) {
+      await sendStaticUi(requestUrl, response);
+      return;
+    }
+
     if (requestUrl.pathname === '/mcp') {
-      if (!isAuthorized(request, authToken)) {
+      if (!isRequestAuthorized(request, authToken, adminSessions)) {
         sendJson(response, 401, { error: { message: 'Unauthorized.' } });
         return;
       }
@@ -204,7 +470,7 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
       return;
     }
 
-    if (!isAuthorized(request, authToken)) {
+    if (!isRequestAuthorized(request, authToken, adminSessions)) {
       sendJson(response, 401, { error: { message: 'Unauthorized.' } });
       return;
     }

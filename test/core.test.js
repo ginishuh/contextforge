@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -24,6 +25,13 @@ const execFileAsync = promisify(execFile);
 
 async function makeTempDir() {
   return fs.mkdtemp(path.join(os.tmpdir(), 'contextforge-test-'));
+}
+
+function testAdminPasswordHash(password) {
+  const salt = Buffer.from('contextforge-test-admin-salt');
+  const iterations = 100000;
+  const hash = crypto.pbkdf2Sync(password, salt, iterations, 32, 'sha256');
+  return `${iterations}:${salt.toString('hex')}:${hash.toString('hex')}`;
 }
 
 test('interruptible ingest sleep wakes when stopped', async () => {
@@ -2968,6 +2976,48 @@ test('appendRaw and mock distillCheckpoint preserve raw evidence', async () => {
   assert.equal(statusAfter.shouldDistill, false);
 });
 
+test('listDistillRuns can return newest runs first when limited', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'mock',
+    },
+    cwd: process.cwd(),
+  });
+
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'run-order-repo',
+    sessionId: 'older-session',
+    role: 'user',
+    content: 'Create the older run.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'run-order-repo',
+    sessionId: 'older-session',
+  });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'run-order-repo',
+    sessionId: 'newer-session',
+    role: 'user',
+    content: 'Create the newer run.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'run-order-repo',
+    sessionId: 'newer-session',
+  });
+
+  const oldestFirst = app.listDistillRuns({ scope: 'repo', scopeKey: 'run-order-repo', limit: 1 });
+  assert.equal(oldestFirst[0].sessionId, 'older-session');
+  const newestFirst = app.listDistillRuns({ scope: 'repo', scopeKey: 'run-order-repo', limit: 1, order: 'desc' });
+  assert.equal(newestFirst[0].sessionId, 'newer-session');
+});
+
 test('distillCheckpoint records checkpoint level and coverage metadata', async () => {
   const dataDir = await makeTempDir();
   const store = new ContextForgeStore({ dataDir });
@@ -4055,6 +4105,338 @@ test('codex_exec doctor reports dry and live smoke readiness through a runner', 
   assert.equal(invocations[2].timeoutMs, 1234);
 });
 
+test('runtime settings are DB-backed, redacted, and hot-apply to session status', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'mock',
+      CONTEXTFORGE_DISTILL_MIN_INTERVAL_MS: '600000',
+    },
+    cwd: process.cwd(),
+  });
+
+  const updated = app.updateRuntimeSettings({
+    values: {
+      distillProvider: 'openai_compatible',
+      openAiCompatible: {
+        preset: 'deepseek',
+        baseUrl: 'https://api.deepseek.com',
+        model: 'deepseek-v4-flash',
+        responseFormat: 'json_object',
+      },
+      distillPolicy: {
+        minEvents: 1,
+        minIntervalMs: 1,
+        charMinIntervalMs: 1,
+        charThreshold: 1,
+        maxEvents: 10,
+        maxChars: 2000,
+      },
+    },
+    secrets: {
+      openAiCompatibleApiKey: 'deepseek-secret',
+    },
+  });
+
+  assert.equal(updated.effective.distillProvider, 'openai_compatible');
+  assert.equal(updated.effective.openAiCompatible.model, 'deepseek-v4-flash');
+  assert.equal(updated.effective.openAiCompatible.secretPresent, true);
+  assert.equal(updated.effective.openAiCompatible.apiKey, undefined);
+  assert.equal(updated.stored['openAiCompatible.apiKey'].value, null);
+  assert.equal(updated.stored['openAiCompatible.apiKey'].secretPresent, true);
+  assert.throws(
+    () =>
+      app.updateRuntimeSettings({
+        values: {
+          openAiCompatible: {
+            apiKey: 'not-through-values',
+          },
+        },
+      }),
+    /write-only secrets channel/,
+  );
+  const cleared = app.updateRuntimeSettings({
+    clearSecrets: ['openAiCompatibleApiKey'],
+  });
+  assert.equal(cleared.effective.openAiCompatible.secretPresent, false);
+  assert.equal(cleared.effective.openAiCompatible.apiKey, undefined);
+  assert.equal(cleared.stored['openAiCompatible.apiKey'], undefined);
+
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'settings-repo',
+    sessionId: 'settings-session',
+    role: 'user',
+    content: 'Enough content to cross the UI-managed char threshold.',
+  });
+  const status = app.sessionStatus({
+    scope: 'repo',
+    scopeKey: 'settings-repo',
+    sessionId: 'settings-session',
+  });
+  assert.equal(status.thresholds.minIntervalMs, 1);
+  assert.equal(status.thresholds.charThreshold, 1);
+  assert.equal(status.shouldDistill, true);
+});
+
+test('openai_compatible provider distills through a fake DeepSeek-style chat completions endpoint', async () => {
+  const dataDir = await makeTempDir();
+  let requestBody;
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'mock',
+    },
+    cwd: process.cwd(),
+    fetchImpl: async (url, request) => {
+      assert.equal(String(url), 'https://api.deepseek.com/chat/completions');
+      assert.equal(request.headers.authorization, 'Bearer deepseek-secret');
+      requestBody = JSON.parse(request.body);
+      return {
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    summaryShort: 'OpenAI-compatible checkpoint.',
+                    summaryText: 'The DeepSeek-style provider returned valid JSON.',
+                    workingSummary: 'Current state: openai_compatible provider is under test.',
+                    sessionWorkingContext: {
+                      mode: 'task_execution',
+                      currentTask: 'Test provider',
+                      currentUserIntent: 'Verify DeepSeek-style distill',
+                      targetSubject: null,
+                      sourceSubject: null,
+                      lastUserCorrection: null,
+                      openQuestion: null,
+                      nonGoals: [],
+                      avoidMisreadings: [],
+                      confidence: 0.9,
+                    },
+                    decisions: ['Use OpenAI-compatible Chat Completions for DeepSeek.'],
+                    todos: [],
+                    openQuestions: [],
+                    memoryCandidates: [],
+                    sourceEventCount: 1,
+                    provider: 'openai_compatible',
+                    metadata: {
+                      providerNotes: 'synthetic openai-compatible output',
+                      retrievalHooks: ['deepseek-v4-flash', 'openai_compatible'],
+                    },
+                  }),
+                },
+              },
+            ],
+            usage: {
+              prompt_tokens: 12,
+              completion_tokens: 8,
+              total_tokens: 20,
+            },
+          }),
+      };
+    },
+  });
+
+  app.updateRuntimeSettings({
+    values: {
+      distillProvider: 'openai_compatible',
+      openAiCompatible: {
+        preset: 'deepseek',
+        baseUrl: 'https://api.deepseek.com',
+        model: 'manual-model',
+        responseFormat: 'json_object',
+      },
+    },
+    secrets: {
+      openAiCompatibleApiKey: 'deepseek-secret',
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'openai-compatible-repo',
+    sessionId: 'openai-compatible-session',
+    role: 'user',
+    content: 'Decision: test DeepSeek-compatible distillation.',
+  });
+
+  const checkpoint = await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'openai-compatible-repo',
+    sessionId: 'openai-compatible-session',
+  });
+
+  assert.equal(requestBody.model, 'manual-model');
+  assert.deepEqual(requestBody.response_format, { type: 'json_object' });
+  assert.equal(requestBody.thinking, undefined);
+  assert.equal(checkpoint.provider, 'openai_compatible');
+  assert.equal(checkpoint.metadata.providerMetadata.openAiCompatible.baseUrlHost, 'api.deepseek.com');
+  assert.equal(checkpoint.metadata.providerMetadata.openAiCompatible.model, 'manual-model');
+  assert.equal(checkpoint.metadata.providerMetadata.openAiCompatible.usage.total_tokens, 20);
+});
+
+test('openai_compatible provider repairs invalid JSON output and records retry metadata', async () => {
+  const dataDir = await makeTempDir();
+  const requests = [];
+  const validOutput = {
+    summaryShort: 'Repaired OpenAI-compatible checkpoint.',
+    summaryText: 'The repair retry returned the complete checkpoint schema.',
+    workingSummary: 'Current state: repair retry is under test.',
+    sessionWorkingContext: {
+      mode: 'task_execution',
+      currentTask: 'Test repair retry',
+      currentUserIntent: 'Verify OpenAI-compatible repair validation',
+      targetSubject: null,
+      sourceSubject: null,
+      lastUserCorrection: null,
+      openQuestion: null,
+      nonGoals: [],
+      avoidMisreadings: [],
+      confidence: 0.88,
+    },
+    decisions: ['Re-validate repaired provider output before accepting it.'],
+    todos: [],
+    openQuestions: [],
+    memoryCandidates: [],
+    sourceEventCount: 1,
+    provider: 'openai_compatible',
+    metadata: {
+      retrievalHooks: ['repair-retry'],
+    },
+  };
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+    },
+    cwd: process.cwd(),
+    fetchImpl: async (url, request) => {
+      requests.push(JSON.parse(request.body));
+      return {
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content:
+                    requests.length === 1
+                      ? '{"summaryShort":"missing required fields"}'
+                      : JSON.stringify(validOutput),
+                },
+              },
+            ],
+            usage: {
+              prompt_tokens: 20,
+              completion_tokens: 10,
+              total_tokens: 30,
+            },
+          }),
+      };
+    },
+  });
+  app.updateRuntimeSettings({
+    values: {
+      distillProvider: 'openai_compatible',
+      openAiCompatible: {
+        preset: 'deepseek',
+        baseUrl: 'https://api.deepseek.com',
+        model: 'deepseek-v4-flash',
+        responseFormat: 'json_object',
+      },
+    },
+    secrets: {
+      openAiCompatibleApiKey: 'deepseek-secret',
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repair-openai-compatible-repo',
+    sessionId: 'repair-openai-compatible-session',
+    role: 'user',
+    content: 'Provider should repair an incomplete checkpoint.',
+  });
+
+  const checkpoint = await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'repair-openai-compatible-repo',
+    sessionId: 'repair-openai-compatible-session',
+  });
+
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].thinking.type, 'disabled');
+  assert.match(requests[1].messages.at(-1).content, /failed validation/);
+  assert.equal(checkpoint.summaryShort, 'Repaired OpenAI-compatible checkpoint.');
+  assert.equal(checkpoint.metadata.providerMetadata.openAiCompatible.retryCount, 1);
+  assert.match(checkpoint.metadata.providerMetadata.openAiCompatible.validationFailure, /Provider output field/);
+});
+
+test('openai_compatible provider preserves raw evidence when provider output is malformed', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+    },
+    cwd: process.cwd(),
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          choices: [{ message: { content: '{"summaryShort":"missing required fields"}' } }],
+        }),
+    }),
+  });
+  app.updateRuntimeSettings({
+    values: {
+      distillProvider: 'openai_compatible',
+      openAiCompatible: {
+        preset: 'deepseek',
+        baseUrl: 'https://api.deepseek.com',
+        model: 'deepseek-v4-flash',
+        responseFormat: 'json_object',
+      },
+    },
+    secrets: {
+      openAiCompatibleApiKey: 'deepseek-secret',
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'bad-openai-compatible-repo',
+    sessionId: 'bad-openai-compatible-session',
+    role: 'user',
+    content: 'Raw evidence should survive malformed provider output.',
+  });
+
+  await assert.rejects(
+    app.distillCheckpoint({
+      scope: 'repo',
+      scopeKey: 'bad-openai-compatible-repo',
+      sessionId: 'bad-openai-compatible-session',
+    }),
+    /Provider output field/,
+  );
+
+  assert.equal(
+    app.listRawEvents({
+      scope: 'repo',
+      scopeKey: 'bad-openai-compatible-repo',
+      sessionId: 'bad-openai-compatible-session',
+    }).length,
+    1,
+  );
+  const runs = app.listDistillRuns({
+    scope: 'repo',
+    scopeKey: 'bad-openai-compatible-repo',
+    sessionId: 'bad-openai-compatible-session',
+  });
+  assert.equal(runs[0].status, 'failed');
+});
+
 test('codex_exec rejects unsupported reasoning effort values', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({
@@ -4798,6 +5180,17 @@ test('autoPromoteMemoryCandidates promotes only strict safe candidates when enab
     embeddingProviders: {
       openai: embeddingProvider,
     },
+    autoPromoteAuditor: async () => ({
+      approved: true,
+      decision: 'approve',
+      reason: 'Test auditor approved strict safe candidate.',
+      riskCodes: [],
+      metadata: {
+        provider: 'codex_exec',
+        model: 'gpt-5.5',
+        reasoningEffort: 'low',
+      },
+    }),
     distillProviders: {
       auto_enabled_provider: async () => ({
         summaryShort: 'Auto enabled checkpoint.',
@@ -4904,6 +5297,7 @@ test('autoPromoteMemoryCandidates promotes only strict safe candidates when enab
   const promotedCandidates = app.listMemoryCandidates({ scope: 'repo', scopeKey: 'auto-enabled-repo', status: 'promoted' });
   assert.equal(promotedCandidates.length, 2);
   assert.ok(promotedCandidates.every((candidate) => candidate.reviewMetadata.autoPromoted === true));
+  assert.ok(promotedCandidates.every((candidate) => candidate.reviewMetadata.autoPromotionAudit?.metadata?.model === 'gpt-5.5'));
   assert.deepEqual(
     promotedCandidates.map((candidate) => candidate.reviewMetadata.memoryId).sort(),
     result.promoted.map((item) => item.memoryId).sort(),
@@ -4934,6 +5328,202 @@ test('autoPromoteMemoryCandidates promotes only strict safe candidates when enab
   );
   assert.ok(safeApiMemoryResult, 'expected safe-api-contract memory result');
   assert.equal(safeApiMemoryResult.retrieval.vectorModel, 'test-embedding');
+});
+
+test('autoPromoteMemoryCandidates skips candidates rejected by the audit runner', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'audit_reject_provider',
+      CONTEXTFORGE_AUTO_PROMOTE_ENABLED: 'true',
+    },
+    cwd: process.cwd(),
+    autoPromoteAuditor: async () => ({
+      approved: false,
+      decision: 'needs_review',
+      reason: 'Candidate is plausible but needs human review.',
+      riskCodes: ['needs_human_review'],
+      metadata: {
+        provider: 'codex_exec',
+        model: 'gpt-5.5',
+        reasoningEffort: 'low',
+      },
+    }),
+    distillProviders: {
+      audit_reject_provider: async () => ({
+        summaryShort: 'Audit rejected checkpoint.',
+        summaryText: 'Closeout produced a candidate that local checks would otherwise promote.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'audit-gated-runbook',
+            content: 'The runbook requires audit approval before automatic durable promotion.',
+            category: 'runbook',
+            candidateType: 'runbook',
+            confidence: 0.96,
+            stability: 0.96,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+        ],
+      }),
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'audit-reject-repo',
+    sessionId: 'audit-reject-session',
+    role: 'assistant',
+    content: 'Audit-gated candidate.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'audit-reject-repo',
+    sessionId: 'audit-reject-session',
+  });
+
+  const result = await app.autoPromoteMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'audit-reject-repo',
+    sessionId: 'audit-reject-session',
+    trigger: 'manual_closeout',
+    dryRun: false,
+  });
+
+  assert.deepEqual(result.promoted, []);
+  assert.equal(result.skipped.length, 1);
+  assert.equal(result.skipped[0].reason, 'audit_needs_review: needs_human_review');
+  assert.equal(result.skipped[0].audit.metadata.model, 'gpt-5.5');
+  assert.equal(app.getMemory({ scope: 'repo', scopeKey: 'audit-reject-repo', key: 'audit-gated-runbook' }), null);
+  const candidates = app.listMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'audit-reject-repo',
+    status: 'pending',
+  });
+  assert.equal(candidates.length, 1);
+});
+
+test('autoPromoteMemoryCandidates keeps candidates pending when audit runner fails', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'audit_fail_provider',
+      CONTEXTFORGE_AUTO_PROMOTE_ENABLED: 'true',
+    },
+    cwd: process.cwd(),
+    autoPromoteAuditor: async () => {
+      throw new Error('audit runner unavailable');
+    },
+    distillProviders: {
+      audit_fail_provider: async () => ({
+        summaryShort: 'Audit failed checkpoint.',
+        summaryText: 'Closeout produced a candidate that local checks would otherwise promote.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'audit-failed-runbook',
+            content: 'The runbook requires audit success before automatic durable promotion.',
+            category: 'runbook',
+            candidateType: 'runbook',
+            confidence: 0.96,
+            stability: 0.96,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+        ],
+      }),
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'audit-fail-repo',
+    sessionId: 'audit-fail-session',
+    role: 'assistant',
+    content: 'Audit failure candidate.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'audit-fail-repo',
+    sessionId: 'audit-fail-session',
+  });
+
+  const result = await app.autoPromoteMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'audit-fail-repo',
+    sessionId: 'audit-fail-session',
+    trigger: 'manual_closeout',
+    dryRun: false,
+  });
+
+  assert.deepEqual(result.promoted, []);
+  assert.equal(result.skipped[0].reason, 'audit_needs_review: audit_failed');
+  assert.match(result.skipped[0].audit.reason, /audit runner unavailable/);
+  assert.equal(app.getMemory({ scope: 'repo', scopeKey: 'audit-fail-repo', key: 'audit-failed-runbook' }), null);
+});
+
+test('autoPromoteMemoryCandidates rejects unsupported audit providers', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'unsupported_audit_provider',
+      CONTEXTFORGE_AUTO_PROMOTE_ENABLED: 'true',
+      CONTEXTFORGE_AUTO_PROMOTE_AUDIT_PROVIDER: 'unknown_audit',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      unsupported_audit_provider: async () => ({
+        summaryShort: 'Unsupported audit provider checkpoint.',
+        summaryText: 'Closeout produced a candidate while audit is misconfigured.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'unsupported-audit-runbook',
+            content: 'The runbook should not promote when audit provider is unsupported.',
+            category: 'runbook',
+            candidateType: 'runbook',
+            confidence: 0.96,
+            stability: 0.96,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+        ],
+      }),
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'unsupported-audit-repo',
+    sessionId: 'unsupported-audit-session',
+    role: 'assistant',
+    content: 'Unsupported audit provider candidate.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'unsupported-audit-repo',
+    sessionId: 'unsupported-audit-session',
+  });
+
+  await assert.rejects(
+    () =>
+      app.autoPromoteMemoryCandidates({
+        scope: 'repo',
+        scopeKey: 'unsupported-audit-repo',
+        sessionId: 'unsupported-audit-session',
+        trigger: 'manual_closeout',
+        dryRun: false,
+      }),
+    /Unsupported auto-promotion audit provider/,
+  );
+  assert.equal(app.getMemory({ scope: 'repo', scopeKey: 'unsupported-audit-repo', key: 'unsupported-audit-runbook' }), null);
 });
 
 test('preference candidates record merged occurrences across checkpoints', async () => {
@@ -5509,8 +6099,76 @@ test('reconcileMemory apply_safe rejects matching candidates when no durable mem
   assert.equal(candidates.length, 1);
 });
 
+test('listScopeKeys returns real scopes from memories, candidates, and distill runs', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'scope_keys_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      scope_keys_provider: async () => ({
+        summaryShort: 'Scope key checkpoint.',
+        summaryText: 'A checkpoint that creates a candidate for scope key discovery.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'scope-key-candidate',
+            content: 'Candidate used for scope key discovery.',
+            category: 'note',
+            confidence: 0.9,
+            stability: 0.9,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+        ],
+      }),
+    },
+  });
+
+  app.remember({
+    scope: 'shared',
+    scopeKey: 'team-shared',
+    key: 'scope-key-memory',
+    content: 'Durable memory used for scope key discovery.',
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-scope-keys',
+    sessionId: 'scope-key-session',
+    role: 'user',
+    content: 'Create a checkpoint and candidate.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'repo-scope-keys',
+    sessionId: 'scope-key-session',
+  });
+
+  const allKeys = app.listScopeKeys();
+  const repoKey = allKeys.find((item) => item.scopeType === 'repo' && item.scopeKey === 'repo-scope-keys');
+  assert.equal(repoKey.candidates, 1);
+  assert.equal(repoKey.distillRuns, 1);
+  assert.equal(repoKey.rawEvents, 1);
+  assert.equal(repoKey.checkpoints, 1);
+  const sharedKeys = app.listScopeKeys({ scope: 'shared' });
+  assert.deepEqual(
+    sharedKeys.map((item) => item.scopeKey),
+    ['team-shared'],
+  );
+  assert.equal(sharedKeys[0].memories, 1);
+});
+
 test('REMOTE_METHODS exposes resume, suggestion, auto-promotion, and reconciliation wrappers', () => {
   assert.ok(REMOTE_METHODS.includes('syncResumeContext'));
+  assert.ok(REMOTE_METHODS.includes('getRuntimeSettings'));
+  assert.ok(REMOTE_METHODS.includes('updateRuntimeSettings'));
+  assert.ok(REMOTE_METHODS.includes('checkDistillProvider'));
+  assert.ok(REMOTE_METHODS.includes('listScopeKeys'));
+  assert.ok(REMOTE_METHODS.includes('listMemories'));
   assert.ok(REMOTE_METHODS.includes('suggestMemoryPromotions'));
   assert.ok(REMOTE_METHODS.includes('autoPromoteMemoryCandidates'));
   assert.ok(REMOTE_METHODS.includes('reconcileMemory'));
@@ -5683,6 +6341,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'distill_checkpoint',
       'distill_usage',
       'get_memory',
+      'get_runtime_settings',
       'get_session_working_context',
       'get_working_summary',
       'list_checkpoints',
@@ -6134,6 +6793,128 @@ test('HTTP v0 callers see remote-client connection metadata', async () => {
     assert.equal(resumeBody.result.storage.connection.transport, 'http-api');
     assert.equal(resumeBody.result.storage.connection.serverRole, 'http-server');
     assert.equal(resumeBody.result.storage.connection.server.mode, 'http-server');
+  } finally {
+    await remote.close();
+  }
+});
+
+test('HTTP server serves admin UI assets', async () => {
+  const dataDir = await makeTempDir();
+  const remote = await startContextForgeServer({
+    port: 0,
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+    },
+  });
+
+  try {
+    const response = await fetch(`${remote.url}/ui/`);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    assert.match(await response.text(), /ContextForge 관리/);
+  } finally {
+    await remote.close();
+  }
+});
+
+test('HTTP server accepts admin UI login sessions', async () => {
+  const dataDir = await makeTempDir();
+  const password = 'hu23bc' + 'CONTEXT!';
+  const remote = await startContextForgeServer({
+    port: 0,
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+      CONTEXTFORGE_ADMIN_USER: 'ginishuh',
+      CONTEXTFORGE_ADMIN_PASSWORD_PBKDF2: testAdminPasswordHash(password),
+      CONTEXTFORGE_ADMIN_COOKIE_SECURE: 'false',
+    },
+  });
+
+  try {
+    const login = await fetch(`${remote.url}/ui/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'ginishuh', password }),
+    });
+    assert.equal(login.status, 200);
+    assert.equal(login.headers.get('cache-control'), 'no-store');
+    const cookie = login.headers.get('set-cookie');
+    assert.match(cookie, /contextforge_admin=/);
+    const session = await fetch(`${remote.url}/ui/session`, {
+      headers: { cookie },
+    });
+    assert.equal(session.status, 200);
+    assert.equal(session.headers.get('cache-control'), 'no-store');
+    assert.deepEqual(await session.json(), { ok: true, username: 'ginishuh' });
+    const info = await fetch(`${remote.url}/v0/dbInfo`, {
+      method: 'POST',
+      headers: {
+        cookie,
+        'content-type': 'application/json',
+      },
+      body: '{}',
+    });
+    assert.equal(info.status, 200);
+  } finally {
+    await remote.close();
+  }
+});
+
+test('HTTP server keeps admin UI login disabled unless credentials are configured', async () => {
+  const dataDir = await makeTempDir();
+  const remote = await startContextForgeServer({
+    port: 0,
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+    },
+  });
+
+  try {
+    const login = await fetch(`${remote.url}/ui/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'ginishuh', password: 'anything' }),
+    });
+    assert.equal(login.status, 403);
+  } finally {
+    await remote.close();
+  }
+});
+
+test('HTTP server rate limits repeated admin UI login failures', async () => {
+  const dataDir = await makeTempDir();
+  const remote = await startContextForgeServer({
+    port: 0,
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+      CONTEXTFORGE_ADMIN_USER: 'ginishuh',
+      CONTEXTFORGE_ADMIN_PASSWORD_PBKDF2: testAdminPasswordHash('correct-password'),
+      CONTEXTFORGE_ADMIN_COOKIE_SECURE: 'false',
+      CONTEXTFORGE_ADMIN_LOGIN_MAX_FAILURES: '2',
+      CONTEXTFORGE_ADMIN_LOGIN_WINDOW_MS: '60000',
+    },
+  });
+
+  try {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const login = await fetch(`${remote.url}/ui/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'ginishuh', password: 'wrong-password' }),
+      });
+      assert.equal(login.status, 401);
+    }
+
+    const limited = await fetch(`${remote.url}/ui/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'ginishuh', password: 'wrong-password' }),
+    });
+    assert.equal(limited.status, 429);
   } finally {
     await remote.close();
   }

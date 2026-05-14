@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { createCodexExecAutoPromoteAuditor } from './audit/codex_exec.js';
 import { loadConfig } from './config/index.js';
 import { createDistillProvider } from './distill/index.js';
 import { checkCodexExecProvider } from './distill/providers/codex_exec.js';
+import { checkOpenAiCompatibleProvider } from './distill/providers/openai_compatible.js';
 import { validateDistillOutput } from './distill/validate.js';
 import { createEmbeddingProvider } from './embeddings/index.js';
 import { createRemoteContextForge } from './remote/client.js';
@@ -973,7 +975,7 @@ function promoteCandidateToMemory(
   });
 }
 
-function autoPromoteIndexedCandidate(store, scope, indexedCandidate, warnings, reason) {
+function autoPromoteIndexedCandidate(store, scope, indexedCandidate, warnings, reason, audit = null) {
   const candidate = indexedCandidate.candidate || {};
   return promoteCandidateToMemory(store, scope, {
     candidate,
@@ -988,9 +990,34 @@ function autoPromoteIndexedCandidate(store, scope, indexedCandidate, warnings, r
     importance: candidate.importance ?? 0,
     reason,
     warnings,
-    eventMetadata: { autoPromoted: true },
-    reviewMetadata: { autoPromoted: true },
+    eventMetadata: { autoPromoted: true, autoPromotionAudit: audit },
+    reviewMetadata: { autoPromoted: true, autoPromotionAudit: audit },
   });
+}
+
+async function auditAutoPromotionCandidate({ auditor, store, scope, item }) {
+  if (!auditor) {
+    return {
+      approved: true,
+      decision: 'approve',
+      reason: 'Auto-promotion audit disabled; local strict safety checks only.',
+      riskCodes: [],
+      metadata: { provider: 'none' },
+    };
+  }
+  const checkpoint = item.candidate.checkpointId
+    ? store.getCheckpointById({ ...scope, checkpointId: item.candidate.checkpointId })
+    : null;
+  return auditor({
+    candidate: item.candidate,
+    warnings: item.warnings,
+    checkpoint,
+  });
+}
+
+function auditSkipReason(audit) {
+  const riskCodes = Array.isArray(audit?.riskCodes) && audit.riskCodes.length ? `: ${audit.riskCodes.join(', ')}` : '';
+  return `audit_${audit?.decision || 'failed'}${riskCodes}`;
 }
 
 function summarizeBasisResult(result) {
@@ -1184,6 +1211,159 @@ function rawTtlCutoffIso(ttlDays, now = new Date()) {
   return new Date(now.getTime() - Number(ttlDays) * 24 * 60 * 60 * 1000).toISOString();
 }
 
+const RUNTIME_SETTING_KEYS = new Set([
+  'distillProvider',
+  'distillPolicy',
+  'codexExec',
+  'openAiCompatible',
+  'autoPromoteAudit',
+]);
+
+const SECRET_KEYS = {
+  openAiCompatibleApiKey: 'openAiCompatible.apiKey',
+};
+
+const DISTILL_MODEL_PRESETS = {
+  openai_compatible: {
+    deepseek: {
+      label: 'DeepSeek V4 Flash',
+      baseUrl: 'https://api.deepseek.com',
+      model: 'deepseek-v4-flash',
+      responseFormat: 'json_object',
+    },
+    deepseekPro: {
+      label: 'DeepSeek V4 Pro',
+      baseUrl: 'https://api.deepseek.com',
+      model: 'deepseek-v4-pro',
+      responseFormat: 'json_object',
+    },
+    deepseekChat: {
+      label: 'DeepSeek Chat',
+      baseUrl: 'https://api.deepseek.com',
+      model: 'deepseek-chat',
+      responseFormat: 'json_object',
+    },
+    deepseekReasoner: {
+      label: 'DeepSeek Reasoner',
+      baseUrl: 'https://api.deepseek.com',
+      model: 'deepseek-reasoner',
+      responseFormat: 'json_object',
+    },
+    custom: {
+      label: 'Custom OpenAI-compatible',
+      baseUrl: '',
+      model: '',
+      responseFormat: 'json_object',
+    },
+  },
+  codex_exec: {
+    configured: {
+      label: 'Configured Codex model',
+      model: null,
+    },
+    gpt55: {
+      label: 'GPT-5.5',
+      model: 'gpt-5.5',
+      reasoningEffort: 'low',
+    },
+    gpt54: {
+      label: 'GPT-5.4',
+      model: 'gpt-5.4',
+      reasoningEffort: 'low',
+    },
+    gpt54Mini: {
+      label: 'GPT-5.4 Mini',
+      model: 'gpt-5.4-mini',
+      reasoningEffort: 'low',
+    },
+    codex: {
+      label: 'GPT-5.3 Codex',
+      model: 'gpt-5.3-codex',
+      reasoningEffort: 'low',
+    },
+    manual: {
+      label: 'Manual Codex model',
+      model: '',
+    },
+  },
+};
+
+function plainSettings(runtimeSettings) {
+  const result = {};
+  for (const [key, entry] of Object.entries(runtimeSettings?.settings || {})) {
+    result[key] = entry.value;
+  }
+  return result;
+}
+
+function effectiveRuntimeConfig(config, runtimeSettings = { settings: {}, secrets: {} }) {
+  const settings = plainSettings(runtimeSettings);
+  const distillPolicy = {
+    ...config.distillPolicy,
+    ...(settings.distillPolicy || {}),
+  };
+  const codexExec = {
+    ...config.codexExec,
+    ...(settings.codexExec || {}),
+  };
+  const openAiCompatible = {
+    ...config.openAiCompatible,
+    ...(settings.openAiCompatible || {}),
+    apiKey: runtimeSettings.secrets?.[SECRET_KEYS.openAiCompatibleApiKey] || config.openAiCompatible.apiKey || null,
+  };
+  const autoPromoteAudit = {
+    ...config.autoPromote.audit,
+    ...(settings.autoPromoteAudit || {}),
+  };
+  return {
+    distillProvider: settings.distillProvider || config.distillProvider,
+    distillPolicy,
+    codexExec,
+    openAiCompatible,
+    autoPromoteAudit,
+  };
+}
+
+function sanitizedRuntimeSettings(config, runtimeSettings = { settings: {}, secrets: {} }) {
+  const effective = effectiveRuntimeConfig(config, runtimeSettings);
+  return {
+    effective: {
+      distillProvider: effective.distillProvider,
+      distillPolicy: effective.distillPolicy,
+      codexExec: {
+        ...effective.codexExec,
+        runner: undefined,
+      },
+      openAiCompatible: {
+        ...effective.openAiCompatible,
+        apiKey: undefined,
+        secretPresent: Boolean(effective.openAiCompatible.apiKey),
+      },
+      autoPromoteAudit: effective.autoPromoteAudit,
+      presets: DISTILL_MODEL_PRESETS,
+    },
+    stored: runtimeSettings.settings,
+  };
+}
+
+function pickKnownSettings(values = {}) {
+  const picked = {};
+  for (const [key, value] of Object.entries(values || {})) {
+    if (RUNTIME_SETTING_KEYS.has(key)) {
+      if (key === 'openAiCompatible' && value && typeof value === 'object' && !Array.isArray(value)) {
+        const { apiKey, ...safeOpenAiCompatible } = value;
+        if (apiKey != null) {
+          throw new Error('openAiCompatible.apiKey must be provided through the write-only secrets channel.');
+        }
+        picked[key] = safeOpenAiCompatible;
+      } else {
+        picked[key] = value;
+      }
+    }
+  }
+  return picked;
+}
+
 export function createContextForge(options = {}) {
   const config = loadConfig(options);
   if (config.storageMode === 'remote') {
@@ -1199,6 +1379,7 @@ export function createContextForge(options = {}) {
     ...config.codexExec,
     runner: options.codexExecRunner,
   };
+  const runtimeFetchImpl = options.fetchImpl;
   const useStore = (fn) => {
     if (sharedStore) {
       return fn(sharedStore);
@@ -1206,6 +1387,27 @@ export function createContextForge(options = {}) {
     return withStore(config, fn);
   };
   let lastRawPruneAt = 0;
+
+  function getEffectiveRuntime(store) {
+    return effectiveRuntimeConfig(config, store.getRuntimeSettings({ includeSecrets: true }));
+  }
+
+  function getAutoPromoteAuditor(store) {
+    if (Object.prototype.hasOwnProperty.call(options, 'autoPromoteAuditor')) {
+      return options.autoPromoteAuditor;
+    }
+    const audit = getEffectiveRuntime(store).autoPromoteAudit;
+    if (!audit.enabled) {
+      return null;
+    }
+    if (audit.provider !== 'codex_exec') {
+      throw new Error(`Unsupported auto-promotion audit provider "${audit.provider}".`);
+    }
+    return createCodexExecAutoPromoteAuditor({
+      ...audit,
+      runner: options.autoPromoteAuditRunner,
+    });
+  }
 
   function buildDbInfo(store) {
     const storeInfo = store.dbInfo();
@@ -1449,6 +1651,66 @@ export function createContextForge(options = {}) {
       return useStore((store) => buildDbInfo(store));
     },
 
+    getRuntimeSettings() {
+      return useStore((store) => {
+        const redacted = store.getRuntimeSettings();
+        const withSecrets = store.getRuntimeSettings({ includeSecrets: true });
+        return {
+          ...sanitizedRuntimeSettings(config, withSecrets),
+          stored: redacted.settings,
+        };
+      });
+    },
+
+    updateRuntimeSettings(options = {}) {
+      const values = pickKnownSettings(options.values || options.settings || {});
+      const secrets = {};
+      if (options.openAiCompatibleApiKey) {
+        secrets[SECRET_KEYS.openAiCompatibleApiKey] = options.openAiCompatibleApiKey;
+      }
+      if (options.secrets?.openAiCompatibleApiKey) {
+        secrets[SECRET_KEYS.openAiCompatibleApiKey] = options.secrets.openAiCompatibleApiKey;
+      }
+      const clearSecrets = [];
+      if (truthyOption(options.clearOpenAiCompatibleApiKey) || options.clearSecrets?.includes('openAiCompatibleApiKey')) {
+        clearSecrets.push(SECRET_KEYS.openAiCompatibleApiKey);
+      }
+      return useStore((store) => {
+        store.setRuntimeSettings({ values, secrets, clearSecrets });
+        const redacted = store.getRuntimeSettings();
+        const withSecrets = store.getRuntimeSettings({ includeSecrets: true });
+        return {
+          ...sanitizedRuntimeSettings(config, withSecrets),
+          stored: redacted.settings,
+        };
+      });
+    },
+
+    checkDistillProvider(options = {}) {
+      return useStore(async (store) => {
+        const effective = getEffectiveRuntime(store);
+        const providerName = options.provider || effective.distillProvider;
+        if (providerName === 'codex_exec') {
+          return checkCodexExecProvider({
+            ...effective.codexExec,
+            runner: options.codexExecRunner || options.runner || options.codexRunner || codexExec.runner,
+            live: Boolean(options.live),
+          });
+        }
+        if (providerName === 'openai_compatible') {
+          return checkOpenAiCompatibleProvider({
+            ...effective.openAiCompatible,
+            fetchImpl: runtimeFetchImpl,
+            live: Boolean(options.live),
+          });
+        }
+        if (providerName === 'mock') {
+          return { ok: true, provider: 'mock', message: 'mock provider is always available.' };
+        }
+        throw new Error(`Unsupported distill provider "${providerName}".`);
+      });
+    },
+
     async bootstrapContext(options = {}) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.query, 'query');
@@ -1614,9 +1876,13 @@ export function createContextForge(options = {}) {
     },
 
     checkCodexExec(options = {}) {
-      return checkCodexExecProvider({
-        ...codexExec,
-        live: Boolean(options.live),
+      return useStore((store) => {
+        const effective = getEffectiveRuntime(store);
+        return checkCodexExecProvider({
+          ...effective.codexExec,
+          runner: codexExec.runner,
+          live: Boolean(options.live),
+        });
       });
     },
 
@@ -1634,41 +1900,44 @@ export function createContextForge(options = {}) {
     sessionStatus(options) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.sessionId, 'sessionId');
-      const policy = {
-        minEvents: positiveNumber(
-          options.minEvents == null ? config.distillPolicy.minEvents : Number(options.minEvents),
-          'minEvents',
-        ),
-        minIntervalMs: positiveNumber(
-          options.minIntervalMs == null ? config.distillPolicy.minIntervalMs : Number(options.minIntervalMs),
-          'minIntervalMs',
-        ),
-        charThreshold: positiveNumber(
-          options.charThreshold == null ? config.distillPolicy.charThreshold : Number(options.charThreshold),
-          'charThreshold',
-        ),
-        charMinIntervalMs: positiveNumber(
-          options.charMinIntervalMs == null ? config.distillPolicy.charMinIntervalMs : Number(options.charMinIntervalMs),
-          'charMinIntervalMs',
-        ),
-        maxEvents: positiveNumber(
-          options.maxEvents == null ? config.distillPolicy.maxEvents : Number(options.maxEvents),
-          'maxEvents',
-        ),
-        maxChars: positiveNumber(
-          options.maxChars == null ? config.distillPolicy.maxChars : Number(options.maxChars),
-          'maxChars',
-        ),
-      };
-      return useStore((store) =>
-        buildSessionStatus({
+      return useStore((store) => {
+        const effective = getEffectiveRuntime(store);
+        const policy = {
+          minEvents: positiveNumber(
+            options.minEvents == null ? effective.distillPolicy.minEvents : Number(options.minEvents),
+            'minEvents',
+          ),
+          minIntervalMs: positiveNumber(
+            options.minIntervalMs == null ? effective.distillPolicy.minIntervalMs : Number(options.minIntervalMs),
+            'minIntervalMs',
+          ),
+          charThreshold: positiveNumber(
+            options.charThreshold == null ? effective.distillPolicy.charThreshold : Number(options.charThreshold),
+            'charThreshold',
+          ),
+          charMinIntervalMs: positiveNumber(
+            options.charMinIntervalMs == null
+              ? effective.distillPolicy.charMinIntervalMs
+              : Number(options.charMinIntervalMs),
+            'charMinIntervalMs',
+          ),
+          maxEvents: positiveNumber(
+            options.maxEvents == null ? effective.distillPolicy.maxEvents : Number(options.maxEvents),
+            'maxEvents',
+          ),
+          maxChars: positiveNumber(
+            options.maxChars == null ? effective.distillPolicy.maxChars : Number(options.maxChars),
+            'maxChars',
+          ),
+        };
+        return buildSessionStatus({
           scope,
           sessionId: options.sessionId,
           rawEvents: store.listRawEvents({ ...scope, sessionId: options.sessionId }),
           latestCheckpoint: store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId, level: 0 }),
           policy,
-        }),
-      );
+        });
+      });
     },
 
     remember(options) {
@@ -1985,7 +2254,7 @@ export function createContextForge(options = {}) {
       const scanLimit = positiveNumber(options.scanLimit == null ? 10 : Number(options.scanLimit), 'scanLimit');
       const promotionRecommendation = options.promotionRecommendation || 'promote';
 
-      return useStore((store) => {
+      return useStore(async (store) => {
         let checkpointId = options.checkpointId || null;
         let sourceMode = null;
         if (checkpointId) {
@@ -2063,7 +2332,6 @@ export function createContextForge(options = {}) {
           .filter((item) => item.score > 0)
           .sort((a, b) => b.score - a.score)
           .slice(0, limit);
-
         return {
           kind: 'memory_promotion_suggestions',
           trigger,
@@ -2165,7 +2433,7 @@ export function createContextForge(options = {}) {
         };
       }
 
-      return useStore((store) => {
+      return useStore(async (store) => {
         let checkpointId = options.checkpointId || null;
         let sourceMode = null;
         if (checkpointId) {
@@ -2222,6 +2490,37 @@ export function createContextForge(options = {}) {
           .filter((item) => item.score > 0)
           .sort((a, b) => b.score - a.score)
           .slice(0, limit);
+        const auditor = getAutoPromoteAuditor(store);
+        const audited = [];
+        if (!dryRun) {
+          for (const item of selected) {
+            try {
+              const audit = await auditAutoPromotionCandidate({ auditor, store, scope, item });
+              audited.push({ ...item, audit });
+            } catch (error) {
+              audited.push({
+                ...item,
+                audit: {
+                  approved: false,
+                  decision: 'needs_review',
+                  reason: `Auto-promotion audit failed: ${error.message}`,
+                  riskCodes: ['audit_failed'],
+                  metadata: { errorName: error.name },
+                },
+              });
+            }
+          }
+        }
+        const auditApproved = dryRun ? [] : audited.filter((item) => item.audit?.approved === true);
+        const auditSkipped = dryRun
+          ? []
+          : audited
+              .filter((item) => item.audit?.approved !== true)
+              .map((item) => ({
+                candidateId: item.candidate.id,
+                reason: auditSkipReason(item.audit),
+                audit: item.audit,
+              }));
 
         return {
           kind: 'auto_memory_promotion_result',
@@ -2238,16 +2537,23 @@ export function createContextForge(options = {}) {
             allowedCategories: Array.from(allowedCategories),
             scopeFallback: false,
             realPromotionEnabled: config.autoPromote.enabled,
+            audit: {
+              enabled: Boolean(auditor),
+              executed: !dryRun && Boolean(auditor),
+              provider: auditor?.metadata?.provider || 'none',
+              model: auditor?.metadata?.model || null,
+              reasoningEffort: auditor?.metadata?.reasoningEffort || null,
+            },
           },
           wouldPromote: dryRun
             ? selected.map((item, index) => autoPromotionWouldPromote(item.candidate, item.warnings, index + 1))
             : [],
           promoted: dryRun
             ? []
-            : selected.map((item, index) => {
+            : auditApproved.map((item, index) => {
                 const reason =
-                  'Auto-promoted by auto_promote_memory_candidates after strict closeout-scoped safety checks.';
-                const memory = autoPromoteIndexedCandidate(store, scope, item.candidate, item.warnings, reason);
+                  'Auto-promoted by auto_promote_memory_candidates after strict closeout-scoped safety checks and audit approval.';
+                const memory = autoPromoteIndexedCandidate(store, scope, item.candidate, item.warnings, reason, item.audit);
                 enqueueEmbeddingSources(store, [store.embeddingSourceForMemory(memory)]);
                 return {
                   ...promotionProposal(item.candidate, item.warnings, index + 1),
@@ -2258,19 +2564,24 @@ export function createContextForge(options = {}) {
                     status: 'promoted',
                   },
                   auditReason: reason,
+                  audit: item.audit,
                 };
               }),
-          skipped: assessed
-            .filter((item) => item.score <= 0)
-            .map((item) => ({
-              candidateId: item.candidate.id,
-              reason: candidateWarningReason(item.warnings) || 'low_score',
-            })),
+          skipped: [
+            ...assessed
+              .filter((item) => item.score <= 0)
+              .map((item) => ({
+                candidateId: item.candidate.id,
+                reason: candidateWarningReason(item.warnings) || 'low_score',
+              })),
+            ...auditSkipped,
+          ],
           requestWarnings,
           nextActions: [
             dryRun
               ? 'Inspect wouldPromote quality or set dryRun=false with CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true to promote.'
               : 'Review promoted entries and audit metadata.',
+            dryRun ? 'Dry-run does not call the auto-promotion audit runner.' : 'Candidates rejected by audit remain pending for human review.',
             dryRun ? 'No memory candidates were promoted.' : 'Do not auto-promote preference candidates until occurrence/merge tracking exists.',
           ],
         };
@@ -2652,6 +2963,27 @@ export function createContextForge(options = {}) {
       );
     },
 
+    listMemories(options = {}) {
+      const scope = normalizeScopeOptions(options, config);
+      return useStore((store) =>
+        store.listMemoriesForAdmin({
+          ...scope,
+          status: options.status || 'active',
+          query: options.query || null,
+          limit: options.limit == null ? 100 : Number(options.limit),
+        }),
+      );
+    },
+
+    listScopeKeys(options = {}) {
+      return useStore((store) =>
+        store.listScopeKeys({
+          scopeType: options.scope || options.scopeType || null,
+          limit: options.limit == null ? 200 : Number(options.limit),
+        }),
+      );
+    },
+
     search(options) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.query, 'query');
@@ -2874,23 +3206,31 @@ export function createContextForge(options = {}) {
     async distillCheckpoint(options) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.sessionId, 'sessionId');
-      const provider = createDistillProvider(options.provider || config.distillProvider, distillProviders, {
-        codexExec,
-      });
-      const providerMetadata = provider.metadata || {};
 
       return useStore(async (store) => {
+        const effective = getEffectiveRuntime(store);
+        const provider = createDistillProvider(options.provider || effective.distillProvider, distillProviders, {
+          codexExec: {
+            ...effective.codexExec,
+            runner: codexExec.runner,
+          },
+          openAiCompatible: {
+            ...effective.openAiCompatible,
+            fetchImpl: runtimeFetchImpl,
+          },
+        });
+        const providerMetadata = provider.metadata || {};
         const rawEvents = store.listRawEvents({ ...scope, sessionId: options.sessionId });
         const previousCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId, level: 0 });
         const previousWorkingSummary = store.getWorkingSummary({ ...scope, sessionId: options.sessionId });
         const previousSessionWorkingContext = store.getSessionWorkingContext({ ...scope, sessionId: options.sessionId });
         const policy = {
           maxEvents: positiveNumber(
-            options.maxEvents == null ? config.distillPolicy.maxEvents : Number(options.maxEvents),
+            options.maxEvents == null ? effective.distillPolicy.maxEvents : Number(options.maxEvents),
             'maxEvents',
           ),
           maxChars: positiveNumber(
-            options.maxChars == null ? config.distillPolicy.maxChars : Number(options.maxChars),
+            options.maxChars == null ? effective.distillPolicy.maxChars : Number(options.maxChars),
             'maxChars',
           ),
         };
@@ -3148,11 +3488,14 @@ export function createContextForge(options = {}) {
 
     listDistillRuns(options) {
       const scope = normalizeScopeOptions(options, config);
-      requireOption(options.sessionId, 'sessionId');
       return useStore((store) =>
         store.listDistillRuns({
           ...scope,
-          sessionId: options.sessionId,
+          sessionId: options.sessionId || null,
+          status: options.status || null,
+          provider: options.provider || null,
+          limit: options.limit == null ? null : Number(options.limit),
+          order: options.order || 'asc',
         }),
       );
     },

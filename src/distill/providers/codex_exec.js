@@ -6,7 +6,7 @@ import path from 'node:path';
 export const CODEX_EXEC_PROMPT_VERSION = 'codex_exec.prompt.v6';
 export const CODEX_EXEC_OUTPUT_SCHEMA_VERSION = 'contextforge.checkpoint.v5';
 
-const OUTPUT_SCHEMA = {
+export const CHECKPOINT_OUTPUT_SCHEMA = {
   $id: CODEX_EXEC_OUTPUT_SCHEMA_VERSION,
   type: 'object',
   additionalProperties: false,
@@ -553,7 +553,7 @@ export function createCodexExecProvider(options = {}) {
     const outputPath = path.join(tempDir, 'checkpoint.json');
     const prompt = buildCodexExecPrompt(input, { maxInputChars });
 
-    await fs.writeFile(schemaPath, `${JSON.stringify(OUTPUT_SCHEMA, null, 2)}\n`, 'utf8');
+    await fs.writeFile(schemaPath, `${JSON.stringify(CHECKPOINT_OUTPUT_SCHEMA, null, 2)}\n`, 'utf8');
 
     const args = [
       'exec',

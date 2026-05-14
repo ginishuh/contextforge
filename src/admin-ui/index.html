@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ContextForge 관리</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>ContextForge</h1>
+        <p id="connection">런타임 불러오는 중...</p>
+      </div>
+      <label class="token">
+        <span>원격 API 토큰</span>
+        <input id="token" type="password" autocomplete="off" placeholder="로그인 세션 사용 시 비워둠" />
+      </label>
+      <form id="loginForm" class="login">
+        <input name="username" autocomplete="username" placeholder="아이디" />
+        <input name="password" type="password" autocomplete="current-password" placeholder="비밀번호" />
+        <button type="submit">로그인</button>
+      </form>
+      <div id="loginStatus" class="login-status" hidden>
+        <span id="loginMessage">로그인됨</span>
+        <button type="button" id="logoutButton">로그아웃</button>
+      </div>
+    </header>
+
+    <nav class="tabs" aria-label="관리 메뉴">
+      <button class="active" data-tab="dashboard">대시보드</button>
+      <button data-tab="settings">설정</button>
+      <button data-tab="memory">메모리</button>
+      <button data-tab="runs">실행 기록</button>
+    </nav>
+
+    <main>
+      <section id="dashboard" class="tab active">
+        <div class="grid">
+          <section class="panel">
+            <h2>런타임</h2>
+            <dl id="runtimeSummary"></dl>
+          </section>
+          <section class="panel">
+            <h2>디스틸 정책</h2>
+            <dl id="policySummary"></dl>
+          </section>
+          <section class="panel wide">
+            <h2>최근 실행</h2>
+            <div id="recentRuns" class="table"></div>
+          </section>
+        </div>
+      </section>
+
+      <section id="settings" class="tab">
+        <form id="settingsForm" class="panel form">
+          <div class="row">
+            <label>프로바이더
+              <select name="distillProvider">
+                <option value="codex_exec">codex_exec</option>
+                <option value="openai_compatible">openai_compatible</option>
+                <option value="mock">mock</option>
+              </select>
+            </label>
+          </div>
+          <fieldset class="provider-section" data-provider-section="openai_compatible">
+            <legend>OpenAI 호환 API 설정</legend>
+            <div class="row">
+              <label>프리셋
+                <select name="preset">
+                  <option value="deepseek">DeepSeek V4 Flash</option>
+                  <option value="deepseekPro">DeepSeek V4 Pro</option>
+                  <option value="deepseekChat">DeepSeek Chat</option>
+                  <option value="deepseekReasoner">DeepSeek Reasoner</option>
+                  <option value="custom">직접 입력</option>
+                </select>
+              </label>
+              <label>응답 모드
+                <select name="responseFormat">
+                  <option value="json_object">json_object</option>
+                  <option value="json_schema">json_schema</option>
+                  <option value="text">text</option>
+                </select>
+              </label>
+            </div>
+            <div class="row">
+              <label>Base URL <input name="baseUrl" /></label>
+              <label>디스틸 모델 <input name="model" list="modelPresets" placeholder="프리셋 선택 또는 직접 입력" /></label>
+              <datalist id="modelPresets">
+                <option value="deepseek-v4-flash"></option>
+                <option value="deepseek-v4-pro"></option>
+                <option value="deepseek-chat"></option>
+                <option value="deepseek-reasoner"></option>
+              </datalist>
+            </div>
+            <div class="row">
+              <label>제한 시간(ms) <input name="openAiTimeoutMs" type="number" min="1" /></label>
+              <label>최대 입력 문자 수 <input name="openAiMaxInputChars" type="number" min="1" /></label>
+              <label>최대 출력 토큰 <input name="openAiMaxTokens" type="number" min="1" placeholder="비우면 기본값" /></label>
+            </div>
+            <div class="row">
+              <label>API 키 <input name="apiKey" type="password" autocomplete="off" placeholder="저장 전용" /></label>
+              <label class="checkbox"><input name="clearApiKey" type="checkbox" /> 저장된 API 키 지우기</label>
+            </div>
+          </fieldset>
+          <fieldset class="provider-section" data-provider-section="codex_exec">
+            <legend>Codex Exec 설정</legend>
+            <div class="row">
+              <label>Codex 명령 <input name="codexCommand" /></label>
+              <label>디스틸 모델 <input name="codexModel" list="codexModelPresets" placeholder="프리셋 선택 또는 직접 입력" /></label>
+              <datalist id="codexModelPresets">
+                <option value="gpt-5.5"></option>
+                <option value="gpt-5.4"></option>
+                <option value="gpt-5.4-mini"></option>
+                <option value="gpt-5.3-codex"></option>
+              </datalist>
+              <label>추론 강도 <input name="codexReasoningEffort" placeholder="low" /></label>
+            </div>
+            <div class="row">
+              <label>샌드박스 <input name="codexSandbox" placeholder="read-only" /></label>
+              <label>실행 위치 <input name="codexCwd" placeholder="비우면 서버 기본값" /></label>
+              <label>제한 시간(ms) <input name="codexTimeoutMs" type="number" min="1" /></label>
+              <label>최대 입력 문자 수 <input name="codexMaxInputChars" type="number" min="1" /></label>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>자동승격 감사 설정</legend>
+            <div class="row">
+              <label class="checkbox"><input name="auditEnabled" type="checkbox" /> 감사 사용</label>
+              <label>감사 프로바이더
+                <select name="auditProvider">
+                  <option value="codex_exec">codex_exec</option>
+                </select>
+              </label>
+            </div>
+            <div class="row">
+              <label>감사 Codex 명령 <input name="auditCommand" /></label>
+              <label>감사 모델 <input name="auditModel" list="codexModelPresets" placeholder="gpt-5.5" /></label>
+              <label>감사 추론 강도 <input name="auditReasoningEffort" placeholder="low" /></label>
+              <label>감사 제한 시간(ms) <input name="auditTimeoutMs" type="number" min="1" /></label>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>디스틸 정책</legend>
+            <div class="row compact">
+              <label>최소 이벤트 수 <input name="minEvents" type="number" min="1" /></label>
+              <label>최소 시간 간격(ms) <input name="minIntervalMs" type="number" min="1" /></label>
+              <label>문자 기준 최소 간격(ms) <input name="charMinIntervalMs" type="number" min="1" /></label>
+              <label>문자 수 기준 <input name="charThreshold" type="number" min="1" /></label>
+              <label>최대 이벤트 수 <input name="maxEvents" type="number" min="1" /></label>
+              <label>최대 입력 문자 수 <input name="maxChars" type="number" min="1" /></label>
+            </div>
+          </fieldset>
+          <div class="actions">
+            <button type="button" id="deepseekPreset">DeepSeek 프리셋</button>
+            <button type="button" id="checkProvider">프로바이더 실사용 테스트</button>
+            <button type="submit" class="primary">설정 저장</button>
+          </div>
+          <pre id="settingsMessage"></pre>
+        </form>
+      </section>
+
+      <section id="memory" class="tab">
+        <section class="panel form">
+          <div class="row">
+            <label>스코프 <select id="memoryScope"><option>repo</option><option>shared</option><option>local</option></select></label>
+            <label>스코프 키 <select id="memoryScopeKey"></select></label>
+            <label>검색 <input id="memoryQuery" /></label>
+            <label>상태 <select id="memoryStatus"><option value="active">활성</option><option value="inactive">비활성</option><option value="all">전체</option></select></label>
+          </div>
+          <div class="actions">
+            <button id="loadMemories">메모리 불러오기</button>
+            <button id="loadCandidates">후보 불러오기</button>
+          </div>
+        </section>
+        <div class="split">
+          <section class="panel">
+            <h2>영구 메모리</h2>
+            <div class="actions bulkbar">
+              <button id="selectAllMemories">전체 선택</button>
+              <button id="clearMemorySelection">선택 해제</button>
+              <button class="danger" id="deactivateSelectedMemories">선택 메모리 비활성화</button>
+            </div>
+            <div id="memories" class="list"></div>
+          </section>
+          <section class="panel">
+            <h2>승격 후보</h2>
+            <div class="actions bulkbar">
+              <button id="selectAllCandidates">전체 선택</button>
+              <button id="clearCandidateSelection">선택 해제</button>
+              <button class="danger" id="rejectSelectedCandidates">선택 후보 거절</button>
+            </div>
+            <div id="candidates" class="list"></div>
+          </section>
+        </div>
+      </section>
+
+      <section id="runs" class="tab">
+        <section class="panel form">
+          <div class="row">
+            <label>스코프 <select id="runScope"><option>repo</option><option>shared</option><option>local</option></select></label>
+            <label>스코프 키 <select id="runScopeKey"></select></label>
+            <label>세션 <input id="runSession" placeholder="선택 사항" /></label>
+          </div>
+          <button id="loadRuns">실행 기록 불러오기</button>
+        </section>
+        <section class="panel">
+          <div id="runsTable" class="table"></div>
+        </section>
+      </section>
+    </main>
+
+    <dialog id="detailDialog">
+      <form method="dialog">
+        <button class="close">닫기</button>
+      </form>
+      <div id="detail"></div>
+    </dialog>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

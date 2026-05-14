@@ -17,10 +17,12 @@ ContextForge is a sidecar memory runtime. It complements existing agent memory
 systems by providing canonical project/repo memory, evidence retention, and
 LLM-backed distillation.
 
-Current 0.3.x builds add remote-first MCP workflows, start/resume handoff
-tools, closeout memory promotion review, correction reconciliation, hybrid
-retrieval, and an embedding job queue so vector indexing can recover
-independently from memory or checkpoint writes.
+Current 0.4.x builds add a server-hosted operator UI, DB-backed runtime
+settings, OpenAI-compatible distillation for DeepSeek-style Chat Completions
+APIs, separate auto-promotion audit runners, remote-first MCP workflows,
+start/resume handoff tools, correction reconciliation, hybrid retrieval, and an
+embedding job queue so vector indexing can recover independently from memory or
+checkpoint writes.
 
 ## Goals
 
@@ -77,10 +79,13 @@ bring-your-own distillation providers, such as:
 - direct model APIs
 - local model runners
 
-The current implementation ships with a deterministic `mock` provider and a
-`codex_exec` provider. The `codex_exec` provider shells out to `codex exec`,
-requests JSON-only output with a schema, validates the result, and records
-provider run metadata, including prompt and output schema versions.
+The current implementation ships with a deterministic `mock` provider,
+`codex_exec`, and `openai_compatible`. The `codex_exec` provider shells out to
+`codex exec`, requests JSON-only output with a schema, validates the result,
+and records provider run metadata, including prompt and output schema versions.
+The OpenAI-compatible provider calls Chat Completions APIs such as DeepSeek at
+`{baseUrl}/chat/completions`, validates the same checkpoint contract locally,
+and records provider metadata without returning API keys.
 
 ## Quick Start
 
@@ -266,12 +271,22 @@ Use `examples/server.env.example` as the public template. Example contents:
 CONTEXTFORGE_REMOTE_HOST=127.0.0.1
 CONTEXTFORGE_REMOTE_PORT=8765
 CONTEXTFORGE_REMOTE_TOKEN=change-me
+# Optional admin UI login. Leave unset to disable password login and use
+# bearer-token API access only. The password value is PBKDF2:
+# iterations:saltHex:hashHex
+# CONTEXTFORGE_ADMIN_USER=admin
+# CONTEXTFORGE_ADMIN_PASSWORD_PBKDF2=
 CONTEXTFORGE_SERVER_STORAGE_MODE=local
 CONTEXTFORGE_DATA_DIR=/var/lib/contextforge
 CONTEXTFORGE_RAW_TTL_DAYS=30
 CONTEXTFORGE_DISTILL_PROVIDER=codex_exec
 CONTEXTFORGE_CODEX_EXEC_MODEL=gpt-5.4-mini
 CONTEXTFORGE_CODEX_EXEC_REASONING_EFFORT=low
+CONTEXTFORGE_OPENAI_COMPATIBLE_PRESET=deepseek
+CONTEXTFORGE_OPENAI_COMPATIBLE_BASE_URL=https://api.deepseek.com
+CONTEXTFORGE_OPENAI_COMPATIBLE_MODEL=deepseek-v4-flash
+CONTEXTFORGE_OPENAI_COMPATIBLE_RESPONSE_FORMAT=json_object
+CONTEXTFORGE_OPENAI_COMPATIBLE_API_KEY=sk-...
 CONTEXTFORGE_EMBEDDINGS_PROVIDER=openai
 CONTEXTFORGE_OPENAI_API_KEY=sk-...
 CONTEXTFORGE_EMBEDDINGS_MODEL=text-embedding-3-small
@@ -279,8 +294,13 @@ CONTEXTFORGE_EMBEDDINGS_DIMENSIONS=1536
 CONTEXTFORGE_EMBEDDINGS_TIMEOUT_MS=30000
 CONTEXTFORGE_EMBEDDINGS_STALE_AFTER_MS=600000
 # Keep false unless this trusted deployment should allow dryRun=false
-# closeout-scoped safe auto-promotion.
+# closeout-scoped safe auto-promotion. Real auto-promotion uses a separate
+# audit runner before writing durable memory.
 CONTEXTFORGE_AUTO_PROMOTE_ENABLED=false
+CONTEXTFORGE_AUTO_PROMOTE_AUDIT_ENABLED=true
+CONTEXTFORGE_AUTO_PROMOTE_AUDIT_PROVIDER=codex_exec
+CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_MODEL=gpt-5.5
+CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_REASONING_EFFORT=low
 ```
 
 The default and recommended embedding model is `text-embedding-3-small`.
@@ -291,12 +311,28 @@ not support that request field and must return the configured dimension count.
 embedding job is returned to `pending`; the default is 10 minutes.
 `CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true` is required before
 `auto_promote_memory_candidates` can run with `dryRun=false`; even then, the
-tool only promotes strict closeout-scoped safe candidates.
+tool only promotes strict closeout-scoped safe candidates. When real
+auto-promotion is enabled, `CONTEXTFORGE_AUTO_PROMOTE_AUDIT_ENABLED=true`
+uses a separate audit runner before the durable memory write. The default audit
+runner is `codex_exec` with `gpt-5.5` and reasoning effort `low`, independent
+from the distillation runner.
 
 Use a long random token and store the same value on client machines as
 `CONTEXTFORGE_REMOTE_TOKEN`. Treat this token as an administrator credential:
 it can call every remote API method, including pruning raw evidence and running
 provider health checks. Do not put this file in git.
+
+The HTTP server also serves an operator UI at `/ui/`. The UI can inspect
+runtime/storage state, view recent distillation runs, update DB-backed runtime
+settings, select `codex_exec` or OpenAI-compatible distillation, pick preset or
+manual distillation models, tune distillation thresholds, review memory
+candidates, promote candidates manually, correct durable memories, bulk reject
+or deactivate bad memory material, and deactivate wrong memories with
+provenance. Runtime settings saved in the UI override env defaults for new
+calls without restarting the server. API keys are write-only in the UI/API:
+callers can set, replace, clear, and test them, but stored values are never
+returned. Optional admin password login is cookie-session based; bearer-token
+access remains available for API clients.
 
 `CONTEXTFORGE_OPENAI_API_KEY` is only needed on the process that performs
 embedding calls. In remote/server-backed deployments, keep that key only in the
@@ -1296,11 +1332,53 @@ Optional environment variables:
 - `CONTEXTFORGE_CODEX_EXEC_CWD`: working directory passed to `codex exec --cd`.
   Default: current working directory.
 
+Auto-promotion audit runner variables are intentionally separate from the
+distillation runner:
+
+- `CONTEXTFORGE_AUTO_PROMOTE_AUDIT_ENABLED`: set to `false` to disable the
+  audit gate and rely only on local strict checks. Default: enabled.
+- `CONTEXTFORGE_AUTO_PROMOTE_AUDIT_PROVIDER`: currently `codex_exec`.
+- `CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_COMMAND`: Codex executable for the
+  audit runner. Defaults to `CONTEXTFORGE_CODEX_EXEC_COMMAND` or `codex`.
+- `CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_MODEL`: audit model. Default:
+  `gpt-5.5`.
+- `CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_REASONING_EFFORT`: audit reasoning
+  effort. Default: `low`.
+- `CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_SANDBOX`: sandbox for the audit
+  runner. Default: `read-only`.
+- `CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_TIMEOUT_MS`: audit timeout. Default:
+  `120000`.
+
 Failure modes are preserved as distillation runs. If `codex exec` exits
 non-zero, times out, or returns malformed JSON, ContextForge records a failed
 `distill_runs` row and leaves raw events untouched for retry or debugging.
 Failed and successful runs include provider prompt/schema version metadata so
 operators can tell which prompt contract produced the result.
+
+## OpenAI-Compatible Provider
+
+Use `openai_compatible` for DeepSeek or another Chat Completions-compatible
+provider:
+
+```bash
+CONTEXTFORGE_DISTILL_PROVIDER=openai_compatible \
+CONTEXTFORGE_OPENAI_COMPATIBLE_PRESET=deepseek \
+CONTEXTFORGE_OPENAI_COMPATIBLE_BASE_URL=https://api.deepseek.com \
+CONTEXTFORGE_OPENAI_COMPATIBLE_MODEL=deepseek-v4-flash \
+CONTEXTFORGE_OPENAI_COMPATIBLE_RESPONSE_FORMAT=json_object \
+CONTEXTFORGE_OPENAI_COMPATIBLE_API_KEY=sk-... \
+node src/cli.js distillCheckpoint \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --sessionId demo-session
+```
+
+DeepSeek is configured as the first built-in template. As of 2026-05-14, the
+official DeepSeek docs list `https://api.deepseek.com` as the OpenAI-compatible
+base URL, `deepseek-v4-flash` and `deepseek-v4-pro` as current V4 model ids, and
+JSON output via `response_format: {"type":"json_object"}`. The provider still
+validates the returned checkpoint JSON locally and records failed runs without
+deleting raw evidence.
 
 ## Public Repo Hygiene
 
@@ -1311,11 +1389,11 @@ operators can tell which prompt contract produced the result.
 
 ## Status
 
-0.3.x runtime. The current implementation includes SQLite migrations, scoped
+0.4.x runtime. The current implementation includes SQLite migrations, scoped
 durable memories, raw event capture, rolling working summaries, checkpoint
-distillation with `mock` and `codex_exec` providers, remote HTTP mode for
-server-backed canonical memory, stdio and Streamable HTTP MCP, explainable
-hybrid retrieval, embedding job processing, closeout promotion review, strict
-safe auto-promotion controls, and memory reconciliation for user corrections.
-Additional distillation providers and large-store performance hardening remain
-future work.
+distillation with `mock`, `codex_exec`, and `openai_compatible` providers,
+remote HTTP mode for server-backed canonical memory, an operator UI, stdio and
+Streamable HTTP MCP, explainable hybrid retrieval, embedding job processing,
+closeout promotion review, audited strict safe auto-promotion controls, and
+memory reconciliation for user corrections. Further provider adapters and
+large-store performance hardening remain future work.
