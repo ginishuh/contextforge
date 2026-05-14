@@ -102,6 +102,7 @@ function toCoreOptions(options) {
           .filter(Boolean)
       : undefined,
     sort: options.sort,
+    order: options.order,
     allowWarnings: options.allowWarnings === true || options.allowWarnings === 'true',
     allowStatusOverride: options.allowStatusOverride === true || options.allowStatusOverride === 'true',
     reason: options.reason,
