@@ -3492,6 +3492,7 @@ export function createContextForge(options = {}) {
           status: options.status || null,
           provider: options.provider || null,
           limit: options.limit == null ? null : Number(options.limit),
+          order: options.order || 'asc',
         }),
       );
     },

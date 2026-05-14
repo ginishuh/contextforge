@@ -2767,7 +2767,7 @@ export class ContextForgeStore {
     return hydrateDistillRun(row);
   }
 
-  listDistillRuns({ scopeType, scopeKey, sessionId = null, status = null, provider = null, limit = null }) {
+  listDistillRuns({ scopeType, scopeKey, sessionId = null, status = null, provider = null, limit = null, order = 'asc' }) {
     const filters = ['scope_type = ?', 'scope_key = ?'];
     const values = [scopeType, scopeKey];
     if (sessionId) {
@@ -2785,11 +2785,12 @@ export class ContextForgeStore {
     const parsedLimit = limit == null ? null : Number(limit);
     const limitClause = Number.isInteger(parsedLimit) && parsedLimit > 0 ? 'LIMIT ?' : '';
     if (limitClause) values.push(parsedLimit);
+    const orderDirection = order === 'desc' ? 'DESC' : 'ASC';
     return this.db
       .prepare(`
         SELECT * FROM distill_runs
         WHERE ${filters.join(' AND ')}
-        ORDER BY created_at ASC, id ASC
+        ORDER BY created_at ${orderDirection}, id ${orderDirection}
         ${limitClause}
       `)
       .all(...values)

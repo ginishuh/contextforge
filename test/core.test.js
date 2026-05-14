@@ -2976,6 +2976,48 @@ test('appendRaw and mock distillCheckpoint preserve raw evidence', async () => {
   assert.equal(statusAfter.shouldDistill, false);
 });
 
+test('listDistillRuns can return newest runs first when limited', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'mock',
+    },
+    cwd: process.cwd(),
+  });
+
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'run-order-repo',
+    sessionId: 'older-session',
+    role: 'user',
+    content: 'Create the older run.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'run-order-repo',
+    sessionId: 'older-session',
+  });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'run-order-repo',
+    sessionId: 'newer-session',
+    role: 'user',
+    content: 'Create the newer run.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'run-order-repo',
+    sessionId: 'newer-session',
+  });
+
+  const oldestFirst = app.listDistillRuns({ scope: 'repo', scopeKey: 'run-order-repo', limit: 1 });
+  assert.equal(oldestFirst[0].sessionId, 'older-session');
+  const newestFirst = app.listDistillRuns({ scope: 'repo', scopeKey: 'run-order-repo', limit: 1, order: 'desc' });
+  assert.equal(newestFirst[0].sessionId, 'newer-session');
+});
+
 test('distillCheckpoint records checkpoint level and coverage metadata', async () => {
   const dataDir = await makeTempDir();
   const store = new ContextForgeStore({ dataDir });

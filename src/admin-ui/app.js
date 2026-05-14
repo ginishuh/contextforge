@@ -204,6 +204,16 @@ function fillScopeKeySelects() {
   fillScopeKeySelect($('#runScopeKey'), $('#runScope').value, $('#runScopeKey').value);
 }
 
+function dashboardRunScope() {
+  const repoWithRuns = state.scopeKeys.find((item) => item.scopeType === 'repo' && item.distillRuns > 0);
+  const anyWithRuns = state.scopeKeys.find((item) => item.distillRuns > 0);
+  const selected = repoWithRuns || anyWithRuns;
+  if (selected) {
+    return { scope: selected.scopeType, scopeKey: selected.scopeKey };
+  }
+  return { scope: 'repo', scopeKey: state.db?.defaultScopeKey || '' };
+}
+
 function formNumber(form, key) {
   const value = Number(form[key].value);
   return Number.isFinite(value) && value > 0 ? value : undefined;
@@ -293,8 +303,8 @@ async function loadRuns(target = '#runsTable', options = {}) {
   const scopeKey = options.scopeKey || $('#runScopeKey')?.value || state.db?.connection?.scopeKey || '';
   if (!scopeKey) return;
   const sessionId = options.sessionId ?? $('#runSession')?.value;
-  const runs = await call('listDistillRuns', { scope, scopeKey, ...(sessionId ? { sessionId } : {}), limit: 100 });
-  $(target).innerHTML = table(runs.slice(-25).reverse(), [
+  const runs = await call('listDistillRuns', { scope, scopeKey, ...(sessionId ? { sessionId } : {}), limit: 25, order: 'desc' });
+  $(target).innerHTML = table(runs, [
     { label: '생성 시각', value: (row) => row.createdAt },
     { label: '프로바이더', value: (row) => row.provider },
     { label: '상태', value: (row) => row.status },
@@ -490,7 +500,7 @@ document.querySelectorAll('.tabs button').forEach((button) => {
 });
 
 refreshRuntime()
-  .then(() => loadRuns('#recentRuns', { scope: 'repo', scopeKey: state.db?.defaultScopeKey || '' }).catch(() => {}))
+  .then(() => loadRuns('#recentRuns', dashboardRunScope()).catch(() => {}))
   .catch((error) => {
     $('#connection').textContent = error.message;
   });
