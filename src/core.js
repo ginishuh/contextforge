@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { loadConfig } from './config/index.js';
 import { createDistillProvider } from './distill/index.js';
 import { checkCodexExecProvider } from './distill/providers/codex_exec.js';
+import { checkOpenAiCompatibleProvider } from './distill/providers/openai_compatible.js';
 import { validateDistillOutput } from './distill/validate.js';
 import { createEmbeddingProvider } from './embeddings/index.js';
 import { createRemoteContextForge } from './remote/client.js';
@@ -1184,6 +1185,114 @@ function rawTtlCutoffIso(ttlDays, now = new Date()) {
   return new Date(now.getTime() - Number(ttlDays) * 24 * 60 * 60 * 1000).toISOString();
 }
 
+const RUNTIME_SETTING_KEYS = new Set([
+  'distillProvider',
+  'distillPolicy',
+  'codexExec',
+  'openAiCompatible',
+]);
+
+const SECRET_KEYS = {
+  openAiCompatibleApiKey: 'openAiCompatible.apiKey',
+};
+
+const DISTILL_MODEL_PRESETS = {
+  openai_compatible: {
+    deepseek: {
+      label: 'DeepSeek V4 Flash',
+      baseUrl: 'https://api.deepseek.com',
+      model: 'deepseek-v4-flash',
+      responseFormat: 'json_object',
+    },
+    custom: {
+      label: 'Custom OpenAI-compatible',
+      baseUrl: '',
+      model: '',
+      responseFormat: 'json_object',
+    },
+  },
+  codex_exec: {
+    configured: {
+      label: 'Configured Codex model',
+      model: null,
+    },
+    manual: {
+      label: 'Manual Codex model',
+      model: '',
+    },
+  },
+};
+
+function plainSettings(runtimeSettings) {
+  const result = {};
+  for (const [key, entry] of Object.entries(runtimeSettings?.settings || {})) {
+    result[key] = entry.value;
+  }
+  return result;
+}
+
+function effectiveRuntimeConfig(config, runtimeSettings = { settings: {}, secrets: {} }) {
+  const settings = plainSettings(runtimeSettings);
+  const distillPolicy = {
+    ...config.distillPolicy,
+    ...(settings.distillPolicy || {}),
+  };
+  const codexExec = {
+    ...config.codexExec,
+    ...(settings.codexExec || {}),
+  };
+  const openAiCompatible = {
+    ...config.openAiCompatible,
+    ...(settings.openAiCompatible || {}),
+    apiKey: runtimeSettings.secrets?.[SECRET_KEYS.openAiCompatibleApiKey] || config.openAiCompatible.apiKey || null,
+  };
+  return {
+    distillProvider: settings.distillProvider || config.distillProvider,
+    distillPolicy,
+    codexExec,
+    openAiCompatible,
+  };
+}
+
+function sanitizedRuntimeSettings(config, runtimeSettings = { settings: {}, secrets: {} }) {
+  const effective = effectiveRuntimeConfig(config, runtimeSettings);
+  return {
+    effective: {
+      distillProvider: effective.distillProvider,
+      distillPolicy: effective.distillPolicy,
+      codexExec: {
+        ...effective.codexExec,
+        runner: undefined,
+      },
+      openAiCompatible: {
+        ...effective.openAiCompatible,
+        apiKey: undefined,
+        secretPresent: Boolean(effective.openAiCompatible.apiKey),
+      },
+      presets: DISTILL_MODEL_PRESETS,
+    },
+    stored: runtimeSettings.settings,
+  };
+}
+
+function pickKnownSettings(values = {}) {
+  const picked = {};
+  for (const [key, value] of Object.entries(values || {})) {
+    if (RUNTIME_SETTING_KEYS.has(key)) {
+      if (key === 'openAiCompatible' && value && typeof value === 'object' && !Array.isArray(value)) {
+        const { apiKey, ...safeOpenAiCompatible } = value;
+        if (apiKey != null) {
+          throw new Error('openAiCompatible.apiKey must be provided through the write-only secrets channel.');
+        }
+        picked[key] = safeOpenAiCompatible;
+      } else {
+        picked[key] = value;
+      }
+    }
+  }
+  return picked;
+}
+
 export function createContextForge(options = {}) {
   const config = loadConfig(options);
   if (config.storageMode === 'remote') {
@@ -1199,6 +1308,7 @@ export function createContextForge(options = {}) {
     ...config.codexExec,
     runner: options.codexExecRunner,
   };
+  const runtimeFetchImpl = options.fetchImpl;
   const useStore = (fn) => {
     if (sharedStore) {
       return fn(sharedStore);
@@ -1206,6 +1316,10 @@ export function createContextForge(options = {}) {
     return withStore(config, fn);
   };
   let lastRawPruneAt = 0;
+
+  function getEffectiveRuntime(store) {
+    return effectiveRuntimeConfig(config, store.getRuntimeSettings({ includeSecrets: true }));
+  }
 
   function buildDbInfo(store) {
     const storeInfo = store.dbInfo();
@@ -1449,6 +1563,66 @@ export function createContextForge(options = {}) {
       return useStore((store) => buildDbInfo(store));
     },
 
+    getRuntimeSettings() {
+      return useStore((store) => {
+        const redacted = store.getRuntimeSettings();
+        const withSecrets = store.getRuntimeSettings({ includeSecrets: true });
+        return {
+          ...sanitizedRuntimeSettings(config, withSecrets),
+          stored: redacted.settings,
+        };
+      });
+    },
+
+    updateRuntimeSettings(options = {}) {
+      const values = pickKnownSettings(options.values || options.settings || {});
+      const secrets = {};
+      if (options.openAiCompatibleApiKey) {
+        secrets[SECRET_KEYS.openAiCompatibleApiKey] = options.openAiCompatibleApiKey;
+      }
+      if (options.secrets?.openAiCompatibleApiKey) {
+        secrets[SECRET_KEYS.openAiCompatibleApiKey] = options.secrets.openAiCompatibleApiKey;
+      }
+      const clearSecrets = [];
+      if (truthyOption(options.clearOpenAiCompatibleApiKey) || options.clearSecrets?.includes('openAiCompatibleApiKey')) {
+        clearSecrets.push(SECRET_KEYS.openAiCompatibleApiKey);
+      }
+      return useStore((store) => {
+        store.setRuntimeSettings({ values, secrets, clearSecrets });
+        const redacted = store.getRuntimeSettings();
+        const withSecrets = store.getRuntimeSettings({ includeSecrets: true });
+        return {
+          ...sanitizedRuntimeSettings(config, withSecrets),
+          stored: redacted.settings,
+        };
+      });
+    },
+
+    checkDistillProvider(options = {}) {
+      return useStore(async (store) => {
+        const effective = getEffectiveRuntime(store);
+        const providerName = options.provider || effective.distillProvider;
+        if (providerName === 'codex_exec') {
+          return checkCodexExecProvider({
+            ...effective.codexExec,
+            runner: options.codexExecRunner || options.runner || options.codexRunner || codexExec.runner,
+            live: Boolean(options.live),
+          });
+        }
+        if (providerName === 'openai_compatible') {
+          return checkOpenAiCompatibleProvider({
+            ...effective.openAiCompatible,
+            fetchImpl: runtimeFetchImpl,
+            live: Boolean(options.live),
+          });
+        }
+        if (providerName === 'mock') {
+          return { ok: true, provider: 'mock', message: 'mock provider is always available.' };
+        }
+        throw new Error(`Unsupported distill provider "${providerName}".`);
+      });
+    },
+
     async bootstrapContext(options = {}) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.query, 'query');
@@ -1614,9 +1788,13 @@ export function createContextForge(options = {}) {
     },
 
     checkCodexExec(options = {}) {
-      return checkCodexExecProvider({
-        ...codexExec,
-        live: Boolean(options.live),
+      return useStore((store) => {
+        const effective = getEffectiveRuntime(store);
+        return checkCodexExecProvider({
+          ...effective.codexExec,
+          runner: codexExec.runner,
+          live: Boolean(options.live),
+        });
       });
     },
 
@@ -1634,41 +1812,44 @@ export function createContextForge(options = {}) {
     sessionStatus(options) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.sessionId, 'sessionId');
-      const policy = {
-        minEvents: positiveNumber(
-          options.minEvents == null ? config.distillPolicy.minEvents : Number(options.minEvents),
-          'minEvents',
-        ),
-        minIntervalMs: positiveNumber(
-          options.minIntervalMs == null ? config.distillPolicy.minIntervalMs : Number(options.minIntervalMs),
-          'minIntervalMs',
-        ),
-        charThreshold: positiveNumber(
-          options.charThreshold == null ? config.distillPolicy.charThreshold : Number(options.charThreshold),
-          'charThreshold',
-        ),
-        charMinIntervalMs: positiveNumber(
-          options.charMinIntervalMs == null ? config.distillPolicy.charMinIntervalMs : Number(options.charMinIntervalMs),
-          'charMinIntervalMs',
-        ),
-        maxEvents: positiveNumber(
-          options.maxEvents == null ? config.distillPolicy.maxEvents : Number(options.maxEvents),
-          'maxEvents',
-        ),
-        maxChars: positiveNumber(
-          options.maxChars == null ? config.distillPolicy.maxChars : Number(options.maxChars),
-          'maxChars',
-        ),
-      };
-      return useStore((store) =>
-        buildSessionStatus({
+      return useStore((store) => {
+        const effective = getEffectiveRuntime(store);
+        const policy = {
+          minEvents: positiveNumber(
+            options.minEvents == null ? effective.distillPolicy.minEvents : Number(options.minEvents),
+            'minEvents',
+          ),
+          minIntervalMs: positiveNumber(
+            options.minIntervalMs == null ? effective.distillPolicy.minIntervalMs : Number(options.minIntervalMs),
+            'minIntervalMs',
+          ),
+          charThreshold: positiveNumber(
+            options.charThreshold == null ? effective.distillPolicy.charThreshold : Number(options.charThreshold),
+            'charThreshold',
+          ),
+          charMinIntervalMs: positiveNumber(
+            options.charMinIntervalMs == null
+              ? effective.distillPolicy.charMinIntervalMs
+              : Number(options.charMinIntervalMs),
+            'charMinIntervalMs',
+          ),
+          maxEvents: positiveNumber(
+            options.maxEvents == null ? effective.distillPolicy.maxEvents : Number(options.maxEvents),
+            'maxEvents',
+          ),
+          maxChars: positiveNumber(
+            options.maxChars == null ? effective.distillPolicy.maxChars : Number(options.maxChars),
+            'maxChars',
+          ),
+        };
+        return buildSessionStatus({
           scope,
           sessionId: options.sessionId,
           rawEvents: store.listRawEvents({ ...scope, sessionId: options.sessionId }),
           latestCheckpoint: store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId, level: 0 }),
           policy,
-        }),
-      );
+        });
+      });
     },
 
     remember(options) {
@@ -2652,6 +2833,27 @@ export function createContextForge(options = {}) {
       );
     },
 
+    listMemories(options = {}) {
+      const scope = normalizeScopeOptions(options, config);
+      return useStore((store) =>
+        store.listMemoriesForAdmin({
+          ...scope,
+          status: options.status || 'active',
+          query: options.query || null,
+          limit: options.limit == null ? 100 : Number(options.limit),
+        }),
+      );
+    },
+
+    listScopeKeys(options = {}) {
+      return useStore((store) =>
+        store.listScopeKeys({
+          scopeType: options.scope || options.scopeType || null,
+          limit: options.limit == null ? 200 : Number(options.limit),
+        }),
+      );
+    },
+
     search(options) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.query, 'query');
@@ -2874,23 +3076,31 @@ export function createContextForge(options = {}) {
     async distillCheckpoint(options) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.sessionId, 'sessionId');
-      const provider = createDistillProvider(options.provider || config.distillProvider, distillProviders, {
-        codexExec,
-      });
-      const providerMetadata = provider.metadata || {};
 
       return useStore(async (store) => {
+        const effective = getEffectiveRuntime(store);
+        const provider = createDistillProvider(options.provider || effective.distillProvider, distillProviders, {
+          codexExec: {
+            ...effective.codexExec,
+            runner: codexExec.runner,
+          },
+          openAiCompatible: {
+            ...effective.openAiCompatible,
+            fetchImpl: runtimeFetchImpl,
+          },
+        });
+        const providerMetadata = provider.metadata || {};
         const rawEvents = store.listRawEvents({ ...scope, sessionId: options.sessionId });
         const previousCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId, level: 0 });
         const previousWorkingSummary = store.getWorkingSummary({ ...scope, sessionId: options.sessionId });
         const previousSessionWorkingContext = store.getSessionWorkingContext({ ...scope, sessionId: options.sessionId });
         const policy = {
           maxEvents: positiveNumber(
-            options.maxEvents == null ? config.distillPolicy.maxEvents : Number(options.maxEvents),
+            options.maxEvents == null ? effective.distillPolicy.maxEvents : Number(options.maxEvents),
             'maxEvents',
           ),
           maxChars: positiveNumber(
-            options.maxChars == null ? config.distillPolicy.maxChars : Number(options.maxChars),
+            options.maxChars == null ? effective.distillPolicy.maxChars : Number(options.maxChars),
             'maxChars',
           ),
         };
@@ -3148,11 +3358,13 @@ export function createContextForge(options = {}) {
 
     listDistillRuns(options) {
       const scope = normalizeScopeOptions(options, config);
-      requireOption(options.sessionId, 'sessionId');
       return useStore((store) =>
         store.listDistillRuns({
           ...scope,
-          sessionId: options.sessionId,
+          sessionId: options.sessionId || null,
+          status: options.status || null,
+          provider: options.provider || null,
+          limit: options.limit == null ? null : Number(options.limit),
         }),
       );
     },

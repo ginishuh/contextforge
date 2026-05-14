@@ -2,6 +2,10 @@ import { normalizeScopeOptions } from '../scopes/index.js';
 
 const REMOTE_METHODS = [
   'dbInfo',
+  'getRuntimeSettings',
+  'updateRuntimeSettings',
+  'checkDistillProvider',
+  'listScopeKeys',
   'bootstrapContext',
   'syncResumeContext',
   'checkCodexExec',
@@ -24,6 +28,7 @@ const REMOTE_METHODS = [
   'autoPromoteMemoryCandidates',
   'reconcileMemory',
   'getMemory',
+  'listMemories',
   'search',
   'rebuildEmbeddings',
   'processEmbeddingJobs',
@@ -40,7 +45,15 @@ const REMOTE_METHODS = [
   'distillUsage',
 ];
 
-const UNSCOPED_REMOTE_METHODS = new Set(['dbInfo', 'checkCodexExec', 'pruneRawEvents']);
+const UNSCOPED_REMOTE_METHODS = new Set([
+  'dbInfo',
+  'getRuntimeSettings',
+  'updateRuntimeSettings',
+  'checkDistillProvider',
+  'checkCodexExec',
+  'listScopeKeys',
+  'pruneRawEvents',
+]);
 
 function remoteUrl(baseUrl, method) {
   const url = new URL(baseUrl);

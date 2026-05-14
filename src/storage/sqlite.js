@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 
-export const SCHEMA_VERSION = 14;
+export const SCHEMA_VERSION = 15;
 
 function nowIso() {
   return new Date().toISOString();
@@ -473,6 +473,14 @@ export class ContextForgeStore {
         completed_at TEXT
       );
 
+      CREATE TABLE IF NOT EXISTS runtime_settings (
+        key TEXT PRIMARY KEY,
+        value_json TEXT NOT NULL,
+        secret INTEGER NOT NULL DEFAULT 0 CHECK (secret IN (0, 1)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS working_summaries (
         id TEXT PRIMARY KEY,
         scope_type TEXT NOT NULL CHECK (scope_type IN ('shared', 'repo', 'local')),
@@ -648,6 +656,8 @@ export class ContextForgeStore {
         ON checkpoints(scope_type, scope_key, session_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_distill_runs_session
         ON distill_runs(scope_type, scope_key, session_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_runtime_settings_secret
+        ON runtime_settings(secret, updated_at);
       CREATE INDEX IF NOT EXISTS idx_working_summaries_scope
         ON working_summaries(scope_type, scope_key, updated_at);
       CREATE INDEX IF NOT EXISTS idx_session_working_context_scope
@@ -725,6 +735,7 @@ export class ContextForgeStore {
         rawEvents: count('raw_events'),
         checkpoints: count('checkpoints'),
         distillRuns: count('distill_runs'),
+        runtimeSettings: count('runtime_settings'),
         workingSummaries: count('working_summaries'),
         sessionWorkingContexts: count('session_working_context'),
         memoryEvents: count('memory_events'),
@@ -1857,6 +1868,30 @@ export class ContextForgeStore {
       .map(hydrateMemory);
   }
 
+  listMemoriesForAdmin({ scopeType, scopeKey, status = 'active', query = null, limit = 100 } = {}) {
+    const filters = ['scope_type = ?', 'scope_key = ?'];
+    const values = [scopeType, scopeKey];
+    if (status && status !== 'all') {
+      filters.push('status = ?');
+      values.push(status);
+    }
+    if (query) {
+      filters.push('(memory_key LIKE ? OR category LIKE ? OR content LIKE ? OR tags_json LIKE ?)');
+      const pattern = `%${query}%`;
+      values.push(pattern, pattern, pattern, pattern);
+    }
+    values.push(Number(limit));
+    return this.db
+      .prepare(`
+        SELECT * FROM memories
+        WHERE ${filters.join(' AND ')}
+        ORDER BY importance DESC, updated_at DESC, memory_key ASC
+        LIMIT ?
+      `)
+      .all(...values)
+      .map(hydrateMemory);
+  }
+
   deactivateMemory({ scopeType, scopeKey, key, reason = null }) {
     const existing = this.getMemory({ scopeType, scopeKey, key });
     if (!existing) {
@@ -2732,14 +2767,138 @@ export class ContextForgeStore {
     return hydrateDistillRun(row);
   }
 
-  listDistillRuns({ scopeType, scopeKey, sessionId }) {
+  listDistillRuns({ scopeType, scopeKey, sessionId = null, status = null, provider = null, limit = null }) {
+    const filters = ['scope_type = ?', 'scope_key = ?'];
+    const values = [scopeType, scopeKey];
+    if (sessionId) {
+      filters.push('session_id = ?');
+      values.push(sessionId);
+    }
+    if (status) {
+      filters.push('status = ?');
+      values.push(status);
+    }
+    if (provider) {
+      filters.push('provider = ?');
+      values.push(provider);
+    }
+    const parsedLimit = limit == null ? null : Number(limit);
+    const limitClause = Number.isInteger(parsedLimit) && parsedLimit > 0 ? 'LIMIT ?' : '';
+    if (limitClause) values.push(parsedLimit);
     return this.db
       .prepare(`
         SELECT * FROM distill_runs
-        WHERE scope_type = ? AND scope_key = ? AND session_id = ?
+        WHERE ${filters.join(' AND ')}
         ORDER BY created_at ASC, id ASC
+        ${limitClause}
       `)
-      .all(scopeType, scopeKey, sessionId)
+      .all(...values)
       .map(hydrateDistillRun);
+  }
+
+  listScopeKeys({ scopeType = null, limit = null } = {}) {
+    const filters = [];
+    const values = [];
+    if (scopeType) {
+      filters.push('scope_type = ?');
+      values.push(scopeType);
+    }
+    const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+    const parsedLimit = limit == null ? null : Number(limit);
+    const limitClause = Number.isInteger(parsedLimit) && parsedLimit > 0 ? 'LIMIT ?' : '';
+    if (limitClause) values.push(parsedLimit);
+    return this.db
+      .prepare(`
+        WITH scoped_rows AS (
+          SELECT scope_type, scope_key, 1 AS memories, 0 AS candidates, 0 AS distill_runs, 0 AS raw_events, 0 AS checkpoints, updated_at AS touched_at
+          FROM memories
+          UNION ALL
+          SELECT scope_type, scope_key, 0, 1, 0, 0, 0, created_at
+          FROM memory_candidate_index
+          UNION ALL
+          SELECT scope_type, scope_key, 0, 0, 1, 0, 0, created_at
+          FROM distill_runs
+          UNION ALL
+          SELECT scope_type, scope_key, 0, 0, 0, 1, 0, created_at
+          FROM raw_events
+          UNION ALL
+          SELECT scope_type, scope_key, 0, 0, 0, 0, 1, created_at
+          FROM checkpoints
+        )
+        SELECT
+          scope_type,
+          scope_key,
+          SUM(memories) AS memories,
+          SUM(candidates) AS candidates,
+          SUM(distill_runs) AS distill_runs,
+          SUM(raw_events) AS raw_events,
+          SUM(checkpoints) AS checkpoints,
+          MAX(touched_at) AS last_touched_at
+        FROM scoped_rows
+        ${where}
+        GROUP BY scope_type, scope_key
+        ORDER BY last_touched_at DESC, scope_type ASC, scope_key ASC
+        ${limitClause}
+      `)
+      .all(...values)
+      .map((row) => ({
+        scopeType: row.scope_type,
+        scope: row.scope_type,
+        scopeKey: row.scope_key,
+        memories: Number(row.memories || 0),
+        candidates: Number(row.candidates || 0),
+        distillRuns: Number(row.distill_runs || 0),
+        rawEvents: Number(row.raw_events || 0),
+        checkpoints: Number(row.checkpoints || 0),
+        lastTouchedAt: row.last_touched_at,
+      }));
+  }
+
+  getRuntimeSettings({ includeSecrets = false } = {}) {
+    const rows = this.db.prepare('SELECT * FROM runtime_settings ORDER BY key ASC').all();
+    const settings = {};
+    const secrets = {};
+    for (const row of rows) {
+      const value = parseJson(row.value_json, null);
+      const entry = {
+        value: row.secret && !includeSecrets ? null : value,
+        secret: Boolean(row.secret),
+        secretPresent: Boolean(row.secret && value),
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      };
+      settings[row.key] = entry;
+      if (row.secret && includeSecrets) {
+        secrets[row.key] = value;
+      }
+    }
+    return { settings, secrets };
+  }
+
+  setRuntimeSettings({ values = {}, secrets = {}, clearSecrets = [] } = {}) {
+    const timestamp = nowIso();
+    const setRow = this.db.prepare(`
+      INSERT INTO runtime_settings (key, value_json, secret, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET
+        value_json = excluded.value_json,
+        secret = excluded.secret,
+        updated_at = excluded.updated_at
+    `);
+    const deleteRow = this.db.prepare('DELETE FROM runtime_settings WHERE key = ? AND secret = 1');
+    const transaction = this.db.transaction(() => {
+      for (const [key, value] of Object.entries(values || {})) {
+        setRow.run(key, json(value, null), 0, timestamp, timestamp);
+      }
+      for (const [key, value] of Object.entries(secrets || {})) {
+        if (value == null || value === '') continue;
+        setRow.run(key, json(String(value), null), 1, timestamp, timestamp);
+      }
+      for (const key of clearSecrets || []) {
+        deleteRow.run(key);
+      }
+    });
+    transaction();
+    return this.getRuntimeSettings();
   }
 }

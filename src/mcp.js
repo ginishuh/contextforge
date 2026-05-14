@@ -72,6 +72,22 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
   );
 
   server.registerTool(
+    'get_runtime_settings',
+    {
+      title: 'Get Runtime Settings',
+      description:
+        'Inspect effective ContextForge runtime settings, including distill provider, distill policy, provider model settings, presets, and secret-present flags. Secret values are never returned.',
+      inputSchema: {},
+      annotations: {
+        title: 'Get Runtime Settings',
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async () => jsonResult(await app.getRuntimeSettings()),
+  );
+
+  server.registerTool(
     'bootstrap_context',
     {
       title: 'Bootstrap Context',

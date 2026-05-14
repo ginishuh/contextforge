@@ -248,6 +248,31 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
       ),
       maxInputChars: codexExecMaxInputChars,
     },
+    openAiCompatible: {
+      preset: env.CONTEXTFORGE_OPENAI_COMPATIBLE_PRESET || 'deepseek',
+      baseUrl: env.CONTEXTFORGE_OPENAI_COMPATIBLE_BASE_URL || 'https://api.deepseek.com',
+      apiKey:
+        env.CONTEXTFORGE_OPENAI_COMPATIBLE_API_KEY ||
+        env.CONTEXTFORGE_DEEPSEEK_API_KEY ||
+        env.DEEPSEEK_API_KEY ||
+        null,
+      model: env.CONTEXTFORGE_OPENAI_COMPATIBLE_MODEL || 'deepseek-v4-flash',
+      responseFormat: env.CONTEXTFORGE_OPENAI_COMPATIBLE_RESPONSE_FORMAT || 'json_object',
+      timeoutMs: parsePositiveInteger(
+        env.CONTEXTFORGE_OPENAI_COMPATIBLE_TIMEOUT_MS,
+        'CONTEXTFORGE_OPENAI_COMPATIBLE_TIMEOUT_MS',
+        120000,
+      ),
+      maxInputChars: parsePositiveInteger(
+        env.CONTEXTFORGE_OPENAI_COMPATIBLE_MAX_INPUT_CHARS,
+        'CONTEXTFORGE_OPENAI_COMPATIBLE_MAX_INPUT_CHARS',
+        12000,
+      ),
+      maxTokens: parseOptionalPositiveInteger(
+        env.CONTEXTFORGE_OPENAI_COMPATIBLE_MAX_TOKENS,
+        'CONTEXTFORGE_OPENAI_COMPATIBLE_MAX_TOKENS',
+      ),
+    },
     distillPolicy: {
       minEvents: parsePositiveInteger(env.CONTEXTFORGE_DISTILL_MIN_EVENTS, 'CONTEXTFORGE_DISTILL_MIN_EVENTS', 5),
       minIntervalMs: distillMinIntervalMs,

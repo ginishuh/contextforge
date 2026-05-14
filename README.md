@@ -266,12 +266,21 @@ Use `examples/server.env.example` as the public template. Example contents:
 CONTEXTFORGE_REMOTE_HOST=127.0.0.1
 CONTEXTFORGE_REMOTE_PORT=8765
 CONTEXTFORGE_REMOTE_TOKEN=change-me
+# Optional admin UI login. Generate a PBKDF2 value with the documented helper or
+# leave unset to disable password login and use bearer-token API access only.
+CONTEXTFORGE_ADMIN_USER=admin
+CONTEXTFORGE_ADMIN_PASSWORD_PBKDF2=310000:saltHex:hashHex
 CONTEXTFORGE_SERVER_STORAGE_MODE=local
 CONTEXTFORGE_DATA_DIR=/var/lib/contextforge
 CONTEXTFORGE_RAW_TTL_DAYS=30
 CONTEXTFORGE_DISTILL_PROVIDER=codex_exec
 CONTEXTFORGE_CODEX_EXEC_MODEL=gpt-5.4-mini
 CONTEXTFORGE_CODEX_EXEC_REASONING_EFFORT=low
+CONTEXTFORGE_OPENAI_COMPATIBLE_PRESET=deepseek
+CONTEXTFORGE_OPENAI_COMPATIBLE_BASE_URL=https://api.deepseek.com
+CONTEXTFORGE_OPENAI_COMPATIBLE_MODEL=deepseek-v4-flash
+CONTEXTFORGE_OPENAI_COMPATIBLE_RESPONSE_FORMAT=json_object
+CONTEXTFORGE_OPENAI_COMPATIBLE_API_KEY=sk-...
 CONTEXTFORGE_EMBEDDINGS_PROVIDER=openai
 CONTEXTFORGE_OPENAI_API_KEY=sk-...
 CONTEXTFORGE_EMBEDDINGS_MODEL=text-embedding-3-small
@@ -297,6 +306,15 @@ Use a long random token and store the same value on client machines as
 `CONTEXTFORGE_REMOTE_TOKEN`. Treat this token as an administrator credential:
 it can call every remote API method, including pruning raw evidence and running
 provider health checks. Do not put this file in git.
+
+The HTTP server also serves an operator UI at `/ui/`. The UI can inspect
+runtime/storage state, update DB-backed runtime settings, select `codex_exec` or
+OpenAI-compatible distillation, tune distillation thresholds, review memory
+candidates, promote candidates manually, correct durable memories, and
+deactivate wrong memories with provenance. Runtime settings saved in the UI
+override env defaults for new calls without restarting the server. API keys are
+write-only in the UI/API: callers can set, replace, clear, and test them, but
+stored values are never returned.
 
 `CONTEXTFORGE_OPENAI_API_KEY` is only needed on the process that performs
 embedding calls. In remote/server-backed deployments, keep that key only in the
@@ -1301,6 +1319,31 @@ non-zero, times out, or returns malformed JSON, ContextForge records a failed
 `distill_runs` row and leaves raw events untouched for retry or debugging.
 Failed and successful runs include provider prompt/schema version metadata so
 operators can tell which prompt contract produced the result.
+
+## OpenAI-Compatible Provider
+
+Use `openai_compatible` for DeepSeek or another Chat Completions-compatible
+provider:
+
+```bash
+CONTEXTFORGE_DISTILL_PROVIDER=openai_compatible \
+CONTEXTFORGE_OPENAI_COMPATIBLE_PRESET=deepseek \
+CONTEXTFORGE_OPENAI_COMPATIBLE_BASE_URL=https://api.deepseek.com \
+CONTEXTFORGE_OPENAI_COMPATIBLE_MODEL=deepseek-v4-flash \
+CONTEXTFORGE_OPENAI_COMPATIBLE_RESPONSE_FORMAT=json_object \
+CONTEXTFORGE_OPENAI_COMPATIBLE_API_KEY=sk-... \
+node src/cli.js distillCheckpoint \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --sessionId demo-session
+```
+
+DeepSeek is configured as the first built-in template. As of 2026-05-14, the
+official DeepSeek docs list `https://api.deepseek.com` as the OpenAI-compatible
+base URL, `deepseek-v4-flash` and `deepseek-v4-pro` as current V4 model ids, and
+JSON output via `response_format: {"type":"json_object"}`. The provider still
+validates the returned checkpoint JSON locally and records failed runs without
+deleting raw evidence.
 
 ## Public Repo Hygiene
 

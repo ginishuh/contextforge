@@ -134,6 +134,12 @@ function toCoreOptions(options) {
     iterations: options.iterations == null ? undefined : Number(options.iterations),
     charsPerToken: options.charsPerToken == null ? undefined : Number(options.charsPerToken),
     rawTailLimit: options.rawTailLimit == null ? undefined : Number(options.rawTailLimit),
+    settings: options.settings ? JSON.parse(options.settings) : undefined,
+    values: options.values ? JSON.parse(options.values) : undefined,
+    secrets: options.secrets ? JSON.parse(options.secrets) : undefined,
+    openAiCompatibleApiKey: options.openAiCompatibleApiKey,
+    clearOpenAiCompatibleApiKey:
+      options.clearOpenAiCompatibleApiKey === true || options.clearOpenAiCompatibleApiKey === 'true',
     mode: options.mode,
     currentTask: options.currentTask,
     currentUserIntent: options.currentUserIntent,
@@ -169,6 +175,9 @@ async function main() {
   const { command, options } = parseArgs(process.argv);
   const commands = {
     dbInfo: (app) => app.dbInfo(),
+    getRuntimeSettings: (app) => app.getRuntimeSettings(),
+    updateRuntimeSettings: (app, coreOptions) => app.updateRuntimeSettings(coreOptions),
+    checkDistillProvider: (app, coreOptions) => app.checkDistillProvider(coreOptions),
     bootstrapContext: (app, coreOptions) => app.bootstrapContext(coreOptions),
     doctorCodexExec: (app, coreOptions) => app.checkCodexExec(coreOptions),
     beginSession: (app, coreOptions) => app.beginSession(coreOptions),
@@ -191,7 +200,9 @@ async function main() {
     rebuildEmbeddings: (app, coreOptions) => app.rebuildEmbeddings(coreOptions),
     processEmbeddingJobs: (app, coreOptions) => app.processEmbeddingJobs(coreOptions),
     listEmbeddingJobs: (app, coreOptions) => app.listEmbeddingJobs(coreOptions),
+    listScopeKeys: (app, coreOptions) => app.listScopeKeys(coreOptions),
     getMemory: (app, coreOptions) => app.getMemory(coreOptions),
+    listMemories: (app, coreOptions) => app.listMemories(coreOptions),
     appendRaw: (app, coreOptions) => app.appendRaw(coreOptions),
     listRawEvents: (app, coreOptions) => app.listRawEvents(coreOptions),
     listCheckpoints: (app, coreOptions) => app.listCheckpoints(coreOptions),

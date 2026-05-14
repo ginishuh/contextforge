@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ContextForge 관리</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>ContextForge</h1>
+        <p id="connection">런타임 불러오는 중...</p>
+      </div>
+      <label class="token">
+        <span>원격 API 토큰</span>
+        <input id="token" type="password" autocomplete="off" placeholder="로그인 세션 사용 시 비워둠" />
+      </label>
+      <form id="loginForm" class="login">
+        <input name="username" autocomplete="username" placeholder="아이디" value="ginishuh" />
+        <input name="password" type="password" autocomplete="current-password" placeholder="비밀번호" />
+        <button type="submit">로그인</button>
+      </form>
+    </header>
+
+    <nav class="tabs" aria-label="관리 메뉴">
+      <button class="active" data-tab="dashboard">대시보드</button>
+      <button data-tab="settings">설정</button>
+      <button data-tab="memory">메모리</button>
+      <button data-tab="runs">실행 기록</button>
+    </nav>
+
+    <main>
+      <section id="dashboard" class="tab active">
+        <div class="grid">
+          <section class="panel">
+            <h2>런타임</h2>
+            <dl id="runtimeSummary"></dl>
+          </section>
+          <section class="panel">
+            <h2>디스틸 정책</h2>
+            <dl id="policySummary"></dl>
+          </section>
+          <section class="panel wide">
+            <h2>최근 실행</h2>
+            <div id="recentRuns" class="table"></div>
+          </section>
+        </div>
+      </section>
+
+      <section id="settings" class="tab">
+        <form id="settingsForm" class="panel form">
+          <div class="row">
+            <label>프로바이더
+              <select name="distillProvider">
+                <option value="codex_exec">codex_exec</option>
+                <option value="openai_compatible">openai_compatible</option>
+                <option value="mock">mock</option>
+              </select>
+            </label>
+          </div>
+          <fieldset class="provider-section" data-provider-section="openai_compatible">
+            <legend>OpenAI 호환 API 설정</legend>
+            <div class="row">
+              <label>프리셋
+                <select name="preset">
+                  <option value="deepseek">DeepSeek V4 Flash</option>
+                  <option value="custom">직접 입력</option>
+                </select>
+              </label>
+              <label>응답 모드
+                <select name="responseFormat">
+                  <option value="json_object">json_object</option>
+                  <option value="json_schema">json_schema</option>
+                  <option value="text">text</option>
+                </select>
+              </label>
+            </div>
+            <div class="row">
+              <label>Base URL <input name="baseUrl" /></label>
+              <label>모델 <input name="model" list="modelPresets" /></label>
+              <datalist id="modelPresets">
+                <option value="deepseek-v4-flash"></option>
+                <option value="deepseek-v4-pro"></option>
+              </datalist>
+            </div>
+            <div class="row">
+              <label>API 키 <input name="apiKey" type="password" autocomplete="off" placeholder="저장 전용" /></label>
+            </div>
+          </fieldset>
+          <fieldset class="provider-section" data-provider-section="codex_exec">
+            <legend>Codex Exec 설정</legend>
+            <div class="row">
+              <label>Codex 명령 <input name="codexCommand" /></label>
+              <label>Codex 모델 <input name="codexModel" placeholder="직접 입력 또는 비움" /></label>
+              <label>추론 강도 <input name="codexReasoningEffort" placeholder="low" /></label>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>디스틸 정책</legend>
+            <div class="row compact">
+              <label>최소 이벤트 수 <input name="minEvents" type="number" min="1" /></label>
+              <label>최소 시간 간격(ms) <input name="minIntervalMs" type="number" min="1" /></label>
+              <label>문자 기준 최소 간격(ms) <input name="charMinIntervalMs" type="number" min="1" /></label>
+              <label>문자 수 기준 <input name="charThreshold" type="number" min="1" /></label>
+              <label>최대 이벤트 수 <input name="maxEvents" type="number" min="1" /></label>
+              <label>최대 입력 문자 수 <input name="maxChars" type="number" min="1" /></label>
+            </div>
+          </fieldset>
+          <div class="actions">
+            <button type="button" id="deepseekPreset">DeepSeek 프리셋</button>
+            <button type="button" id="checkProvider">프로바이더 실사용 테스트</button>
+            <button type="submit" class="primary">설정 저장</button>
+          </div>
+          <pre id="settingsMessage"></pre>
+        </form>
+      </section>
+
+      <section id="memory" class="tab">
+        <section class="panel form">
+          <div class="row">
+            <label>스코프 <select id="memoryScope"><option>repo</option><option>shared</option><option>local</option></select></label>
+            <label>스코프 키 <select id="memoryScopeKey"></select></label>
+            <label>검색 <input id="memoryQuery" /></label>
+            <label>상태 <select id="memoryStatus"><option value="active">활성</option><option value="inactive">비활성</option><option value="all">전체</option></select></label>
+          </div>
+          <div class="actions">
+            <button id="loadMemories">메모리 불러오기</button>
+            <button id="loadCandidates">후보 불러오기</button>
+          </div>
+        </section>
+        <div class="split">
+          <section class="panel">
+            <h2>영구 메모리</h2>
+            <div class="actions bulkbar">
+              <button id="selectAllMemories">전체 선택</button>
+              <button id="clearMemorySelection">선택 해제</button>
+              <button class="danger" id="deactivateSelectedMemories">선택 메모리 비활성화</button>
+            </div>
+            <div id="memories" class="list"></div>
+          </section>
+          <section class="panel">
+            <h2>승격 후보</h2>
+            <div class="actions bulkbar">
+              <button id="selectAllCandidates">전체 선택</button>
+              <button id="clearCandidateSelection">선택 해제</button>
+              <button class="danger" id="rejectSelectedCandidates">선택 후보 거절</button>
+            </div>
+            <div id="candidates" class="list"></div>
+          </section>
+        </div>
+      </section>
+
+      <section id="runs" class="tab">
+        <section class="panel form">
+          <div class="row">
+            <label>스코프 <select id="runScope"><option>repo</option><option>shared</option><option>local</option></select></label>
+            <label>스코프 키 <select id="runScopeKey"></select></label>
+            <label>세션 <input id="runSession" placeholder="선택 사항" /></label>
+          </div>
+          <button id="loadRuns">실행 기록 불러오기</button>
+        </section>
+        <section class="panel">
+          <div id="runsTable" class="table"></div>
+        </section>
+      </section>
+    </main>
+
+    <dialog id="detailDialog">
+      <form method="dialog">
+        <button class="close">닫기</button>
+      </form>
+      <div id="detail"></div>
+    </dialog>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

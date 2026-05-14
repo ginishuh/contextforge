@@ -1,5 +1,6 @@
 import { distillWithMockProvider } from './providers/mock.js';
 import { createCodexExecProvider } from './providers/codex_exec.js';
+import { createOpenAiCompatibleProvider } from './providers/openai_compatible.js';
 
 export function createDistillProvider(name, overrides = {}, options = {}) {
   if (overrides[name]) {
@@ -25,5 +26,14 @@ export function createDistillProvider(name, overrides = {}, options = {}) {
     };
   }
 
-  throw new Error(`Unsupported distill provider "${name}". Available providers: mock, codex_exec.`);
+  if (name === 'openai_compatible') {
+    const distill = createOpenAiCompatibleProvider(options.openAiCompatible);
+    return {
+      name,
+      distill,
+      metadata: distill.metadata,
+    };
+  }
+
+  throw new Error(`Unsupported distill provider "${name}". Available providers: mock, codex_exec, openai_compatible.`);
 }
