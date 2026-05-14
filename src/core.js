@@ -1397,8 +1397,11 @@ export function createContextForge(options = {}) {
       return options.autoPromoteAuditor;
     }
     const audit = getEffectiveRuntime(store).autoPromoteAudit;
-    if (!audit.enabled || audit.provider !== 'codex_exec') {
+    if (!audit.enabled) {
       return null;
+    }
+    if (audit.provider !== 'codex_exec') {
+      throw new Error(`Unsupported auto-promotion audit provider "${audit.provider}".`);
     }
     return createCodexExecAutoPromoteAuditor({
       ...audit,

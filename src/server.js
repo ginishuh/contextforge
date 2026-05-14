@@ -222,15 +222,20 @@ function parseCookies(request) {
   return cookies;
 }
 
-function isAdminSessionAuthorized(request, sessions) {
+function getAdminSessionEntry(request, sessions) {
   const session = parseCookies(request)[ADMIN_COOKIE_NAME];
   const entry = session ? sessions.get(session) : null;
   if (!entry) return false;
   if (Date.now() > entry.expiresAt) {
     sessions.delete(session);
-    return false;
+    return null;
   }
-  return true;
+  return entry;
+}
+
+function isAdminSessionAuthorized(request, sessions) {
+  const entry = getAdminSessionEntry(request, sessions);
+  return Boolean(entry);
 }
 
 function isRequestAuthorized(request, token, sessions) {
@@ -356,6 +361,20 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
 
     if (request.method === 'GET' && requestUrl.pathname === '/healthz') {
       sendJson(response, 200, { ok: true });
+      return;
+    }
+
+    if (request.method === 'GET' && requestUrl.pathname === '/ui/session') {
+      const entry = originMatchesHost(request) ? getAdminSessionEntry(request, adminSessions) : null;
+      if (!entry) {
+        sendJson(response, 401, { ok: false });
+        return;
+      }
+      response.writeHead(200, {
+        'content-type': 'application/json',
+        'cache-control': 'no-store',
+      });
+      response.end(`${JSON.stringify({ ok: true, username: adminUser || '관리자' })}\n`);
       return;
     }
 

@@ -15,6 +15,18 @@ function setLoginState(loggedIn, username = '') {
   $('#loginMessage').textContent = loggedIn ? `${username || '관리자'} 로그인됨` : '';
 }
 
+async function refreshDashboardRuns() {
+  await loadRuns('#recentRuns', dashboardRunScope());
+}
+
+async function restoreLoginSession() {
+  const response = await fetch('/ui/session', { method: 'GET' }).catch(() => null);
+  if (!response?.ok) return false;
+  const body = await response.json().catch(() => ({}));
+  setLoginState(true, body.username || '관리자');
+  return true;
+}
+
 $('#loginForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
@@ -27,13 +39,14 @@ $('#loginForm').addEventListener('submit', async (event) => {
       password: form.password.value,
     }),
   });
+  form.password.value = '';
   if (!response.ok) {
     $('#connection').textContent = '로그인 실패';
     return;
   }
-  form.password.value = '';
   setLoginState(true, username);
   await refreshRuntime();
+  await refreshDashboardRuns();
 });
 
 $('#logoutButton').addEventListener('click', async () => {
@@ -513,8 +526,10 @@ document.querySelectorAll('.tabs button').forEach((button) => {
   });
 });
 
-refreshRuntime()
-  .then(() => loadRuns('#recentRuns', dashboardRunScope()).catch(() => {}))
+restoreLoginSession()
+  .catch(() => false)
+  .then(() => refreshRuntime())
+  .then(() => refreshDashboardRuns().catch(() => {}))
   .catch((error) => {
     $('#connection').textContent = error.message;
   });

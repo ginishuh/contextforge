@@ -5467,6 +5467,65 @@ test('autoPromoteMemoryCandidates keeps candidates pending when audit runner fai
   assert.equal(app.getMemory({ scope: 'repo', scopeKey: 'audit-fail-repo', key: 'audit-failed-runbook' }), null);
 });
 
+test('autoPromoteMemoryCandidates rejects unsupported audit providers', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'unsupported_audit_provider',
+      CONTEXTFORGE_AUTO_PROMOTE_ENABLED: 'true',
+      CONTEXTFORGE_AUTO_PROMOTE_AUDIT_PROVIDER: 'unknown_audit',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      unsupported_audit_provider: async () => ({
+        summaryShort: 'Unsupported audit provider checkpoint.',
+        summaryText: 'Closeout produced a candidate while audit is misconfigured.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'unsupported-audit-runbook',
+            content: 'The runbook should not promote when audit provider is unsupported.',
+            category: 'runbook',
+            candidateType: 'runbook',
+            confidence: 0.96,
+            stability: 0.96,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+        ],
+      }),
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'unsupported-audit-repo',
+    sessionId: 'unsupported-audit-session',
+    role: 'assistant',
+    content: 'Unsupported audit provider candidate.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'unsupported-audit-repo',
+    sessionId: 'unsupported-audit-session',
+  });
+
+  await assert.rejects(
+    () =>
+      app.autoPromoteMemoryCandidates({
+        scope: 'repo',
+        scopeKey: 'unsupported-audit-repo',
+        sessionId: 'unsupported-audit-session',
+        trigger: 'manual_closeout',
+        dryRun: false,
+      }),
+    /Unsupported auto-promotion audit provider/,
+  );
+  assert.equal(app.getMemory({ scope: 'repo', scopeKey: 'unsupported-audit-repo', key: 'unsupported-audit-runbook' }), null);
+});
+
 test('preference candidates record merged occurrences across checkpoints', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({
@@ -6783,6 +6842,12 @@ test('HTTP server accepts admin UI login sessions', async () => {
     assert.equal(login.headers.get('cache-control'), 'no-store');
     const cookie = login.headers.get('set-cookie');
     assert.match(cookie, /contextforge_admin=/);
+    const session = await fetch(`${remote.url}/ui/session`, {
+      headers: { cookie },
+    });
+    assert.equal(session.status, 200);
+    assert.equal(session.headers.get('cache-control'), 'no-store');
+    assert.deepEqual(await session.json(), { ok: true, username: 'ginishuh' });
     const info = await fetch(`${remote.url}/v0/dbInfo`, {
       method: 'POST',
       headers: {
