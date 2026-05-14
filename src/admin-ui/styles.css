@@ -40,6 +40,17 @@ h2 { font-size: 15px; margin-bottom: 12px; }
 }
 .login input { min-width: 0; }
 .login button { background: #ffffff; color: #18202d; }
+.login-status {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  color: #dce5f3;
+}
+.login-status[hidden] { display: none; }
+.login-status button {
+  background: #ffffff;
+  color: #18202d;
+}
 .token input, input, select, textarea {
   width: 100%;
   border: 1px solid var(--line);

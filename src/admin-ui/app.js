@@ -9,14 +9,21 @@ const state = {
 const $ = (selector) => document.querySelector(selector);
 const tokenInput = $('#token');
 
+function setLoginState(loggedIn, username = '') {
+  $('#loginForm').hidden = loggedIn;
+  $('#loginStatus').hidden = !loggedIn;
+  $('#loginMessage').textContent = loggedIn ? `${username || '관리자'} 로그인됨` : '';
+}
+
 $('#loginForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
+  const username = form.username.value.trim();
   const response = await fetch('/ui/login', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      username: form.username.value,
+      username,
       password: form.password.value,
     }),
   });
@@ -25,7 +32,14 @@ $('#loginForm').addEventListener('submit', async (event) => {
     return;
   }
   form.password.value = '';
+  setLoginState(true, username);
   await refreshRuntime();
+});
+
+$('#logoutButton').addEventListener('click', async () => {
+  await fetch('/ui/logout', { method: 'POST' }).catch(() => {});
+  setLoginState(false);
+  $('#connection').textContent = '로그아웃됨';
 });
 
 function headers() {
