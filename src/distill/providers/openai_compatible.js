@@ -97,7 +97,7 @@ function requestBody({ prompt, model, preset, responseFormatMode, maxTokens }) {
   const format = responseFormat(responseFormatMode);
   if (format) body.response_format = format;
   if (maxTokens) body.max_tokens = maxTokens;
-  if (preset === 'deepseek' || model.startsWith('deepseek-v4-')) {
+  if (preset === 'deepseek' && model === 'deepseek-v4-flash') {
     body.thinking = { type: 'disabled' };
   }
   return body;
@@ -192,6 +192,7 @@ export function createOpenAiCompatibleProvider(options = {}) {
       };
       responseBody = await postJson({ fetchImpl, url, apiKey, body: repairBody, timeoutMs });
       parsed = parseJsonText(completionText(responseBody));
+      validateDistillOutput(parsed.output);
     }
 
     return {

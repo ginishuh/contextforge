@@ -266,10 +266,11 @@ Use `examples/server.env.example` as the public template. Example contents:
 CONTEXTFORGE_REMOTE_HOST=127.0.0.1
 CONTEXTFORGE_REMOTE_PORT=8765
 CONTEXTFORGE_REMOTE_TOKEN=change-me
-# Optional admin UI login. Generate a PBKDF2 value with the documented helper or
-# leave unset to disable password login and use bearer-token API access only.
-CONTEXTFORGE_ADMIN_USER=admin
-CONTEXTFORGE_ADMIN_PASSWORD_PBKDF2=310000:saltHex:hashHex
+# Optional admin UI login. Leave unset to disable password login and use
+# bearer-token API access only. The password value is PBKDF2:
+# iterations:saltHex:hashHex
+# CONTEXTFORGE_ADMIN_USER=admin
+# CONTEXTFORGE_ADMIN_PASSWORD_PBKDF2=
 CONTEXTFORGE_SERVER_STORAGE_MODE=local
 CONTEXTFORGE_DATA_DIR=/var/lib/contextforge
 CONTEXTFORGE_RAW_TTL_DAYS=30

@@ -1231,6 +1231,24 @@ const DISTILL_MODEL_PRESETS = {
       model: 'deepseek-v4-flash',
       responseFormat: 'json_object',
     },
+    deepseekPro: {
+      label: 'DeepSeek V4 Pro',
+      baseUrl: 'https://api.deepseek.com',
+      model: 'deepseek-v4-pro',
+      responseFormat: 'json_object',
+    },
+    deepseekChat: {
+      label: 'DeepSeek Chat',
+      baseUrl: 'https://api.deepseek.com',
+      model: 'deepseek-chat',
+      responseFormat: 'json_object',
+    },
+    deepseekReasoner: {
+      label: 'DeepSeek Reasoner',
+      baseUrl: 'https://api.deepseek.com',
+      model: 'deepseek-reasoner',
+      responseFormat: 'json_object',
+    },
     custom: {
       label: 'Custom OpenAI-compatible',
       baseUrl: '',
@@ -1242,6 +1260,26 @@ const DISTILL_MODEL_PRESETS = {
     configured: {
       label: 'Configured Codex model',
       model: null,
+    },
+    gpt55: {
+      label: 'GPT-5.5',
+      model: 'gpt-5.5',
+      reasoningEffort: 'low',
+    },
+    gpt54: {
+      label: 'GPT-5.4',
+      model: 'gpt-5.4',
+      reasoningEffort: 'low',
+    },
+    gpt54Mini: {
+      label: 'GPT-5.4 Mini',
+      model: 'gpt-5.4-mini',
+      reasoningEffort: 'low',
+    },
+    codex: {
+      label: 'GPT-5.3 Codex',
+      model: 'gpt-5.3-codex',
+      reasoningEffort: 'low',
     },
     manual: {
       label: 'Manual Codex model',
@@ -2498,6 +2536,7 @@ export function createContextForge(options = {}) {
             realPromotionEnabled: config.autoPromote.enabled,
             audit: {
               enabled: Boolean(auditor),
+              executed: !dryRun && Boolean(auditor),
               provider: auditor?.metadata?.provider || 'none',
               model: auditor?.metadata?.model || null,
               reasoningEffort: auditor?.metadata?.reasoningEffort || null,

@@ -17,7 +17,7 @@
         <input id="token" type="password" autocomplete="off" placeholder="로그인 세션 사용 시 비워둠" />
       </label>
       <form id="loginForm" class="login">
-        <input name="username" autocomplete="username" placeholder="아이디" value="ginishuh" />
+        <input name="username" autocomplete="username" placeholder="아이디" />
         <input name="password" type="password" autocomplete="current-password" placeholder="비밀번호" />
         <button type="submit">로그인</button>
       </form>
@@ -65,6 +65,9 @@
               <label>프리셋
                 <select name="preset">
                   <option value="deepseek">DeepSeek V4 Flash</option>
+                  <option value="deepseekPro">DeepSeek V4 Pro</option>
+                  <option value="deepseekChat">DeepSeek Chat</option>
+                  <option value="deepseekReasoner">DeepSeek Reasoner</option>
                   <option value="custom">직접 입력</option>
                 </select>
               </label>
@@ -78,22 +81,42 @@
             </div>
             <div class="row">
               <label>Base URL <input name="baseUrl" /></label>
-              <label>모델 <input name="model" list="modelPresets" /></label>
+              <label>디스틸 모델 <input name="model" list="modelPresets" placeholder="프리셋 선택 또는 직접 입력" /></label>
               <datalist id="modelPresets">
                 <option value="deepseek-v4-flash"></option>
                 <option value="deepseek-v4-pro"></option>
+                <option value="deepseek-chat"></option>
+                <option value="deepseek-reasoner"></option>
               </datalist>
             </div>
             <div class="row">
+              <label>제한 시간(ms) <input name="openAiTimeoutMs" type="number" min="1" /></label>
+              <label>최대 입력 문자 수 <input name="openAiMaxInputChars" type="number" min="1" /></label>
+              <label>최대 출력 토큰 <input name="openAiMaxTokens" type="number" min="1" placeholder="비우면 기본값" /></label>
+            </div>
+            <div class="row">
               <label>API 키 <input name="apiKey" type="password" autocomplete="off" placeholder="저장 전용" /></label>
+              <label class="checkbox"><input name="clearApiKey" type="checkbox" /> 저장된 API 키 지우기</label>
             </div>
           </fieldset>
           <fieldset class="provider-section" data-provider-section="codex_exec">
             <legend>Codex Exec 설정</legend>
             <div class="row">
               <label>Codex 명령 <input name="codexCommand" /></label>
-              <label>Codex 모델 <input name="codexModel" placeholder="직접 입력 또는 비움" /></label>
+              <label>디스틸 모델 <input name="codexModel" list="codexModelPresets" placeholder="프리셋 선택 또는 직접 입력" /></label>
+              <datalist id="codexModelPresets">
+                <option value="gpt-5.5"></option>
+                <option value="gpt-5.4"></option>
+                <option value="gpt-5.4-mini"></option>
+                <option value="gpt-5.3-codex"></option>
+              </datalist>
               <label>추론 강도 <input name="codexReasoningEffort" placeholder="low" /></label>
+            </div>
+            <div class="row">
+              <label>샌드박스 <input name="codexSandbox" placeholder="read-only" /></label>
+              <label>실행 위치 <input name="codexCwd" placeholder="비우면 서버 기본값" /></label>
+              <label>제한 시간(ms) <input name="codexTimeoutMs" type="number" min="1" /></label>
+              <label>최대 입력 문자 수 <input name="codexMaxInputChars" type="number" min="1" /></label>
             </div>
           </fieldset>
           <fieldset>
@@ -108,7 +131,7 @@
             </div>
             <div class="row">
               <label>감사 Codex 명령 <input name="auditCommand" /></label>
-              <label>감사 모델 <input name="auditModel" placeholder="gpt-5.5" /></label>
+              <label>감사 모델 <input name="auditModel" list="codexModelPresets" placeholder="gpt-5.5" /></label>
               <label>감사 추론 강도 <input name="auditReasoningEffort" placeholder="low" /></label>
               <label>감사 제한 시간(ms) <input name="auditTimeoutMs" type="number" min="1" /></label>
             </div>

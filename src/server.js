@@ -59,6 +59,7 @@ async function sendStaticUi(requestUrl, response) {
     const content = await fs.readFile(filePath);
     response.writeHead(200, {
       'content-type': UI_TYPES[path.extname(filePath)] || 'application/octet-stream',
+      'cache-control': 'no-store',
     });
     response.end(content);
   } catch (error) {
@@ -384,6 +385,7 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
         adminSessions.set(session, { createdAt: Date.now(), expiresAt: Date.now() + adminSessionTtlMs });
         response.writeHead(200, {
           'content-type': 'application/json',
+          'cache-control': 'no-store',
           'set-cookie': makeCookie(ADMIN_COOKIE_NAME, session, {
             maxAge: Math.ceil(adminSessionTtlMs / 1000),
             secure: adminCookieSecure,
@@ -401,6 +403,7 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
       if (session) adminSessions.delete(session);
       response.writeHead(200, {
         'content-type': 'application/json',
+        'cache-control': 'no-store',
         'set-cookie': makeCookie(ADMIN_COOKIE_NAME, '', { maxAge: 0, secure: adminCookieSecure }),
       });
       response.end('{"ok":true}\n');

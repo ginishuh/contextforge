@@ -8,8 +8,6 @@ const state = {
 
 const $ = (selector) => document.querySelector(selector);
 const tokenInput = $('#token');
-tokenInput.value = localStorage.getItem('contextforgeToken') || '';
-tokenInput.addEventListener('input', () => localStorage.setItem('contextforgeToken', tokenInput.value));
 
 $('#loginForm').addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -134,9 +132,16 @@ function fillSettingsForm() {
   form.baseUrl.value = effective.openAiCompatible.baseUrl || '';
   form.model.value = effective.openAiCompatible.model || '';
   form.responseFormat.value = effective.openAiCompatible.responseFormat || 'json_object';
+  form.openAiTimeoutMs.value = effective.openAiCompatible.timeoutMs || 120000;
+  form.openAiMaxInputChars.value = effective.openAiCompatible.maxInputChars || 12000;
+  form.openAiMaxTokens.value = effective.openAiCompatible.maxTokens || '';
   form.codexCommand.value = effective.codexExec.command || 'codex';
   form.codexModel.value = effective.codexExec.model || '';
   form.codexReasoningEffort.value = effective.codexExec.reasoningEffort || '';
+  form.codexSandbox.value = effective.codexExec.sandbox || 'read-only';
+  form.codexCwd.value = effective.codexExec.cwd || '';
+  form.codexTimeoutMs.value = effective.codexExec.timeoutMs || 120000;
+  form.codexMaxInputChars.value = effective.codexExec.maxInputChars || 12000;
   form.auditEnabled.checked = effective.autoPromoteAudit.enabled !== false;
   form.auditProvider.value = effective.autoPromoteAudit.provider || 'codex_exec';
   form.auditCommand.value = effective.autoPromoteAudit.command || 'codex';
@@ -155,6 +160,18 @@ function updateProviderSections() {
     section.hidden = section.dataset.providerSection !== provider;
   });
   $('#deepseekPreset').hidden = provider !== 'openai_compatible';
+}
+
+function applyOpenAiPreset(presetKey) {
+  const preset = state.runtime?.effective?.presets?.openai_compatible?.[presetKey];
+  if (!preset || presetKey === 'custom') return;
+  const form = $('#settingsForm');
+  form.baseUrl.value = preset.baseUrl || '';
+  form.model.value = preset.model || '';
+  form.responseFormat.value = preset.responseFormat || 'json_object';
+  form.openAiTimeoutMs.value = 120000;
+  form.openAiMaxInputChars.value = 12000;
+  form.openAiMaxTokens.value = '';
 }
 
 function scopeKeyLabel(item) {
@@ -220,6 +237,9 @@ $('#settingsForm').addEventListener('submit', async (event) => {
       baseUrl: form.baseUrl.value,
       model: form.model.value,
       responseFormat: form.responseFormat.value,
+      timeoutMs: formNumber(form, 'openAiTimeoutMs') || 120000,
+      maxInputChars: formNumber(form, 'openAiMaxInputChars') || 12000,
+      maxTokens: formNumber(form, 'openAiMaxTokens') || null,
     };
   }
   if (form.distillProvider.value === 'codex_exec') {
@@ -227,14 +247,25 @@ $('#settingsForm').addEventListener('submit', async (event) => {
       command: form.codexCommand.value,
       model: form.codexModel.value || null,
       reasoningEffort: form.codexReasoningEffort.value || null,
+      sandbox: form.codexSandbox.value || 'read-only',
+      timeoutMs: formNumber(form, 'codexTimeoutMs') || 120000,
+      maxInputChars: formNumber(form, 'codexMaxInputChars') || 12000,
     };
+    if (form.codexCwd.value.trim()) {
+      values.codexExec.cwd = form.codexCwd.value.trim();
+    }
   }
   const secrets = {};
+  const clearSecrets = [];
   if (form.distillProvider.value === 'openai_compatible' && form.apiKey.value.trim()) {
     secrets.openAiCompatibleApiKey = form.apiKey.value.trim();
   }
-  const result = await call('updateRuntimeSettings', { values, secrets });
+  if (form.clearApiKey.checked) {
+    clearSecrets.push('openAiCompatibleApiKey');
+  }
+  const result = await call('updateRuntimeSettings', { values, secrets, clearSecrets });
   form.apiKey.value = '';
+  form.clearApiKey.checked = false;
   $('#settingsMessage').textContent = JSON.stringify(result.effective, null, 2);
   await refreshRuntime();
 });
@@ -243,9 +274,7 @@ $('#deepseekPreset').addEventListener('click', () => {
   const form = $('#settingsForm');
   form.distillProvider.value = 'openai_compatible';
   form.preset.value = 'deepseek';
-  form.baseUrl.value = 'https://api.deepseek.com';
-  form.model.value = 'deepseek-v4-flash';
-  form.responseFormat.value = 'json_object';
+  applyOpenAiPreset('deepseek');
   updateProviderSections();
 });
 
@@ -255,6 +284,7 @@ $('#checkProvider').addEventListener('click', async () => {
 });
 
 $('#settingsForm').distillProvider.addEventListener('change', updateProviderSections);
+$('#settingsForm').preset.addEventListener('change', (event) => applyOpenAiPreset(event.target.value));
 $('#memoryScope').addEventListener('change', () => fillScopeKeySelect($('#memoryScopeKey'), $('#memoryScope').value));
 $('#runScope').addEventListener('change', () => fillScopeKeySelect($('#runScopeKey'), $('#runScope').value));
 
@@ -323,7 +353,7 @@ $('#loadMemories').addEventListener('click', async (event) => {
 
 function memoryItem(memory, index) {
   return `<article class="item">
-    <header><span class="item-title"><input type="checkbox" data-memory-select="${index}" aria-label="메모리 선택" /><strong>${escapeHtml(memory.key)}</strong></span><span class="muted">${escapeHtml(memory.category)} · ${memory.importance}</span></header>
+    <header><span class="item-title"><input type="checkbox" data-memory-select="${index}" aria-label="메모리 선택" /><strong>${escapeHtml(memory.key)}</strong></span><span class="muted">${escapeHtml(memory.category)} · ${escapeHtml(memory.importance)}</span></header>
     <p>${escapeHtml(memory.content.slice(0, 280))}</p>
     <div class="actions">
       <button data-memory="${index}">상세</button>

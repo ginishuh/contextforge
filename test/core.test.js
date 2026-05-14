@@ -4114,6 +4114,12 @@ test('runtime settings are DB-backed, redacted, and hot-apply to session status'
       }),
     /write-only secrets channel/,
   );
+  const cleared = app.updateRuntimeSettings({
+    clearSecrets: ['openAiCompatibleApiKey'],
+  });
+  assert.equal(cleared.effective.openAiCompatible.secretPresent, false);
+  assert.equal(cleared.effective.openAiCompatible.apiKey, undefined);
+  assert.equal(cleared.stored['openAiCompatible.apiKey'], undefined);
 
   app.appendRaw({
     scope: 'repo',
@@ -4223,11 +4229,107 @@ test('openai_compatible provider distills through a fake DeepSeek-style chat com
 
   assert.equal(requestBody.model, 'manual-model');
   assert.deepEqual(requestBody.response_format, { type: 'json_object' });
-  assert.equal(requestBody.thinking.type, 'disabled');
+  assert.equal(requestBody.thinking, undefined);
   assert.equal(checkpoint.provider, 'openai_compatible');
   assert.equal(checkpoint.metadata.providerMetadata.openAiCompatible.baseUrlHost, 'api.deepseek.com');
   assert.equal(checkpoint.metadata.providerMetadata.openAiCompatible.model, 'manual-model');
   assert.equal(checkpoint.metadata.providerMetadata.openAiCompatible.usage.total_tokens, 20);
+});
+
+test('openai_compatible provider repairs invalid JSON output and records retry metadata', async () => {
+  const dataDir = await makeTempDir();
+  const requests = [];
+  const validOutput = {
+    summaryShort: 'Repaired OpenAI-compatible checkpoint.',
+    summaryText: 'The repair retry returned the complete checkpoint schema.',
+    workingSummary: 'Current state: repair retry is under test.',
+    sessionWorkingContext: {
+      mode: 'task_execution',
+      currentTask: 'Test repair retry',
+      currentUserIntent: 'Verify OpenAI-compatible repair validation',
+      targetSubject: null,
+      sourceSubject: null,
+      lastUserCorrection: null,
+      openQuestion: null,
+      nonGoals: [],
+      avoidMisreadings: [],
+      confidence: 0.88,
+    },
+    decisions: ['Re-validate repaired provider output before accepting it.'],
+    todos: [],
+    openQuestions: [],
+    memoryCandidates: [],
+    sourceEventCount: 1,
+    provider: 'openai_compatible',
+    metadata: {
+      retrievalHooks: ['repair-retry'],
+    },
+  };
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+    },
+    cwd: process.cwd(),
+    fetchImpl: async (url, request) => {
+      requests.push(JSON.parse(request.body));
+      return {
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content:
+                    requests.length === 1
+                      ? '{"summaryShort":"missing required fields"}'
+                      : JSON.stringify(validOutput),
+                },
+              },
+            ],
+            usage: {
+              prompt_tokens: 20,
+              completion_tokens: 10,
+              total_tokens: 30,
+            },
+          }),
+      };
+    },
+  });
+  app.updateRuntimeSettings({
+    values: {
+      distillProvider: 'openai_compatible',
+      openAiCompatible: {
+        preset: 'deepseek',
+        baseUrl: 'https://api.deepseek.com',
+        model: 'deepseek-v4-flash',
+        responseFormat: 'json_object',
+      },
+    },
+    secrets: {
+      openAiCompatibleApiKey: 'deepseek-secret',
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repair-openai-compatible-repo',
+    sessionId: 'repair-openai-compatible-session',
+    role: 'user',
+    content: 'Provider should repair an incomplete checkpoint.',
+  });
+
+  const checkpoint = await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'repair-openai-compatible-repo',
+    sessionId: 'repair-openai-compatible-session',
+  });
+
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].thinking.type, 'disabled');
+  assert.match(requests[1].messages.at(-1).content, /failed validation/);
+  assert.equal(checkpoint.summaryShort, 'Repaired OpenAI-compatible checkpoint.');
+  assert.equal(checkpoint.metadata.providerMetadata.openAiCompatible.retryCount, 1);
+  assert.match(checkpoint.metadata.providerMetadata.openAiCompatible.validationFailure, /Provider output field/);
 });
 
 test('openai_compatible provider preserves raw evidence when provider output is malformed', async () => {
@@ -5260,6 +5362,67 @@ test('autoPromoteMemoryCandidates skips candidates rejected by the audit runner'
     status: 'pending',
   });
   assert.equal(candidates.length, 1);
+});
+
+test('autoPromoteMemoryCandidates keeps candidates pending when audit runner fails', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'audit_fail_provider',
+      CONTEXTFORGE_AUTO_PROMOTE_ENABLED: 'true',
+    },
+    cwd: process.cwd(),
+    autoPromoteAuditor: async () => {
+      throw new Error('audit runner unavailable');
+    },
+    distillProviders: {
+      audit_fail_provider: async () => ({
+        summaryShort: 'Audit failed checkpoint.',
+        summaryText: 'Closeout produced a candidate that local checks would otherwise promote.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'audit-failed-runbook',
+            content: 'The runbook requires audit success before automatic durable promotion.',
+            category: 'runbook',
+            candidateType: 'runbook',
+            confidence: 0.96,
+            stability: 0.96,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+        ],
+      }),
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'audit-fail-repo',
+    sessionId: 'audit-fail-session',
+    role: 'assistant',
+    content: 'Audit failure candidate.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'audit-fail-repo',
+    sessionId: 'audit-fail-session',
+  });
+
+  const result = await app.autoPromoteMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'audit-fail-repo',
+    sessionId: 'audit-fail-session',
+    trigger: 'manual_closeout',
+    dryRun: false,
+  });
+
+  assert.deepEqual(result.promoted, []);
+  assert.equal(result.skipped[0].reason, 'audit_needs_review: audit_failed');
+  assert.match(result.skipped[0].audit.reason, /audit runner unavailable/);
+  assert.equal(app.getMemory({ scope: 'repo', scopeKey: 'audit-fail-repo', key: 'audit-failed-runbook' }), null);
 });
 
 test('preference candidates record merged occurrences across checkpoints', async () => {
@@ -6547,6 +6710,7 @@ test('HTTP server serves admin UI assets', async () => {
   try {
     const response = await fetch(`${remote.url}/ui/`);
     assert.equal(response.status, 200);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
     assert.match(await response.text(), /ContextForge 관리/);
   } finally {
     await remote.close();
@@ -6574,6 +6738,7 @@ test('HTTP server accepts admin UI login sessions', async () => {
       body: JSON.stringify({ username: 'ginishuh', password }),
     });
     assert.equal(login.status, 200);
+    assert.equal(login.headers.get('cache-control'), 'no-store');
     const cookie = login.headers.get('set-cookie');
     assert.match(cookie, /contextforge_admin=/);
     const info = await fetch(`${remote.url}/v0/dbInfo`, {
