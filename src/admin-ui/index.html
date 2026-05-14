@@ -97,6 +97,23 @@
             </div>
           </fieldset>
           <fieldset>
+            <legend>자동승격 감사 설정</legend>
+            <div class="row">
+              <label class="checkbox"><input name="auditEnabled" type="checkbox" /> 감사 사용</label>
+              <label>감사 프로바이더
+                <select name="auditProvider">
+                  <option value="codex_exec">codex_exec</option>
+                </select>
+              </label>
+            </div>
+            <div class="row">
+              <label>감사 Codex 명령 <input name="auditCommand" /></label>
+              <label>감사 모델 <input name="auditModel" placeholder="gpt-5.5" /></label>
+              <label>감사 추론 강도 <input name="auditReasoningEffort" placeholder="low" /></label>
+              <label>감사 제한 시간(ms) <input name="auditTimeoutMs" type="number" min="1" /></label>
+            </div>
+          </fieldset>
+          <fieldset>
             <legend>디스틸 정책</legend>
             <div class="row compact">
               <label>최소 이벤트 수 <input name="minEvents" type="number" min="1" /></label>

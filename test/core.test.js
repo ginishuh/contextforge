@@ -5036,6 +5036,17 @@ test('autoPromoteMemoryCandidates promotes only strict safe candidates when enab
     embeddingProviders: {
       openai: embeddingProvider,
     },
+    autoPromoteAuditor: async () => ({
+      approved: true,
+      decision: 'approve',
+      reason: 'Test auditor approved strict safe candidate.',
+      riskCodes: [],
+      metadata: {
+        provider: 'codex_exec',
+        model: 'gpt-5.5',
+        reasoningEffort: 'low',
+      },
+    }),
     distillProviders: {
       auto_enabled_provider: async () => ({
         summaryShort: 'Auto enabled checkpoint.',
@@ -5142,6 +5153,7 @@ test('autoPromoteMemoryCandidates promotes only strict safe candidates when enab
   const promotedCandidates = app.listMemoryCandidates({ scope: 'repo', scopeKey: 'auto-enabled-repo', status: 'promoted' });
   assert.equal(promotedCandidates.length, 2);
   assert.ok(promotedCandidates.every((candidate) => candidate.reviewMetadata.autoPromoted === true));
+  assert.ok(promotedCandidates.every((candidate) => candidate.reviewMetadata.autoPromotionAudit?.metadata?.model === 'gpt-5.5'));
   assert.deepEqual(
     promotedCandidates.map((candidate) => candidate.reviewMetadata.memoryId).sort(),
     result.promoted.map((item) => item.memoryId).sort(),
@@ -5172,6 +5184,82 @@ test('autoPromoteMemoryCandidates promotes only strict safe candidates when enab
   );
   assert.ok(safeApiMemoryResult, 'expected safe-api-contract memory result');
   assert.equal(safeApiMemoryResult.retrieval.vectorModel, 'test-embedding');
+});
+
+test('autoPromoteMemoryCandidates skips candidates rejected by the audit runner', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'audit_reject_provider',
+      CONTEXTFORGE_AUTO_PROMOTE_ENABLED: 'true',
+    },
+    cwd: process.cwd(),
+    autoPromoteAuditor: async () => ({
+      approved: false,
+      decision: 'needs_review',
+      reason: 'Candidate is plausible but needs human review.',
+      riskCodes: ['needs_human_review'],
+      metadata: {
+        provider: 'codex_exec',
+        model: 'gpt-5.5',
+        reasoningEffort: 'low',
+      },
+    }),
+    distillProviders: {
+      audit_reject_provider: async () => ({
+        summaryShort: 'Audit rejected checkpoint.',
+        summaryText: 'Closeout produced a candidate that local checks would otherwise promote.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'audit-gated-runbook',
+            content: 'The runbook requires audit approval before automatic durable promotion.',
+            category: 'runbook',
+            candidateType: 'runbook',
+            confidence: 0.96,
+            stability: 0.96,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+        ],
+      }),
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'audit-reject-repo',
+    sessionId: 'audit-reject-session',
+    role: 'assistant',
+    content: 'Audit-gated candidate.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'audit-reject-repo',
+    sessionId: 'audit-reject-session',
+  });
+
+  const result = await app.autoPromoteMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'audit-reject-repo',
+    sessionId: 'audit-reject-session',
+    trigger: 'manual_closeout',
+    dryRun: false,
+  });
+
+  assert.deepEqual(result.promoted, []);
+  assert.equal(result.skipped.length, 1);
+  assert.equal(result.skipped[0].reason, 'audit_needs_review: needs_human_review');
+  assert.equal(result.skipped[0].audit.metadata.model, 'gpt-5.5');
+  assert.equal(app.getMemory({ scope: 'repo', scopeKey: 'audit-reject-repo', key: 'audit-gated-runbook' }), null);
+  const candidates = app.listMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'audit-reject-repo',
+    status: 'pending',
+  });
+  assert.equal(candidates.length, 1);
 });
 
 test('preference candidates record merged occurrences across checkpoints', async () => {
@@ -6459,7 +6547,7 @@ test('HTTP server serves admin UI assets', async () => {
   try {
     const response = await fetch(`${remote.url}/ui/`);
     assert.equal(response.status, 200);
-    assert.match(await response.text(), /ContextForge Admin/);
+    assert.match(await response.text(), /ContextForge 관리/);
   } finally {
     await remote.close();
   }

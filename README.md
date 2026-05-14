@@ -288,8 +288,13 @@ CONTEXTFORGE_EMBEDDINGS_DIMENSIONS=1536
 CONTEXTFORGE_EMBEDDINGS_TIMEOUT_MS=30000
 CONTEXTFORGE_EMBEDDINGS_STALE_AFTER_MS=600000
 # Keep false unless this trusted deployment should allow dryRun=false
-# closeout-scoped safe auto-promotion.
+# closeout-scoped safe auto-promotion. Real auto-promotion uses a separate
+# audit runner before writing durable memory.
 CONTEXTFORGE_AUTO_PROMOTE_ENABLED=false
+CONTEXTFORGE_AUTO_PROMOTE_AUDIT_ENABLED=true
+CONTEXTFORGE_AUTO_PROMOTE_AUDIT_PROVIDER=codex_exec
+CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_MODEL=gpt-5.5
+CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_REASONING_EFFORT=low
 ```
 
 The default and recommended embedding model is `text-embedding-3-small`.
@@ -300,7 +305,11 @@ not support that request field and must return the configured dimension count.
 embedding job is returned to `pending`; the default is 10 minutes.
 `CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true` is required before
 `auto_promote_memory_candidates` can run with `dryRun=false`; even then, the
-tool only promotes strict closeout-scoped safe candidates.
+tool only promotes strict closeout-scoped safe candidates. When real
+auto-promotion is enabled, `CONTEXTFORGE_AUTO_PROMOTE_AUDIT_ENABLED=true`
+uses a separate audit runner before the durable memory write. The default audit
+runner is `codex_exec` with `gpt-5.5` and reasoning effort `low`, independent
+from the distillation runner.
 
 Use a long random token and store the same value on client machines as
 `CONTEXTFORGE_REMOTE_TOKEN`. Treat this token as an administrator credential:
@@ -1313,6 +1322,23 @@ Optional environment variables:
   `12000`.
 - `CONTEXTFORGE_CODEX_EXEC_CWD`: working directory passed to `codex exec --cd`.
   Default: current working directory.
+
+Auto-promotion audit runner variables are intentionally separate from the
+distillation runner:
+
+- `CONTEXTFORGE_AUTO_PROMOTE_AUDIT_ENABLED`: set to `false` to disable the
+  audit gate and rely only on local strict checks. Default: enabled.
+- `CONTEXTFORGE_AUTO_PROMOTE_AUDIT_PROVIDER`: currently `codex_exec`.
+- `CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_COMMAND`: Codex executable for the
+  audit runner. Defaults to `CONTEXTFORGE_CODEX_EXEC_COMMAND` or `codex`.
+- `CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_MODEL`: audit model. Default:
+  `gpt-5.5`.
+- `CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_REASONING_EFFORT`: audit reasoning
+  effort. Default: `low`.
+- `CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_SANDBOX`: sandbox for the audit
+  runner. Default: `read-only`.
+- `CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_TIMEOUT_MS`: audit timeout. Default:
+  `120000`.
 
 Failure modes are preserved as distillation runs. If `codex exec` exits
 non-zero, times out, or returns malformed JSON, ContextForge records a failed

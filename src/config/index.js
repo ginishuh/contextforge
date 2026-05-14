@@ -232,6 +232,22 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
     },
     autoPromote: {
       enabled: parseBoolean(env.CONTEXTFORGE_AUTO_PROMOTE_ENABLED),
+      audit: {
+        enabled: env.CONTEXTFORGE_AUTO_PROMOTE_AUDIT_ENABLED !== 'false',
+        provider: env.CONTEXTFORGE_AUTO_PROMOTE_AUDIT_PROVIDER || 'codex_exec',
+        command: env.CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_COMMAND || env.CONTEXTFORGE_CODEX_EXEC_COMMAND || 'codex',
+        model: env.CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_MODEL || 'gpt-5.5',
+        reasoningEffort: env.CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_REASONING_EFFORT || 'low',
+        sandbox: env.CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_SANDBOX || 'read-only',
+        cwd: env.CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_CWD
+          ? path.resolve(resolvedCwd, env.CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_CWD)
+          : resolvedCwd,
+        timeoutMs: parsePositiveInteger(
+          env.CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_TIMEOUT_MS,
+          'CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_TIMEOUT_MS',
+          120000,
+        ),
+      },
     },
     codexExec: {
       command: env.CONTEXTFORGE_CODEX_EXEC_COMMAND || 'codex',

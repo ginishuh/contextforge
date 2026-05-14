@@ -137,6 +137,12 @@ function fillSettingsForm() {
   form.codexCommand.value = effective.codexExec.command || 'codex';
   form.codexModel.value = effective.codexExec.model || '';
   form.codexReasoningEffort.value = effective.codexExec.reasoningEffort || '';
+  form.auditEnabled.checked = effective.autoPromoteAudit.enabled !== false;
+  form.auditProvider.value = effective.autoPromoteAudit.provider || 'codex_exec';
+  form.auditCommand.value = effective.autoPromoteAudit.command || 'codex';
+  form.auditModel.value = effective.autoPromoteAudit.model || 'gpt-5.5';
+  form.auditReasoningEffort.value = effective.autoPromoteAudit.reasoningEffort || 'low';
+  form.auditTimeoutMs.value = effective.autoPromoteAudit.timeoutMs || 120000;
   for (const [key, value] of Object.entries(effective.distillPolicy)) {
     if (form[key]) form[key].value = value;
   }
@@ -198,6 +204,14 @@ $('#settingsForm').addEventListener('submit', async (event) => {
       charThreshold: formNumber(form, 'charThreshold'),
       maxEvents: formNumber(form, 'maxEvents'),
       maxChars: formNumber(form, 'maxChars'),
+    },
+    autoPromoteAudit: {
+      enabled: form.auditEnabled.checked,
+      provider: form.auditProvider.value,
+      command: form.auditCommand.value,
+      model: form.auditModel.value || 'gpt-5.5',
+      reasoningEffort: form.auditReasoningEffort.value || 'low',
+      timeoutMs: formNumber(form, 'auditTimeoutMs') || 120000,
     },
   };
   if (form.distillProvider.value === 'openai_compatible') {

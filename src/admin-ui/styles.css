@@ -85,6 +85,12 @@ main { padding: 20px 24px 40px; }
 }
 .row.compact { grid-template-columns: repeat(3, minmax(120px, 1fr)); }
 label { display: grid; gap: 5px; color: var(--muted); }
+label.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+label.checkbox input { width: auto; }
 fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 0 0 12px; }
 legend { color: var(--muted); }
 .provider-section[hidden] { display: none; }
