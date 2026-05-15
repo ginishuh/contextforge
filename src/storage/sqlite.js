@@ -2797,6 +2797,44 @@ export class ContextForgeStore {
       .map(hydrateDistillRun);
   }
 
+  listRecentDistillRuns({ scopeType = null, scopeKey = null, sessionId = null, status = null, provider = null, limit = 25 } = {}) {
+    const filters = [];
+    const values = [];
+    if (scopeType) {
+      filters.push('scope_type = ?');
+      values.push(scopeType);
+    }
+    if (scopeKey) {
+      filters.push('scope_key = ?');
+      values.push(scopeKey);
+    }
+    if (sessionId) {
+      filters.push('session_id = ?');
+      values.push(sessionId);
+    }
+    if (status) {
+      filters.push('status = ?');
+      values.push(status);
+    }
+    if (provider) {
+      filters.push('provider = ?');
+      values.push(provider);
+    }
+    const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+    const parsedLimit = limit == null ? null : Number(limit);
+    const limitClause = Number.isInteger(parsedLimit) && parsedLimit > 0 ? 'LIMIT ?' : '';
+    if (limitClause) values.push(parsedLimit);
+    return this.db
+      .prepare(`
+        SELECT * FROM distill_runs
+        ${where}
+        ORDER BY created_at DESC, id DESC
+        ${limitClause}
+      `)
+      .all(...values)
+      .map(hydrateDistillRun);
+  }
+
   listScopeKeys({ scopeType = null, limit = null } = {}) {
     const filters = [];
     const values = [];

@@ -42,6 +42,7 @@ const REMOTE_METHODS = [
   'pruneRawEvents',
   'distillCheckpoint',
   'listDistillRuns',
+  'listRecentDistillRuns',
   'distillUsage',
 ];
 
@@ -52,6 +53,7 @@ const UNSCOPED_REMOTE_METHODS = new Set([
   'checkDistillProvider',
   'checkCodexExec',
   'listScopeKeys',
+  'listRecentDistillRuns',
   'pruneRawEvents',
 ]);
 
