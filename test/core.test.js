@@ -27,6 +27,10 @@ async function makeTempDir() {
   return fs.mkdtemp(path.join(os.tmpdir(), 'contextforge-test-'));
 }
 
+async function makeNonGitTempDir() {
+  return fs.mkdtemp(path.join(os.homedir(), 'contextforge-test-'));
+}
+
 function testAdminPasswordHash(password) {
   const salt = Buffer.from('contextforge-test-admin-salt');
   const iterations = 100000;
@@ -371,7 +375,7 @@ test('repo scope key defaults to normalized GitHub origin remote', async () => {
 });
 
 test('repo scope key falls back to a deterministic path key outside git', async () => {
-  const cwd = await makeTempDir();
+  const cwd = await makeNonGitTempDir();
   const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: path.join(cwd, 'data') }, cwd });
 
   assert.match(app.config.defaultScopeKey, /^path:[a-f0-9]{16}:contextforge-test-/);
@@ -418,7 +422,7 @@ test('repoPath and cwd resolve repo scope independently of the app cwd', async (
 });
 
 test('default shared and local scopes get usable default keys', async () => {
-  const cwd = await makeTempDir();
+  const cwd = await makeNonGitTempDir();
   const sharedApp = createContextForge({
     env: {
       CONTEXTFORGE_DATA_DIR: path.join(cwd, 'shared-data'),
@@ -3016,6 +3020,56 @@ test('listDistillRuns can return newest runs first when limited', async () => {
   assert.equal(oldestFirst[0].sessionId, 'older-session');
   const newestFirst = app.listDistillRuns({ scope: 'repo', scopeKey: 'run-order-repo', limit: 1, order: 'desc' });
   assert.equal(newestFirst[0].sessionId, 'newer-session');
+});
+
+test('listRecentDistillRuns returns newest runs across scopes', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'mock',
+    },
+    cwd: process.cwd(),
+  });
+
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'older-repo',
+    sessionId: 'older-session',
+    role: 'user',
+    content: 'Create the older cross-scope run.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'older-repo',
+    sessionId: 'older-session',
+  });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'newer-repo',
+    sessionId: 'newer-session',
+    role: 'user',
+    content: 'Create the newer cross-scope run.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'newer-repo',
+    sessionId: 'newer-session',
+  });
+
+  const recent = app.listRecentDistillRuns({ limit: 2 });
+  assert.deepEqual(
+    recent.map((run) => [run.scopeKey, run.sessionId]),
+    [
+      ['newer-repo', 'newer-session'],
+      ['older-repo', 'older-session'],
+    ],
+  );
+
+  const filtered = app.listRecentDistillRuns({ scope: 'repo', scopeKey: 'older-repo', limit: 1 });
+  assert.equal(filtered.length, 1);
+  assert.equal(filtered[0].sessionId, 'older-session');
 });
 
 test('distillCheckpoint records checkpoint level and coverage metadata', async () => {
@@ -6168,6 +6222,7 @@ test('REMOTE_METHODS exposes resume, suggestion, auto-promotion, and reconciliat
   assert.ok(REMOTE_METHODS.includes('updateRuntimeSettings'));
   assert.ok(REMOTE_METHODS.includes('checkDistillProvider'));
   assert.ok(REMOTE_METHODS.includes('listScopeKeys'));
+  assert.ok(REMOTE_METHODS.includes('listRecentDistillRuns'));
   assert.ok(REMOTE_METHODS.includes('listMemories'));
   assert.ok(REMOTE_METHODS.includes('suggestMemoryPromotions'));
   assert.ok(REMOTE_METHODS.includes('autoPromoteMemoryCandidates'));

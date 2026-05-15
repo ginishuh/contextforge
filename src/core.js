@@ -3500,6 +3500,19 @@ export function createContextForge(options = {}) {
       );
     },
 
+    listRecentDistillRuns(options = {}) {
+      return useStore((store) =>
+        store.listRecentDistillRuns({
+          scopeType: options.scope || options.scopeType || null,
+          scopeKey: options.scopeKey || null,
+          sessionId: options.sessionId || null,
+          status: options.status || null,
+          provider: options.provider || null,
+          limit: options.limit == null ? 25 : Number(options.limit),
+        }),
+      );
+    },
+
     distillUsage(options) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.sessionId, 'sessionId');

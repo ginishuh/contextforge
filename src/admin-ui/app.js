@@ -16,7 +16,7 @@ function setLoginState(loggedIn, username = '') {
 }
 
 async function refreshDashboardRuns() {
-  await loadRuns('#recentRuns', dashboardRunScope());
+  await loadRecentRuns();
 }
 
 async function restoreLoginSession() {
@@ -231,16 +231,6 @@ function fillScopeKeySelects() {
   fillScopeKeySelect($('#runScopeKey'), $('#runScope').value, $('#runScopeKey').value);
 }
 
-function dashboardRunScope() {
-  const repoWithRuns = state.scopeKeys.find((item) => item.scopeType === 'repo' && item.distillRuns > 0);
-  const anyWithRuns = state.scopeKeys.find((item) => item.distillRuns > 0);
-  const selected = repoWithRuns || anyWithRuns;
-  if (selected) {
-    return { scope: selected.scopeType, scopeKey: selected.scopeKey };
-  }
-  return { scope: 'repo', scopeKey: state.db?.defaultScopeKey || '' };
-}
-
 function formNumber(form, key) {
   const value = Number(form[key].value);
   return Number.isFinite(value) && value > 0 ? value : undefined;
@@ -333,6 +323,24 @@ async function loadRuns(target = '#runsTable', options = {}) {
   const runs = await call('listDistillRuns', { scope, scopeKey, ...(sessionId ? { sessionId } : {}), limit: 25, order: 'desc' });
   $(target).innerHTML = table(runs, [
     { label: '생성 시각', value: (row) => row.createdAt },
+    { label: '스코프', value: (row) => `${row.scopeType}:${row.scopeKey}` },
+    { label: '프로바이더', value: (row) => row.provider },
+    { label: '상태', value: (row) => row.status },
+    { label: '세션', value: (row) => row.sessionId },
+    { label: '이벤트', value: (row) => row.sourceEventCount },
+    { label: '오류', value: (row) => row.errorMessage || '' },
+  ]);
+}
+
+async function loadRecentRuns() {
+  const activeProvider = state.runtime?.effective?.distillProvider || '';
+  const runs = await call('listRecentDistillRuns', { limit: 25 });
+  $('#recentRunsHint').textContent = activeProvider
+    ? `전체 스코프의 최신 디스틸 실행입니다. 현재 활성 프로바이더: ${activeProvider}`
+    : '전체 스코프의 최신 디스틸 실행입니다.';
+  $('#recentRuns').innerHTML = table(runs, [
+    { label: '생성 시각', value: (row) => row.createdAt },
+    { label: '스코프', value: (row) => `${row.scopeType}:${row.scopeKey}` },
     { label: '프로바이더', value: (row) => row.provider },
     { label: '상태', value: (row) => row.status },
     { label: '세션', value: (row) => row.sessionId },
