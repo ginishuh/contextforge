@@ -3079,6 +3079,8 @@ export function createContextForge(options = {}) {
           model: embeddingProvider.model,
           dimensions: embeddingProvider.dimensions,
           skipped: false,
+          // noOp means no embedding jobs were scanned or embedded; setup and stale-job reset may still run.
+          noOp: jobs.length === 0,
           scanned: jobs.length,
           processed: 0,
           embedded: 0,
@@ -3088,6 +3090,13 @@ export function createContextForge(options = {}) {
           errors: [],
           staleReset,
         };
+        if (jobs.length === 0) {
+          aggregate.jobs = store.countEmbeddingJobs({
+            scopeType: listOptions.scopeType,
+            scopeKey: listOptions.scopeKey,
+          });
+          return aggregate;
+        }
         for (let index = 0; index < jobs.length; index += batchSize) {
           const batch = jobs.slice(index, index + batchSize);
           const result = await processEmbeddingJobBatch(store, batch);
