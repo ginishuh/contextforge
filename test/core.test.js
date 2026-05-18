@@ -270,6 +270,49 @@ test('ContextForgeStore.withTransaction returns results and rolls back on throw'
   }
 });
 
+test('processEmbeddingJobs reports an explicit no-op when the scoped queue is empty', async () => {
+  const dataDir = await makeTempDir();
+  let embedCalls = 0;
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_EMBEDDINGS_PROVIDER: 'openai',
+      CONTEXTFORGE_OPENAI_API_KEY: 'test-key',
+    },
+    cwd: process.cwd(),
+    embeddingProviders: {
+      openai: {
+        name: 'test',
+        model: 'test-embedding',
+        dimensions: 3,
+        async embed() {
+          embedCalls += 1;
+          return [];
+        },
+      },
+    },
+  });
+
+  const result = await app.processEmbeddingJobs({ scope: 'repo', scopeKey: 'empty-queue-repo', retryFailed: true });
+
+  assert.equal(result.noOp, true);
+  assert.equal(result.scanned, 0);
+  assert.equal(result.processed, 0);
+  assert.equal(result.embedded, 0);
+  assert.equal(result.failed, 0);
+  assert.equal(embedCalls, 0);
+  assert.deepEqual(result.jobs, { pending: 0, processing: 0, completed: 0, failed: 0 });
+});
+
+test('MCP instructions require checking embedding queue state before processing jobs', async () => {
+  const source = await fs.readFile(path.join(process.cwd(), 'src', 'mcp.js'), 'utf8');
+
+  assert.match(source, /Before calling process_embedding_jobs/);
+  assert.match(source, /pending=0, failed=0, processing=0/);
+  assert.match(source, /failed jobs exist.*retryFailed=true/i);
+  assert.match(source, /skip/i);
+});
+
 test('embedding jobs claim atomically and stale processing jobs reset', async () => {
   const dataDir = await makeTempDir();
   const store = new ContextForgeStore({ dataDir });
