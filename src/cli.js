@@ -135,6 +135,13 @@ function toCoreOptions(options) {
     iterations: options.iterations == null ? undefined : Number(options.iterations),
     charsPerToken: options.charsPerToken == null ? undefined : Number(options.charsPerToken),
     rawTailLimit: options.rawTailLimit == null ? undefined : Number(options.rawTailLimit),
+    latestCheckpointLimit: options.latestCheckpointLimit == null ? undefined : Number(options.latestCheckpointLimit),
+    relatedScopeKeys: options.relatedScopeKeys
+      ? String(options.relatedScopeKeys)
+          .split(',')
+          .map((item) => item.trim())
+          .filter(Boolean)
+      : undefined,
     settings: options.settings ? JSON.parse(options.settings) : undefined,
     values: options.values ? JSON.parse(options.values) : undefined,
     secrets: options.secrets ? JSON.parse(options.secrets) : undefined,

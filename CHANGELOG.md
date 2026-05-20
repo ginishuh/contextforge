@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.4.1 - 2026-05-20
+
+- Added query-independent latest checkpoint handoff to `bootstrapContext` and
+  the MCP `bootstrap_context` tool, returning `handoff.latestCheckpoints` by
+  default so agents see recent work status before durable memory even when
+  checkpoint search ranking loses to stable memories.
+- Added `latestCheckpointLimit` (0-3 per scope) and repo
+  `relatedScopeKeys` options for multi-repo suite/subrepo bootstraps, with CLI
+  and MCP schema support.
+- Updated agent guidance to treat checkpoints as the preferred source for
+  recent handoff state while keeping durable memory for stable contracts,
+  policies, decisions, and runbooks.
+
 ## 0.4.0 - 2026-05-14
 
 - Added a Korean operator UI at `/ui/` for runtime dashboards, provider

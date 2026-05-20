@@ -2056,6 +2056,30 @@ export class ContextForgeStore {
     return rows.map(hydrateCheckpoint);
   }
 
+  listRecentCheckpoints({ scopeType, scopeKey, level = null, limit = 1 }) {
+    const parsedLimit = Number(limit);
+    if (!Number.isInteger(parsedLimit) || parsedLimit <= 0) {
+      return [];
+    }
+    const filters = ['scope_type = ?', 'scope_key = ?'];
+    const values = [scopeType, scopeKey];
+    if (level != null) {
+      filters.push('level = ?');
+      values.push(Number(level));
+    }
+    values.push(parsedLimit);
+    const rows = this.db
+      .prepare(`
+        SELECT * FROM checkpoints
+        WHERE ${filters.join(' AND ')}
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?
+      `)
+      .all(...values);
+
+    return rows.map(hydrateCheckpoint);
+  }
+
   getWorkingSummary({ scopeType, scopeKey, sessionId }) {
     const row = this.db
       .prepare(`

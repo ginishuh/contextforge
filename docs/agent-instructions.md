@@ -65,14 +65,18 @@ At task start, call `bootstrap_context` with `scope: "repo"` and the canonical
 scope key `github.com/example/repo`. Include shared scope only for user-wide
 policy, deployment, credential-location, or cross-repo conventions.
 
-Treat `memory` as reviewed durable state, `checkpoint` as credible recent
-handoff state that still needs live verification, and `memory_candidate` as
-review material.
+Read `handoff.latestCheckpoints` before durable memory for recent work status,
+recent decisions, open todos, branch/PR/CI flow, and next actions. Treat
+`memory` as reviewed durable state for stable contracts, policies, and
+runbooks; treat `checkpoint` as credible recent handoff state that still needs
+live verification; and treat `memory_candidate` as review material.
 
 For loose continuation prompts such as "yesterday", "continue", "previous
-work", issue/PR follow-up, or cross-agent handoff, call
-`sync_resume_context` when available. Use checkpoints for prior intent, recent
-decisions, and unfinished work, then verify current git/GitHub/CI/runtime
+work", issue/PR follow-up, or cross-agent handoff, call `bootstrap_context`
+first. It includes latest checkpoint handoff independently from semantic search
+ranking. Use `sync_resume_context` only when the exact session id is known and
+session working state or raw tail is needed. Use checkpoints for prior intent,
+recent decisions, and unfinished work, then verify current git/GitHub/CI/runtime
 state from live sources.
 
 Use the installed `contextforge-memory` skill for session IDs, distillation,
