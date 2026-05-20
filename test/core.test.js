@@ -3310,6 +3310,133 @@ test('bootstrapContext includes working summary and recent raw tail separately f
   assert.match(bootstrap.rawTail[0].content, /Bootstrap wiring/);
 });
 
+test('bootstrapContext includes latest checkpoints independently from search results', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'handoff_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      handoff_provider: async (input) => ({
+        summaryShort: 'Latest handoff.',
+        summaryText: `Recent checkpoint: ${input.rawEvents.at(-1).content}`,
+        decisions: ['Recent decision.'],
+        todos: ['Recent todo.'],
+        openQuestions: [],
+        memoryCandidates: [],
+        sourceEventCount: input.rawEvents.length,
+        metadata: { synthetic: true },
+      }),
+    },
+  });
+
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-handoff',
+    key: 'durable-bootstrap-hit',
+    content: 'Durable bootstrap memory should win ordinary search ranking.',
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-handoff',
+    sessionId: 'handoff-session',
+    role: 'assistant',
+    content: 'PR #123 merged after all CI passed.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'repo-handoff',
+    sessionId: 'handoff-session',
+  });
+
+  const bootstrap = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-handoff',
+    query: 'durable bootstrap memory',
+  });
+
+  assert.equal(bootstrap.results.some((item) => item.type === 'memory' && item.key === 'durable-bootstrap-hit'), true);
+  assert.equal(bootstrap.handoff.latestCheckpointLimit, 1);
+  assert.deepEqual(bootstrap.handoff.relatedScopeKeys, []);
+  assert.equal(bootstrap.handoff.latestCheckpoints.length, 1);
+  assert.equal(bootstrap.handoff.latestCheckpoints[0].trust, 'credible_recent_handoff');
+  assert.equal(bootstrap.handoff.latestCheckpoints[0].scope.scopeKey, 'repo-handoff');
+  assert.match(bootstrap.handoff.latestCheckpoints[0].summaryText, /PR #123 merged/);
+  assert.ok(bootstrap.handoff.latestCheckpoints[0].useFor.includes('recent_status'));
+
+  const disabled = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-handoff',
+    query: 'durable bootstrap memory',
+    latestCheckpointLimit: 0,
+  });
+  assert.deepEqual(disabled.handoff.latestCheckpoints, []);
+});
+
+test('bootstrapContext can include latest checkpoints from related repo scopes', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'related_handoff_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      related_handoff_provider: async (input) => ({
+        summaryShort: 'Latest related handoff.',
+        summaryText: `Recent related checkpoint: ${input.rawEvents.at(-1).content}`,
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [],
+        sourceEventCount: input.rawEvents.length,
+        metadata: {},
+      }),
+    },
+  });
+
+  for (const scopeKey of ['repo-child', 'repo-suite']) {
+    app.appendRaw({
+      scope: 'repo',
+      scopeKey,
+      sessionId: `${scopeKey}-session`,
+      role: 'assistant',
+      content: `Checkpoint evidence for ${scopeKey}.`,
+    });
+    await app.distillCheckpoint({
+      scope: 'repo',
+      scopeKey,
+      sessionId: `${scopeKey}-session`,
+    });
+  }
+
+  const bootstrap = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-child',
+    relatedScopeKeys: ['repo-suite', 'repo-suite', 'repo-child'],
+    query: 'unrelated query still needs latest handoff',
+  });
+
+  assert.deepEqual(
+    bootstrap.handoff.latestCheckpoints.map((checkpoint) => checkpoint.scope.scopeKey).sort(),
+    ['repo-child', 'repo-suite'],
+  );
+  assert.deepEqual(bootstrap.handoff.relatedScopeKeys, ['repo-suite']);
+
+  await assert.rejects(
+    () =>
+      app.bootstrapContext({
+        scope: 'repo',
+        scopeKey: 'repo-child',
+        query: 'invalid handoff limit',
+        latestCheckpointLimit: 4,
+      }),
+    /latestCheckpointLimit must be an integer between 0 and 3/,
+  );
+});
+
 test('distillCheckpoint passes previous working summary to provider for rolling updates', async () => {
   const dataDir = await makeTempDir();
   const seenPreviousWorkingSummaries = [];
@@ -6487,7 +6614,10 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     const bootstrapTool = toolList.tools.find((tool) => tool.name === 'bootstrap_context');
     assert.ok(bootstrapTool.inputSchema.properties.sessionId);
     assert.ok(bootstrapTool.inputSchema.properties.rawTailLimit);
+    assert.ok(bootstrapTool.inputSchema.properties.latestCheckpointLimit);
+    assert.ok(bootstrapTool.inputSchema.properties.relatedScopeKeys);
     assert.ok(bootstrapTool.description.includes('Does not create a session'));
+    assert.ok(bootstrapTool.description.includes('latest checkpoint handoff'));
     const syncResumeTool = toolList.tools.find((tool) => tool.name === 'sync_resume_context');
     assert.ok(syncResumeTool.inputSchema.properties.sessionId);
     const sessionWorkingContextTool = toolList.tools.find((tool) => tool.name === 'upsert_session_working_context');

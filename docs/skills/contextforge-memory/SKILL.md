@@ -52,10 +52,12 @@ Before relying on results, check connection metadata and storage authority from 
 At the start of non-trivial project work:
 
 1. Call `bootstrap_context` with a task-derived query, `scope: "repo"`, and `repoPath`, `cwd`, or explicit `scopeKey`.
-2. Set `includeShared: true` only for cross-repo/user-wide policy, credentials location, deployment, or recurring preference questions.
-3. Read the storage block and result trust roles.
-4. Use targeted `search` calls only when more detail is needed.
-5. Use `get_memory` only when you already know the exact durable key.
+2. Read `handoff.latestCheckpoints` before durable memory for recent work status, recent decisions, open todos, branch/PR/CI flow, and next actions. This lane is loaded independently from search ranking.
+3. For multi-repo work, pass repo `relatedScopeKeys` for parent/suite/subrepo scopes whose latest handoff may matter. `latestCheckpointLimit` applies per scope.
+4. Set `includeShared: true` only for cross-repo/user-wide policy, credentials location, deployment, or recurring preference questions.
+5. Read the storage block and result trust roles.
+6. Use targeted `search` calls only when more detail is needed.
+7. Use `get_memory` only when you already know the exact durable key.
 
 `bootstrap_context` does not create a session. It retrieves scoped context.
 
@@ -75,11 +77,12 @@ When resuming a known session, pass that `sessionId` to `bootstrap_context`, `sy
 
 For "continue", "yesterday", prior issue/PR follow-up, or cross-agent handoff:
 
-1. Prefer `sync_resume_context`.
-2. Treat checkpoints as credible recent handoff notes.
-3. Treat memory candidates as review material only.
-4. Verify live mutable state before editing or reporting final status.
-5. Do not propose memory promotions during start/resume sync.
+1. Call `bootstrap_context` first; its latest checkpoint handoff is not dependent on semantic search ranking.
+2. Use `sync_resume_context` only when the exact `sessionId` is known and session working state or raw tail is needed.
+3. Treat checkpoints as credible recent handoff notes and prefer them over durable memory for fast-moving work status.
+4. Treat memory candidates as review material only.
+5. Verify live mutable state before editing or reporting final status.
+6. Do not propose memory promotions during start/resume sync.
 
 ## Evidence Capture
 

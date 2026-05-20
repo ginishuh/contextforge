@@ -903,8 +903,16 @@ receives it together with the new raw-event window so it can update current
 state instead of emitting a delta-only summary. Treat it as current session
 state, not reviewed durable memory.
 
-When a caller knows the session id, `bootstrapContext` can return the working
-summary and a recent raw tail alongside ordinary retrieval results:
+`bootstrapContext` includes recent checkpoint handoff separately from ordinary
+query results. By default it returns the latest level-0 checkpoint for the
+requested scope in `handoff.latestCheckpoints`, even when that checkpoint does
+not win semantic search ranking. Set `--latestCheckpointLimit 0` to disable
+this lane, or a value up to `3` to preload more recent checkpoints per scope.
+For multi-repo work, pass comma-separated repo `--relatedScopeKeys` so a subrepo
+can also receive the suite/root repo's latest handoff.
+
+When a caller knows the session id, `bootstrapContext` can also return the
+working summary and a recent raw tail alongside ordinary retrieval results:
 
 ```bash
 node src/cli.js bootstrapContext \
@@ -912,6 +920,7 @@ node src/cli.js bootstrapContext \
   --scopeKey github.com/example/contextforge \
   --sessionId current-session-id \
   --query "current task handoff" \
+  --relatedScopeKeys github.com/example/suite \
   --rawTailLimit 5
 ```
 
@@ -920,6 +929,10 @@ only when last-mile transcript continuity is needed.
 
 The bootstrap response keeps these channels separate:
 
+- `handoff.latestCheckpoints`: latest recent handoff checkpoints loaded
+  independently of query ranking; read these before durable memory for current
+  work status, recent decisions, open todos, branch/PR/CI flow, and next
+  actions.
 - `results`: durable memories, checkpoints, and memory candidates from search.
 - `workingSummary`: latest rolling handoff state for the requested session.
 - `rawTail`: newest raw events for last-mile continuity.
@@ -1279,11 +1292,14 @@ server's env files, service manager, or local database. When available, use
 as the live access-path check.
 For loose continuation prompts like "yesterday", "continue", "previous work",
 issue/PR follow-up, or cross-agent handoff, agents should call
-`bootstrap_context` or `bootstrapContext` early. The bootstrap response reviews
+`bootstrap_context` or `bootstrapContext` early. The bootstrap response includes
+`handoff.latestCheckpoints` independently of search ranking, then reviews
 repo-scoped `memory`, `checkpoint`, and `memory_candidate` hits as context
 candidates, optionally includes up to three shared-scope hits, then reminds the
 agent to verify current branch, issue/PR, CI, migration, and runtime state
-against live sources before acting.
+against live sources before acting. Agents should read latest checkpoints before
+durable memory for fast-moving work status; durable memory remains the stable
+policy/contract/runbook layer.
 
 When resuming a known session, pass `sessionId` to `bootstrap_context` or
 `bootstrapContext`. ContextForge will include the session's latest

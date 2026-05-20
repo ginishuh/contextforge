@@ -24,11 +24,12 @@ function jsonResult(result) {
 
 const MCP_INSTRUCTIONS = [
   'Use ContextForge for scoped memory retrieval on demand.',
-  'At the start of non-trivial project work, call bootstrap_context with repoPath, cwd, or an explicit scopeKey. It summarizes storage authority, vector readiness, repo semantic retrieval results, and trust hints in one response.',
+  'At the start of non-trivial project work, call bootstrap_context with repoPath, cwd, or an explicit scopeKey. It summarizes storage authority, vector readiness, query retrieval results, trust hints, and query-independent latest checkpoint handoff in one response.',
   'bootstrap_context does not create a session. In Codex or Claude Code auto-ingest environments, preserve or recover the adapter session id such as codex:<native-session-id> or claude_code:<native-session-id> before session_status, distill_checkpoint, or closeout promotion. Use begin_session only for manual ContextForge evidence streams where the agent will call append_raw itself; do not create a fresh cf_... session at closeout to review candidates from an existing Codex/Claude session.',
   'Use db_info connection metadata for access path: prefer connection.summary, then connection.accessMode/accessPath and connection.serverRole. connection.mode is kept for compatibility. Top-level storageMode describes the responding ContextForge process; connection.server may describe the server-owned store behind a remote call.',
+  'Read bootstrap_context.handoff.latestCheckpoints before durable memory for recent work status, recent decisions, open todos, branch/PR/CI flow, and next actions. Durable memory is for reviewed stable facts, contracts, policies, and runbooks. Verify mutable checkpoint claims with git/GitHub/CI/runtime/migrations before final action.',
   'Search result types have different trust roles: memory is reviewed durable fact or decision; checkpoint is credible recent handoff state for continuity, planning, prior intent, recent decisions, and unfinished work, but mutable live-state claims must be verified with git/GitHub/CI/runtime/migrations before acting; memory_candidate is unreviewed promotion material and not durable truth.',
-  'For start/resume requests such as "지난 환경 작업과 동기화", "어제 하던 거 이어서", "previous work", or "continue", call sync_resume_context. Use checkpoints actively as handoff notes, then verify mutable state with git/GitHub/CI/runtime/migrations. Do not propose memory promotions during resume sync.',
+  'For task start or loose continuation prompts such as "지난 환경 작업과 동기화", "어제 하던 거 이어서", "previous work", or "continue", call bootstrap_context first; it includes latest checkpoint handoff independent of search ranking. Use sync_resume_context only when you know the exact sessionId and need session working state or raw tail.',
   'For closeout triggers only, call suggest_memory_promotions with the current sessionId or the checkpointId returned by distill_checkpoint: after this agent merges a PR, after the user says they merged and the agent syncs main/cleans branches, or when the user explicitly says today\'s work is done. Suggest at most 1-3 durable memory promotions and never promote automatically.',
   'For strict closeout-scoped safe automatic promotion, call auto_promote_memory_candidates only when the user wants automatic promotion and always include sessionId or checkpointId. By default use dryRun=true. Use dryRun=false only when CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true is intentionally configured; never use scope-wide backlog fallback and never auto-promote preference candidates.',
   'Preference-like candidates are tracked as merged occurrences; use list_preference_occurrences to review repeated evidence and weakened corrections, but do not treat occurrence evidence alone as durable preference truth.',
@@ -92,12 +93,14 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Bootstrap Context',
       description:
-        'Resolve scoped ContextForge memory for a task in one call. Searches repo scope semantically across memory, checkpoint, and memory_candidate results, optionally includes up to 3 shared-scope results, and annotates trust and verification hints for agents. Does not create a session; pass a known Codex/Claude/ContextForge sessionId to load session working state. rawTailLimit defaults to 0; set a positive value to include raw tail.',
+        'Resolve scoped ContextForge memory for a task in one call. Includes query-independent latest checkpoint handoff (default 1, max 3) before search results, searches repo scope semantically across memory, checkpoint, and memory_candidate results, optionally includes up to 3 shared-scope results, and annotates trust and verification hints for agents. Does not create a session; pass a known Codex/Claude/ContextForge sessionId to load session working state. rawTailLimit defaults to 0; set a positive value to include raw tail.',
       inputSchema: {
         ...scopedSchema,
         query: z.string(),
         sessionId: z.string().optional(),
         rawTailLimit: z.number().int().nonnegative().optional(),
+        latestCheckpointLimit: z.number().int().min(0).max(3).optional(),
+        relatedScopeKeys: z.array(z.string()).optional(),
         includeShared: z.boolean().optional(),
         limit: z.number().int().positive().optional(),
         sharedScopeKey: z.string().optional(),

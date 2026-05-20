@@ -268,14 +268,18 @@ Default retrieval should be compact, explainable, scoped, and on demand.
 Recommended order:
 
 1. current repository reality
-2. ContextForge durable memory from `repo + shared`
-3. checkpoints for recent continuity when requested
+2. latest ContextForge checkpoints from `handoff.latestCheckpoints` for recent
+   work status, prior intent, recent decisions, open todos, branch/PR/CI flow,
+   and next actions
+3. ContextForge durable memory from `repo + shared` for stable contracts,
+   policies, decisions, and runbooks
 4. raw conversation evidence only when explicit
 5. built-in agent memory and markdown fallback as supporting context
 
 Avoid:
 
 - auto-loading all checkpoints
+- relying on query ranking alone to surface the latest checkpoint
 - auto-loading raw events
 - dumping giant memory files into prompt context
 - treating vector results as unexplainable truth

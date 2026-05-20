@@ -110,6 +110,14 @@ function nonnegativeNumber(value, name) {
   return value;
 }
 
+function boundedInteger(value, name, { min = 0, max = 3 } = {}) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
+    throw new Error(`${name} must be an integer between ${min} and ${max}.`);
+  }
+  return parsed;
+}
+
 function withStore(config, fn) {
   const store = new ContextForgeStore({ dataDir: config.dataDir });
   try {
@@ -428,6 +436,52 @@ function bootstrapRawTailEvent(event) {
     metadata: event.metadata,
     createdAt: event.createdAt,
   };
+}
+
+function checkpointHandoffCompact(checkpoint, scope) {
+  const sourceEventWindow = checkpoint.metadata?.sourceEventWindow || null;
+  return {
+    type: 'checkpoint',
+    trust: 'credible_recent_handoff',
+    verificationRequired: true,
+    whyUse:
+      'Preferred source for recent work status, handoff, recent decisions, open todos, and next actions; verify mutable claims against live sources before final action.',
+    useFor: ['recent_status', 'handoff', 'next_actions', 'recent_decisions'],
+    scope: {
+      scopeType: scope.scopeType,
+      scopeKey: scope.scopeKey,
+    },
+    id: checkpoint.id,
+    sessionId: checkpoint.sessionId,
+    conversationId: checkpoint.conversationId,
+    level: checkpoint.level,
+    createdAt: checkpoint.createdAt,
+    summaryShort: checkpoint.summaryShort,
+    summaryText: truncateText(checkpoint.summaryText, 1600),
+    decisions: checkpoint.decisions || [],
+    todos: checkpoint.todos || [],
+    openQuestions: checkpoint.openQuestions || [],
+    sourceEventCount: checkpoint.sourceEventCount,
+    provider: checkpoint.provider,
+    ...(sourceEventWindow
+      ? {
+          sourceEventWindow: {
+            mode: sourceEventWindow.mode || null,
+            selectedEventCount: sourceEventWindow.selectedEventCount ?? null,
+            selectedCharCount: sourceEventWindow.selectedCharCount ?? null,
+            truncated: Boolean(sourceEventWindow.truncated),
+          },
+        }
+      : {}),
+  };
+}
+
+function normalizeRelatedScopeKeys(value) {
+  if (value == null) {
+    return [];
+  }
+  const items = Array.isArray(value) ? value : String(value).split(',');
+  return [...new Set(items.map((item) => String(item).trim()).filter(Boolean))];
 }
 
 function bootstrapResult(result, group) {
@@ -1718,6 +1772,14 @@ export function createContextForge(options = {}) {
       const sharedLimit = Math.min(3, limit);
       const includeShared = truthyOption(options.includeShared);
       const sessionId = options.sessionId || null;
+      const latestCheckpointLimit = boundedInteger(
+        options.latestCheckpointLimit == null ? 1 : Number(options.latestCheckpointLimit),
+        'latestCheckpointLimit',
+        { min: 0, max: 3 },
+      );
+      const relatedScopeKeys = normalizeRelatedScopeKeys(options.relatedScopeKeys).filter(
+        (scopeKey) => scopeKey !== scope.scopeKey,
+      );
       const rawTailLimit = sessionId
         ? nonnegativeNumber(options.rawTailLimit == null ? 0 : Number(options.rawTailLimit), 'rawTailLimit')
         : null;
@@ -1761,6 +1823,25 @@ export function createContextForge(options = {}) {
           ...repoResults.map((result) => bootstrapResult(result, 'primary')),
           ...sharedResults.map((result) => bootstrapResult(result, 'shared')),
         ];
+        const handoffScopes = [
+          scope,
+          ...relatedScopeKeys.map((scopeKey) => ({
+            scopeType: 'repo',
+            scopeKey,
+          })),
+        ];
+        const latestCheckpoints =
+          latestCheckpointLimit > 0
+            ? handoffScopes.flatMap((handoffScope) =>
+                store
+                  .listRecentCheckpoints({
+                    ...handoffScope,
+                    level: 0,
+                    limit: latestCheckpointLimit,
+                  })
+                  .map((checkpoint) => checkpointHandoffCompact(checkpoint, handoffScope)),
+              )
+            : [];
         const workingSummary = sessionId
           ? bootstrapWorkingSummary(store.getWorkingSummary({ ...scope, sessionId }))
           : null;
@@ -1778,6 +1859,14 @@ export function createContextForge(options = {}) {
           query: options.query,
           includeShared,
           sharedLimit: includeShared ? sharedLimit : null,
+          handoff: {
+            latestCheckpoints,
+            latestCheckpointLimit,
+            relatedScopeKeys,
+            trustOrder: ['live_source', 'recent_checkpoint', 'durable_memory', 'memory_candidate'],
+            useHint:
+              'Read latestCheckpoints before durable memory for fast-moving work status; verify mutable claims against GitHub/git/CI/runtime before acting.',
+          },
           ...(sessionId ? { sessionId, workingSummary, structuredWorkingContext, rawTail, rawTailLimit } : {}),
           ...(sharedSkippedReason ? { sharedSkippedReason } : {}),
           summary: bootstrapSummary(results),
