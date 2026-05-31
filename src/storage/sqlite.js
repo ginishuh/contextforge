@@ -2859,6 +2859,152 @@ export class ContextForgeStore {
       .map(hydrateDistillRun);
   }
 
+  listSessionsWithRawAfterCheckpoint({
+    scopeType = null,
+    scopeKey = null,
+    limit = 100,
+    order = 'asc',
+    minEvents = null,
+    charThreshold = null,
+  } = {}) {
+    const filters = [];
+    const values = [];
+    if (scopeType) {
+      filters.push('r.scope_type = ?');
+      values.push(scopeType);
+    }
+    if (scopeKey) {
+      filters.push('r.scope_key = ?');
+      values.push(scopeKey);
+    }
+    const where = filters.length ? `AND ${filters.join(' AND ')}` : '';
+    const havingFilters = [];
+    const havingValues = [];
+    const parsedMinEvents = minEvents == null ? null : Number(minEvents);
+    if (Number.isInteger(parsedMinEvents) && parsedMinEvents > 0) {
+      havingFilters.push('COUNT(*) >= ?');
+      havingValues.push(parsedMinEvents);
+    }
+    const parsedCharThreshold = charThreshold == null ? null : Number(charThreshold);
+    if (Number.isFinite(parsedCharThreshold) && parsedCharThreshold > 0) {
+      havingFilters.push('SUM(LENGTH(r.content)) >= ?');
+      havingValues.push(parsedCharThreshold);
+    }
+    const havingClause = havingFilters.length ? `HAVING (${havingFilters.join(' OR ')})` : '';
+    const parsedLimit = limit == null ? null : Number(limit);
+    const limitClause = Number.isInteger(parsedLimit) && parsedLimit > 0 ? 'LIMIT ?' : '';
+    const queryValues = [...values, ...havingValues];
+    if (limitClause) queryValues.push(parsedLimit);
+    const orderDirection = order === 'desc' ? 'DESC' : 'ASC';
+    return this.db
+      .prepare(`
+        WITH latest_checkpoint_key AS (
+          SELECT scope_type, scope_key, session_id, MAX(created_at) AS latest_checkpoint_at
+          FROM checkpoints
+          WHERE level = 0
+          GROUP BY scope_type, scope_key, session_id
+        ),
+        latest_checkpoint AS (
+          SELECT
+            c.scope_type,
+            c.scope_key,
+            c.session_id,
+            c.created_at AS latest_checkpoint_at,
+            json_extract(c.metadata_json, '$.sourceRawEventIds[#-1]') AS last_source_raw_event_id
+          FROM checkpoints c
+          INNER JOIN latest_checkpoint_key k
+            ON k.scope_type = c.scope_type
+           AND k.scope_key = c.scope_key
+           AND k.session_id = c.session_id
+           AND k.latest_checkpoint_at = c.created_at
+          WHERE c.level = 0
+        ),
+        last_source_raw_event AS (
+          SELECT r.scope_type, r.scope_key, r.session_id, r.id, r.created_at
+          FROM raw_events r
+          INNER JOIN latest_checkpoint c
+            ON c.scope_type = r.scope_type
+           AND c.scope_key = r.scope_key
+           AND c.session_id = r.session_id
+           AND c.last_source_raw_event_id = r.id
+        ),
+        latest_run_key AS (
+          SELECT scope_type, scope_key, session_id, MAX(created_at) AS latest_run_at
+          FROM distill_runs
+          GROUP BY scope_type, scope_key, session_id
+        ),
+        latest_run AS (
+          SELECT d.scope_type, d.scope_key, d.session_id, d.status, d.created_at, d.completed_at
+          FROM distill_runs d
+          INNER JOIN latest_run_key k
+            ON k.scope_type = d.scope_type
+           AND k.scope_key = d.scope_key
+           AND k.session_id = d.session_id
+           AND k.latest_run_at = d.created_at
+        )
+        SELECT
+          r.scope_type,
+          r.scope_key,
+          r.session_id,
+          COUNT(*) AS events_since_checkpoint,
+          SUM(LENGTH(r.content)) AS chars_since_checkpoint,
+          MIN(r.created_at) AS first_raw_after_checkpoint_at,
+          MAX(r.created_at) AS latest_raw_at,
+          c.latest_checkpoint_at,
+          latest_run.status AS latest_run_status,
+          latest_run.created_at AS latest_run_at,
+          latest_run.completed_at AS latest_run_completed_at
+        FROM raw_events r
+        LEFT JOIN latest_checkpoint c
+          ON c.scope_type = r.scope_type
+         AND c.scope_key = r.scope_key
+         AND c.session_id = r.session_id
+        LEFT JOIN last_source_raw_event last_source
+          ON last_source.scope_type = r.scope_type
+         AND last_source.scope_key = r.scope_key
+         AND last_source.session_id = r.session_id
+        LEFT JOIN latest_run
+          ON latest_run.scope_type = r.scope_type
+         AND latest_run.scope_key = r.scope_key
+         AND latest_run.session_id = r.session_id
+        WHERE r.role IN ('user', 'assistant')
+          AND (
+            c.latest_checkpoint_at IS NULL
+            OR (
+              c.last_source_raw_event_id IS NOT NULL
+              AND last_source.id IS NOT NULL
+              AND (
+                r.created_at > last_source.created_at
+                OR (r.created_at = last_source.created_at AND r.id > last_source.id)
+              )
+            )
+            OR (
+              (c.last_source_raw_event_id IS NULL OR last_source.id IS NULL)
+              AND r.created_at > c.latest_checkpoint_at
+            )
+        )
+        ${where}
+        GROUP BY r.scope_type, r.scope_key, r.session_id
+        ${havingClause}
+        ORDER BY latest_raw_at ${orderDirection}, r.scope_type ${orderDirection}, r.scope_key ${orderDirection}, r.session_id ${orderDirection}
+        ${limitClause}
+      `)
+      .all(...queryValues)
+      .map((row) => ({
+        scopeType: row.scope_type,
+        scopeKey: row.scope_key,
+        sessionId: row.session_id,
+        eventsSinceCheckpoint: Number(row.events_since_checkpoint || 0),
+        charsSinceCheckpoint: Number(row.chars_since_checkpoint || 0),
+        firstRawAfterCheckpointAt: row.first_raw_after_checkpoint_at,
+        latestRawAt: row.latest_raw_at,
+        latestCheckpointAt: row.latest_checkpoint_at,
+        latestRunStatus: row.latest_run_status || null,
+        latestRunAt: row.latest_run_at || null,
+        latestRunCompletedAt: row.latest_run_completed_at || null,
+      }));
+  }
+
   listScopeKeys({ scopeType = null, limit = null } = {}) {
     const filters = [];
     const values = [];

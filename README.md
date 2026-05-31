@@ -882,6 +882,23 @@ If a session has a large backlog, oldest-first draining may require several
 checkpoint. This is intentional: ContextForge favors gap-free checkpoint
 chains over jumping straight to the newest tail.
 
+Watch-mode ingestion is file-change driven, so a small raw tail can remain
+after a checkpoint if the native transcript receives final events and then goes
+quiet. Use `listDueDistillSessions` to inspect those catch-up candidates without
+calling a provider, and `processDueDistills` to run a bounded batch:
+
+```sh
+node src/cli.js listDueDistillSessions --limit 20
+node src/cli.js processDueDistills --dryRun true --limit 5
+node src/cli.js processDueDistills --limit 5
+```
+
+The catch-up scanner is deliberately conservative: it uses checkpoint
+`sourceRawEventIds` to continue after the last covered raw event, defaults to a
+10 minute `idleMs` window to avoid active sessions, skips fresh `started`
+distill runs, and only processes sessions that still satisfy the normal
+distillation thresholds.
+
 Tool output is evidence, not conversation memory. Long logs, DB dumps, and
 shell output should remain in the native transcript or an explicit artifact;
 checkpoints should preserve the assistant's interpreted verification facts,
@@ -1067,11 +1084,23 @@ node src/cli.js distillUsage \
 
 `distillUsage` reports run counts, success/failure counts, selected raw-event
 characters, estimated input tokens, elapsed time, and actual provider token
-usage when a provider records it. When actual provider usage is unavailable,
-`estimatedInputTokens` uses `selectedCharCount / 4` by default. Override the
-estimation ratio with `--charsPerToken`. Older runs that do not have
-`sourceEventWindow` metadata may report `selectedCharCount` and
-`estimatedInputTokens` as `0`.
+usage when a provider records it. For providers that expose prompt-cache
+details, it also reports prompt cache hit/miss tokens and an aggregate cache
+hit ratio. When actual provider usage is unavailable, `estimatedInputTokens`
+uses `selectedCharCount / 4` by default. Override the estimation ratio with
+`--charsPerToken`. Older runs that do not have `sourceEventWindow` metadata may
+report `selectedCharCount` and `estimatedInputTokens` as `0`.
+
+Inspect or process bounded distillation catch-up work:
+
+```bash
+node src/cli.js listDueDistillSessions --limit 20
+node src/cli.js processDueDistills --dryRun true --limit 5
+```
+
+`listDueDistillSessions` is read-only. `processDueDistills` runs a small
+oldest-first batch, defaults to `--limit 5`, and respects the same normal
+distillation thresholds plus the default idle window.
 
 CLI output is JSON so adapters and scripts can consume it directly.
 
@@ -1196,6 +1225,8 @@ The MCP server exposes a narrow tool surface over the same core API:
 - `prune_raw_events`
 - `distill_checkpoint`
 - `distill_usage`
+- `list_due_distill_sessions`
+- `process_due_distills`
 - `suggest_memory_promotions`
 - `auto_promote_memory_candidates`
 - `reconcile_memory`
@@ -1410,6 +1441,7 @@ durable memories, raw event capture, rolling working summaries, checkpoint
 distillation with `mock`, `codex_exec`, and `openai_compatible` providers,
 remote HTTP mode for server-backed canonical memory, an operator UI, stdio and
 Streamable HTTP MCP, explainable hybrid retrieval, embedding job processing,
-closeout promotion review, audited strict safe auto-promotion controls, and
-memory reconciliation for user corrections. Further provider adapters and
-large-store performance hardening remain future work.
+bounded distillation catch-up, closeout promotion review, audited strict safe
+auto-promotion controls, and memory reconciliation for user corrections.
+Further provider adapters and large-store performance hardening remain future
+work.

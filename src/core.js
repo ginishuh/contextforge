@@ -171,6 +171,20 @@ function usageNumberFrom(metadata, keys) {
   return null;
 }
 
+function usageNestedNumberFrom(metadata, path) {
+  if (!metadata || typeof metadata !== 'object') {
+    return null;
+  }
+  let current = metadata;
+  for (const key of path) {
+    if (!current || typeof current !== 'object') {
+      return null;
+    }
+    current = current[key];
+  }
+  return finiteNumber(current);
+}
+
 function extractUsageMetadata(run) {
   const providerMetadata = run.outputMetadata?.providerMetadata || {};
   const candidates = [
@@ -190,10 +204,28 @@ function extractUsageMetadata(run) {
     ]);
     const totalTokens = usageNumberFrom(candidate, ['totalTokens', 'total_tokens']);
     if (inputTokens != null || outputTokens != null || totalTokens != null) {
+      const promptCacheHitTokens =
+        usageNumberFrom(candidate, [
+          'promptCacheHitTokens',
+          'prompt_cache_hit_tokens',
+          'cacheHitInputTokens',
+          'input_cache_hit_tokens',
+        ]) ?? usageNestedNumberFrom(candidate, ['prompt_tokens_details', 'cached_tokens']);
+      const explicitPromptCacheMissTokens = usageNumberFrom(candidate, [
+        'promptCacheMissTokens',
+        'prompt_cache_miss_tokens',
+        'cacheMissInputTokens',
+        'input_cache_miss_tokens',
+      ]);
+      const promptCacheMissTokens =
+        explicitPromptCacheMissTokens ??
+        (inputTokens != null && promptCacheHitTokens != null ? Math.max(0, inputTokens - promptCacheHitTokens) : null);
       return {
         inputTokens,
         outputTokens,
         totalTokens: totalTokens ?? (inputTokens != null && outputTokens != null ? inputTokens + outputTokens : null),
+        promptCacheHitTokens,
+        promptCacheMissTokens,
       };
     }
   }
@@ -242,7 +274,15 @@ function summarizeDistillUsage({ scope, sessionId, runs, charsPerToken = 4 }) {
     inputTokens: actualUsageRuns.reduce((total, run) => total + (run.usage.inputTokens || 0), 0),
     outputTokens: actualUsageRuns.reduce((total, run) => total + (run.usage.outputTokens || 0), 0),
     totalTokens: actualUsageRuns.reduce((total, run) => total + (run.usage.totalTokens || 0), 0),
+    promptCacheRuns: actualUsageRuns.filter(
+      (run) => run.usage.promptCacheHitTokens != null || run.usage.promptCacheMissTokens != null,
+    ).length,
+    promptCacheHitTokens: actualUsageRuns.reduce((total, run) => total + (run.usage.promptCacheHitTokens || 0), 0),
+    promptCacheMissTokens: actualUsageRuns.reduce((total, run) => total + (run.usage.promptCacheMissTokens || 0), 0),
   };
+  actualUsage.promptCacheHitRatio = actualUsage.inputTokens
+    ? actualUsage.promptCacheHitTokens / actualUsage.inputTokens
+    : null;
 
   return {
     scopeType: scope.scopeType,
@@ -1244,6 +1284,25 @@ function buildSessionStatus({ scope, sessionId, rawEvents, latestCheckpoint, pol
   };
 }
 
+function dueDistillSessionSummary(candidate, status, idleElapsedMs) {
+  return {
+    scopeType: candidate.scopeType,
+    scopeKey: candidate.scopeKey,
+    sessionId: candidate.sessionId,
+    latestCheckpointAt: candidate.latestCheckpointAt || null,
+    firstRawAfterCheckpointAt: candidate.firstRawAfterCheckpointAt || null,
+    latestRawAt: candidate.latestRawAt || null,
+    idleElapsedMs,
+    latestRunStatus: candidate.latestRunStatus || null,
+    latestRunAt: candidate.latestRunAt || null,
+    latestRunCompletedAt: candidate.latestRunCompletedAt || null,
+    eventsSinceLastCheckpoint: status.eventsSinceLastCheckpoint,
+    charsSinceLastCheckpoint: status.charsSinceLastCheckpoint,
+    distillWindow: status.distillWindow,
+    reasons: status.reasons,
+  };
+}
+
 function commonMetadataValue(rawEvents, key) {
   const values = new Set(rawEvents.map((event) => event.metadata?.[key]).filter(Boolean));
   return values.size === 1 ? [...values][0] : null;
@@ -2027,6 +2086,180 @@ export function createContextForge(options = {}) {
           policy,
         });
       });
+    },
+
+    listDueDistillSessions(options = {}) {
+      const shouldNarrowScope = Boolean(options.scope || options.scopeType || options.scopeKey || options.cwd || options.repoPath);
+      const scope = shouldNarrowScope ? normalizeScopeOptions(options, config) : null;
+      const limit = positiveNumber(options.limit == null ? 20 : Number(options.limit), 'limit');
+      const scanLimit = positiveNumber(
+        options.scanLimit == null ? Math.max(50, limit * 5) : Number(options.scanLimit),
+        'scanLimit',
+      );
+      const idleMs = nonnegativeNumber(options.idleMs == null ? 600000 : Number(options.idleMs), 'idleMs');
+      const activeRunMaxAgeMs = nonnegativeNumber(
+        options.activeRunMaxAgeMs == null ? 300000 : Number(options.activeRunMaxAgeMs),
+        'activeRunMaxAgeMs',
+      );
+      const order = options.order === 'desc' ? 'desc' : 'asc';
+
+      return useStore((store) => {
+        const effective = getEffectiveRuntime(store);
+        const policy = {
+          minEvents: positiveNumber(
+            options.minEvents == null ? effective.distillPolicy.minEvents : Number(options.minEvents),
+            'minEvents',
+          ),
+          minIntervalMs: positiveNumber(
+            options.minIntervalMs == null ? effective.distillPolicy.minIntervalMs : Number(options.minIntervalMs),
+            'minIntervalMs',
+          ),
+          charThreshold: positiveNumber(
+            options.charThreshold == null ? effective.distillPolicy.charThreshold : Number(options.charThreshold),
+            'charThreshold',
+          ),
+          charMinIntervalMs: positiveNumber(
+            options.charMinIntervalMs == null
+              ? effective.distillPolicy.charMinIntervalMs
+              : Number(options.charMinIntervalMs),
+            'charMinIntervalMs',
+          ),
+          maxEvents: positiveNumber(
+            options.maxEvents == null ? effective.distillPolicy.maxEvents : Number(options.maxEvents),
+            'maxEvents',
+          ),
+          maxChars: positiveNumber(
+            options.maxChars == null ? effective.distillPolicy.maxChars : Number(options.maxChars),
+            'maxChars',
+          ),
+        };
+        const now = new Date();
+        const candidates = store.listSessionsWithRawAfterCheckpoint({
+          scopeType: scope?.scopeType || null,
+          scopeKey: scope?.scopeKey || null,
+          limit: scanLimit,
+          order,
+          minEvents: policy.minEvents,
+          charThreshold: policy.charThreshold,
+        });
+        const due = [];
+        const skipped = [];
+        for (const candidate of candidates) {
+          const latestRawTime = Date.parse(candidate.latestRawAt || '');
+          const idleElapsedMs = Number.isFinite(latestRawTime) ? Math.max(0, now.getTime() - latestRawTime) : null;
+          if (idleElapsedMs != null && idleElapsedMs < idleMs) {
+            skipped.push({ ...candidate, reason: 'idle_window' });
+            continue;
+          }
+          const latestRunTime = Date.parse(candidate.latestRunAt || '');
+          if (
+            candidate.latestRunStatus === 'started' &&
+            Number.isFinite(latestRunTime) &&
+            now.getTime() - latestRunTime < activeRunMaxAgeMs
+          ) {
+            skipped.push({ ...candidate, reason: 'active_started_run' });
+            continue;
+          }
+          const candidateScope = { scopeType: candidate.scopeType, scopeKey: candidate.scopeKey };
+          const rawEvents = store.listRawEvents({ ...candidateScope, sessionId: candidate.sessionId });
+          const latestCheckpoint = store.getLatestCheckpoint({
+            ...candidateScope,
+            sessionId: candidate.sessionId,
+            level: 0,
+          });
+          const status = buildSessionStatus({
+            scope: candidateScope,
+            sessionId: candidate.sessionId,
+            rawEvents,
+            latestCheckpoint,
+            policy,
+            now,
+          });
+          if (!status.shouldDistill) {
+            skipped.push({ ...candidate, reason: 'below_threshold' });
+            continue;
+          }
+          due.push(dueDistillSessionSummary(candidate, status, idleElapsedMs));
+          if (due.length >= limit) {
+            break;
+          }
+        }
+        return {
+          scope: scope ? { scopeType: scope.scopeType, scopeKey: scope.scopeKey } : null,
+          limit,
+          scanLimit,
+          idleMs,
+          activeRunMaxAgeMs,
+          order,
+          scanned: candidates.length,
+          dueCount: due.length,
+          skippedCount: skipped.length,
+          skipReasonCounts: skipped.reduce((counts, item) => {
+            counts[item.reason] = (counts[item.reason] || 0) + 1;
+            return counts;
+          }, {}),
+          sessions: due,
+        };
+      });
+    },
+
+    async processDueDistills(options = {}) {
+      const limit = positiveNumber(options.limit == null ? 5 : Number(options.limit), 'limit');
+      const dryRun = options.dryRun === true || options.dryRun === 'true';
+      const due = await this.listDueDistillSessions({
+        ...options,
+        limit,
+      });
+      const result = {
+        dryRun,
+        limit,
+        scanLimit: due.scanLimit,
+        idleMs: due.idleMs,
+        activeRunMaxAgeMs: due.activeRunMaxAgeMs,
+        scanned: due.scanned,
+        dueCount: due.dueCount,
+        skippedCount: due.skippedCount,
+        skipReasonCounts: due.skipReasonCounts,
+        processed: 0,
+        failed: 0,
+        sessions: due.sessions,
+        results: [],
+      };
+      if (dryRun) {
+        return result;
+      }
+      for (const session of due.sessions) {
+        try {
+          const checkpoint = await this.distillCheckpoint({
+            scope: session.scopeType,
+            scopeKey: session.scopeKey,
+            sessionId: session.sessionId,
+            provider: options.provider,
+            maxEvents: options.maxEvents,
+            maxChars: options.maxChars,
+          });
+          result.processed += 1;
+          result.results.push({
+            scopeType: session.scopeType,
+            scopeKey: session.scopeKey,
+            sessionId: session.sessionId,
+            status: 'succeeded',
+            checkpointId: checkpoint.id,
+            sourceEventCount: checkpoint.sourceEventCount,
+            createdAt: checkpoint.createdAt,
+          });
+        } catch (error) {
+          result.failed += 1;
+          result.results.push({
+            scopeType: session.scopeType,
+            scopeKey: session.scopeKey,
+            sessionId: session.sessionId,
+            status: 'failed',
+            error: errorSummary(error),
+          });
+        }
+      }
+      return result;
     },
 
     remember(options) {

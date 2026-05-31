@@ -133,6 +133,8 @@ function toCoreOptions(options) {
     watchStateDir: options.watchStateDir || process.env.CONTEXTFORGE_WATCH_STATE_DIR,
     intervalMs: options.intervalMs == null ? undefined : Number(options.intervalMs),
     iterations: options.iterations == null ? undefined : Number(options.iterations),
+    idleMs: options.idleMs == null ? undefined : Number(options.idleMs),
+    activeRunMaxAgeMs: options.activeRunMaxAgeMs == null ? undefined : Number(options.activeRunMaxAgeMs),
     charsPerToken: options.charsPerToken == null ? undefined : Number(options.charsPerToken),
     rawTailLimit: options.rawTailLimit == null ? undefined : Number(options.rawTailLimit),
     latestCheckpointLimit: options.latestCheckpointLimit == null ? undefined : Number(options.latestCheckpointLimit),
@@ -179,6 +181,14 @@ function printJson(value) {
   console.log(JSON.stringify(value, null, 2));
 }
 
+function preserveCoreLimitDefault(coreOptions, rawOptions) {
+  if (rawOptions.limit != null) {
+    return coreOptions;
+  }
+  const { limit, ...withoutLimit } = coreOptions;
+  return withoutLimit;
+}
+
 async function main() {
   const { command, options } = parseArgs(process.argv);
   const commands = {
@@ -190,6 +200,10 @@ async function main() {
     doctorCodexExec: (app, coreOptions) => app.checkCodexExec(coreOptions),
     beginSession: (app, coreOptions) => app.beginSession(coreOptions),
     sessionStatus: (app, coreOptions) => app.sessionStatus(coreOptions),
+    listDueDistillSessions: (app, coreOptions, rawOptions) =>
+      app.listDueDistillSessions(preserveCoreLimitDefault(coreOptions, rawOptions)),
+    processDueDistills: (app, coreOptions, rawOptions) =>
+      app.processDueDistills(preserveCoreLimitDefault(coreOptions, rawOptions)),
     remember: (app, coreOptions) => app.remember(coreOptions),
     promoteMemory: (app, coreOptions) => app.promoteMemory(coreOptions),
     promoteMemoryCandidate: (app, coreOptions) => app.promoteMemoryCandidate(coreOptions),
@@ -282,7 +296,7 @@ async function main() {
   if (!handler) {
     throw new Error(`Unknown command: ${command}`);
   }
-  printJson(await handler(app, coreOptions));
+  printJson(await handler(app, coreOptions, options));
 }
 
 main().catch((error) => {

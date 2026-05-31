@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.4.2 - 2026-05-31
+
+- Added bounded distillation catch-up commands:
+  `listDueDistillSessions` and `processDueDistills` in core, CLI, remote API,
+  and MCP as `list_due_distill_sessions` / `process_due_distills`.
+- Made catch-up scanning continue from checkpoint `sourceRawEventIds`, respect
+  normal distillation thresholds, skip active sessions through an idle window,
+  and preserve small default processing batches for low-resource operation.
+- Added `distillUsage` prompt-cache observability for providers that report
+  prompt cache hit/miss tokens, including aggregate cache hit ratio.
+- Fixed HOME-dependent non-git temp test setup so the full suite is stable when
+  `/home/ubuntu` is itself inside a git worktree.
+
 ## 0.4.1 - 2026-05-20
 
 - Added query-independent latest checkpoint handoff to `bootstrapContext` and
