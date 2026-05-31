@@ -28,7 +28,7 @@ async function makeTempDir() {
 }
 
 async function makeNonGitTempDir() {
-  return fs.mkdtemp(path.join(os.homedir(), 'contextforge-test-'));
+  return makeTempDir();
 }
 
 function testAdminPasswordHash(password) {
@@ -3775,6 +3775,166 @@ test('sessionStatus continues after the last raw event covered by a checkpoint',
   assert.equal(status.distillWindow.firstRawEventId !== checkpoint.metadata.sourceRawEventIds[0], true);
 });
 
+test('listDueDistillSessions finds raw evidence after checkpoint coverage', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'mock',
+    },
+    cwd: process.cwd(),
+  });
+  const scope = {
+    scope: 'repo',
+    scopeKey: 'repo-catch-up',
+    sessionId: 'catch-up-session',
+  };
+
+  app.appendRaw({
+    ...scope,
+    role: 'user',
+    content: 'covered raw event',
+  });
+  const coveredRaw = app.listRawEvents(scope)[0];
+  const db = new Database(path.join(dataDir, 'contextforge.db'));
+  try {
+    db.prepare('UPDATE raw_events SET created_at = ? WHERE id = ?').run(
+      '2026-01-01T00:00:00.000Z',
+      coveredRaw.id,
+    );
+  } finally {
+    db.close();
+  }
+
+  const checkpoint = await app.distillCheckpoint(scope);
+  app.appendRaw({
+    ...scope,
+    role: 'assistant',
+    content: 'tail raw appended after the checkpoint run',
+  });
+  const tailRaw = app.listRawEvents(scope).find((event) => event.content.includes('tail raw appended'));
+  const dbAfterTail = new Database(path.join(dataDir, 'contextforge.db'));
+  try {
+    dbAfterTail.prepare('UPDATE raw_events SET created_at = ? WHERE id = ?').run(
+      '2026-01-01T00:01:00.000Z',
+      tailRaw.id,
+    );
+    dbAfterTail.prepare('UPDATE checkpoints SET created_at = ? WHERE id = ?').run(
+      '2026-01-01T00:02:00.000Z',
+      checkpoint.id,
+    );
+  } finally {
+    dbAfterTail.close();
+  }
+
+  const due = app.listDueDistillSessions({
+    scope: 'repo',
+    scopeKey: 'repo-catch-up',
+    limit: 5,
+    minEvents: 1,
+    minIntervalMs: 1,
+    charThreshold: 1,
+    charMinIntervalMs: 1,
+  });
+
+  assert.equal(due.dueCount, 1);
+  assert.equal(due.skippedCount, 0);
+  assert.deepEqual(due.skipReasonCounts, {});
+  assert.equal(due.sessions[0].sessionId, 'catch-up-session');
+  assert.equal(due.sessions[0].eventsSinceLastCheckpoint, 1);
+  assert.equal(due.sessions[0].charsSinceLastCheckpoint, tailRaw.content.length);
+  assert.equal(due.sessions[0].latestCheckpointAt, '2026-01-01T00:02:00.000Z');
+
+  const dryRun = await app.processDueDistills({
+    scope: 'repo',
+    scopeKey: 'repo-catch-up',
+    limit: 1,
+    dryRun: true,
+    minEvents: 1,
+    minIntervalMs: 1,
+    charThreshold: 1,
+    charMinIntervalMs: 1,
+  });
+  assert.equal(dryRun.dryRun, true);
+  assert.equal(dryRun.processed, 0);
+  assert.equal(dryRun.dueCount, 1);
+
+  const processed = await app.processDueDistills({
+    scope: 'repo',
+    scopeKey: 'repo-catch-up',
+    limit: 1,
+    minEvents: 1,
+    minIntervalMs: 1,
+    charThreshold: 1,
+    charMinIntervalMs: 1,
+  });
+  assert.equal(processed.processed, 1);
+  assert.equal(processed.failed, 0);
+  assert.equal(processed.results[0].status, 'succeeded');
+  assert.equal(processed.results[0].sourceEventCount, 1);
+
+  const after = app.listDueDistillSessions({
+    scope: 'repo',
+    scopeKey: 'repo-catch-up',
+    limit: 5,
+    minEvents: 1,
+    minIntervalMs: 1,
+    charThreshold: 1,
+    charMinIntervalMs: 1,
+    idleMs: 0,
+  });
+  assert.equal(after.dueCount, 0);
+});
+
+test('listDueDistillSessions skips sessions inside the idle window', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'mock',
+    },
+    cwd: process.cwd(),
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-idle-catch-up',
+    sessionId: 'idle-session',
+    role: 'user',
+    content: 'fresh raw event that should wait for the idle window',
+  });
+
+  const due = app.listDueDistillSessions({
+    scope: 'repo',
+    scopeKey: 'repo-idle-catch-up',
+    limit: 5,
+    minEvents: 1,
+    charThreshold: 1,
+    idleMs: 600000,
+  });
+  assert.equal(due.dueCount, 0);
+  assert.equal(due.skippedCount, 1);
+  assert.deepEqual(due.skipReasonCounts, { idle_window: 1 });
+});
+
+test('CLI due distill commands preserve core default limits', async () => {
+  const dataDir = await makeTempDir();
+  const env = {
+    ...process.env,
+    CONTEXTFORGE_DATA_DIR: dataDir,
+  };
+
+  const listed = await execFileAsync('node', ['src/cli.js', 'listDueDistillSessions'], { env });
+  assert.equal(JSON.parse(listed.stdout).limit, 20);
+
+  const dryRun = await execFileAsync('node', ['src/cli.js', 'processDueDistills', '--dryRun', 'true'], { env });
+  assert.equal(JSON.parse(dryRun.stdout).limit, 5);
+
+  const explicit = await execFileAsync('node', ['src/cli.js', 'processDueDistills', '--dryRun', 'true', '--limit', '2'], {
+    env,
+  });
+  assert.equal(JSON.parse(explicit.stdout).limit, 2);
+});
+
 test('distillCheckpoint drains bounded conversation windows oldest first', async () => {
   const dataDir = await makeTempDir();
   const seen = [];
@@ -3935,6 +4095,8 @@ test('distillUsage summarizes estimated and actual provider usage', async () => 
             inputTokens: 42,
             outputTokens: 8,
             totalTokens: 50,
+            prompt_cache_hit_tokens: 10,
+            prompt_cache_miss_tokens: 32,
           },
         },
       }),
@@ -3970,8 +4132,13 @@ test('distillUsage summarizes estimated and actual provider usage', async () => 
     inputTokens: 42,
     outputTokens: 8,
     totalTokens: 50,
+    promptCacheRuns: 1,
+    promptCacheHitTokens: 10,
+    promptCacheMissTokens: 32,
+    promptCacheHitRatio: 10 / 42,
   });
   assert.equal(usage.runs[0].usage.totalTokens, 50);
+  assert.equal(usage.runs[0].usage.promptCacheHitTokens, 10);
 });
 
 test('distillUsage averages elapsed time across completed runs only', async () => {
@@ -6393,6 +6560,8 @@ test('REMOTE_METHODS exposes resume, suggestion, auto-promotion, and reconciliat
   assert.ok(REMOTE_METHODS.includes('checkDistillProvider'));
   assert.ok(REMOTE_METHODS.includes('listScopeKeys'));
   assert.ok(REMOTE_METHODS.includes('listRecentDistillRuns'));
+  assert.ok(REMOTE_METHODS.includes('listDueDistillSessions'));
+  assert.ok(REMOTE_METHODS.includes('processDueDistills'));
   assert.ok(REMOTE_METHODS.includes('listMemories'));
   assert.ok(REMOTE_METHODS.includes('suggestMemoryPromotions'));
   assert.ok(REMOTE_METHODS.includes('autoPromoteMemoryCandidates'));
@@ -6570,11 +6739,13 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'get_session_working_context',
       'get_working_summary',
       'list_checkpoints',
+      'list_due_distill_sessions',
       'list_embedding_jobs',
       'list_memory_candidates',
       'list_memory_events',
       'list_memory_update_candidates',
       'list_preference_occurrences',
+      'process_due_distills',
       'process_embedding_jobs',
       'promote_memory',
       'promote_memory_candidate',
@@ -6598,6 +6769,14 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.ok(sessionStatusTool.inputSchema.properties.maxEvents);
     assert.ok(sessionStatusTool.inputSchema.properties.maxChars);
     assert.ok(sessionStatusTool.description.includes('latestCheckpointMemoryCandidateCount'));
+    const listDueDistillsTool = toolList.tools.find((tool) => tool.name === 'list_due_distill_sessions');
+    assert.ok(listDueDistillsTool.inputSchema.properties.scanLimit);
+    assert.ok(listDueDistillsTool.inputSchema.properties.idleMs);
+    assert.ok(listDueDistillsTool.description.includes('idleMs'));
+    const processDueDistillsTool = toolList.tools.find((tool) => tool.name === 'process_due_distills');
+    assert.ok(processDueDistillsTool.inputSchema.properties.dryRun);
+    assert.ok(processDueDistillsTool.inputSchema.properties.limit);
+    assert.ok(processDueDistillsTool.description.includes('catch-up batch'));
     const distillTool = toolList.tools.find((tool) => tool.name === 'distill_checkpoint');
     assert.ok(distillTool.inputSchema.properties.maxEvents);
     assert.ok(distillTool.inputSchema.properties.maxChars);
@@ -7319,7 +7498,7 @@ test('remote storage mode resolves repoPath before sending scoped calls', async 
 test('remote storage mode strips local path hints after resolving scope', async () => {
   const appCwd = await makeTempDir();
   const repoPath = await makeGitRepo('https://github.com/example/remote-strip-repo.git');
-  let postedBody = null;
+  const postedBodies = [];
   const app = createContextForge({
     env: {
       CONTEXTFORGE_STORAGE_MODE: 'remote',
@@ -7327,8 +7506,9 @@ test('remote storage mode strips local path hints after resolving scope', async 
       CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
     },
     cwd: appCwd,
-    fetchImpl: async (_url, request) => {
-      postedBody = JSON.parse(request.body);
+    fetchImpl: async (url, request) => {
+      const postedBody = JSON.parse(request.body);
+      postedBodies.push({ method: new URL(url).pathname.split('/').at(-1), body: postedBody });
       return {
         ok: true,
         text: async () =>
@@ -7352,9 +7532,26 @@ test('remote storage mode strips local path hints after resolving scope', async 
   });
 
   assert.equal(memory.scopeKey, 'github.com/example/remote-strip-repo');
-  assert.equal(postedBody.scopeKey, 'github.com/example/remote-strip-repo');
-  assert.equal(postedBody.repoPath, undefined);
-  assert.equal(postedBody.cwd, undefined);
+  assert.equal(postedBodies[0].body.scopeKey, 'github.com/example/remote-strip-repo');
+  assert.equal(postedBodies[0].body.repoPath, undefined);
+  assert.equal(postedBodies[0].body.cwd, undefined);
+
+  await app.listDueDistillSessions({
+    scope: 'repo',
+    repoPath,
+    cwd: appCwd,
+    limit: 1,
+  });
+  assert.equal(postedBodies[1].method, 'listDueDistillSessions');
+  assert.equal(postedBodies[1].body.scopeKey, 'github.com/example/remote-strip-repo');
+  assert.equal(postedBodies[1].body.repoPath, undefined);
+  assert.equal(postedBodies[1].body.cwd, undefined);
+
+  await app.listDueDistillSessions({ limit: 2 });
+  assert.equal(postedBodies[2].method, 'listDueDistillSessions');
+  assert.equal(postedBodies[2].body.scopeKey, undefined);
+  assert.equal(postedBodies[2].body.scope, undefined);
+  assert.equal(postedBodies[2].body.limit, 2);
 });
 
 test('remote storage mode preserves structured error names and warnings', async () => {

@@ -11,6 +11,8 @@ const REMOTE_METHODS = [
   'checkCodexExec',
   'beginSession',
   'sessionStatus',
+  'listDueDistillSessions',
+  'processDueDistills',
   'remember',
   'promoteMemory',
   'promoteMemoryCandidate',
@@ -57,10 +59,16 @@ const UNSCOPED_REMOTE_METHODS = new Set([
   'pruneRawEvents',
 ]);
 
+const OPTIONALLY_SCOPED_REMOTE_METHODS = new Set(['listDueDistillSessions', 'processDueDistills']);
+
 function remoteUrl(baseUrl, method) {
   const url = new URL(baseUrl);
   url.pathname = `${url.pathname.replace(/\/$/, '')}/v0/${method}`;
   return url;
+}
+
+function hasScopeHints(options = {}) {
+  return Boolean(options.scope || options.scopeType || options.scopeKey || options.cwd || options.repoPath);
 }
 
 function makeRemoteError(method, status, body) {
@@ -207,6 +215,9 @@ export function createRemoteContextForge(config, options = {}) {
       continue;
     }
     api[method] = (callOptions = {}) => {
+      if (OPTIONALLY_SCOPED_REMOTE_METHODS.has(method) && !hasScopeHints(callOptions)) {
+        return client.call(method, callOptions);
+      }
       if (UNSCOPED_REMOTE_METHODS.has(method)) {
         return client.call(method, callOptions);
       }

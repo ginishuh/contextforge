@@ -184,6 +184,66 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
   );
 
   server.registerTool(
+    'list_due_distill_sessions',
+    {
+      title: 'List Due Distill Sessions',
+      description:
+        'Scan for sessions with raw evidence after the latest checkpoint coverage that are due for distillation. This is read-only and bounded by limit/scanLimit; idleMs avoids active sessions.',
+      inputSchema: {
+        ...scopedSchema,
+        limit: z.number().int().positive().optional(),
+        scanLimit: z.number().int().positive().optional(),
+        idleMs: z.number().int().nonnegative().optional(),
+        activeRunMaxAgeMs: z.number().int().nonnegative().optional(),
+        order: z.enum(['asc', 'desc']).optional(),
+        minEvents: z.number().int().positive().optional(),
+        minIntervalMs: z.number().int().positive().optional(),
+        charMinIntervalMs: z.number().int().positive().optional(),
+        charThreshold: z.number().int().positive().optional(),
+        maxEvents: z.number().int().positive().optional(),
+        maxChars: z.number().int().positive().optional(),
+      },
+      annotations: {
+        title: 'List Due Distill Sessions',
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.listDueDistillSessions(args)),
+  );
+
+  server.registerTool(
+    'process_due_distills',
+    {
+      title: 'Process Due Distills',
+      description:
+        'Run a small catch-up batch of due session distillations. Use dryRun=true to inspect first; limit defaults to 5 and idleMs avoids active sessions.',
+      inputSchema: {
+        ...scopedSchema,
+        limit: z.number().int().positive().optional(),
+        scanLimit: z.number().int().positive().optional(),
+        idleMs: z.number().int().nonnegative().optional(),
+        activeRunMaxAgeMs: z.number().int().nonnegative().optional(),
+        order: z.enum(['asc', 'desc']).optional(),
+        provider: z.string().optional(),
+        dryRun: z.boolean().optional(),
+        minEvents: z.number().int().positive().optional(),
+        minIntervalMs: z.number().int().positive().optional(),
+        charMinIntervalMs: z.number().int().positive().optional(),
+        charThreshold: z.number().int().positive().optional(),
+        maxEvents: z.number().int().positive().optional(),
+        maxChars: z.number().int().positive().optional(),
+      },
+      annotations: {
+        title: 'Process Due Distills',
+        readOnlyHint: false,
+        idempotentHint: false,
+      },
+    },
+    async (args) => jsonResult(await app.processDueDistills(args)),
+  );
+
+  server.registerTool(
     'search',
     {
       title: 'Search Memory',
