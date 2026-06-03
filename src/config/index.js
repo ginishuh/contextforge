@@ -236,6 +236,13 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
         enabled: env.CONTEXTFORGE_AUTO_PROMOTE_AUDIT_ENABLED !== 'false',
         provider: env.CONTEXTFORGE_AUTO_PROMOTE_AUDIT_PROVIDER || 'codex_exec',
         command: env.CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_COMMAND || env.CONTEXTFORGE_CODEX_EXEC_COMMAND || 'codex',
+        codexBin:
+          env.CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_BIN ||
+          env.CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_COMMAND ||
+          env.CONTEXTFORGE_CODEX_EXEC_COMMAND ||
+          'codex',
+        pythonCommand: env.CONTEXTFORGE_AUTO_PROMOTE_AUDIT_PYTHON_COMMAND || 'python3',
+        pythonPath: env.CONTEXTFORGE_AUTO_PROMOTE_AUDIT_PYTHONPATH || null,
         model: env.CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_MODEL || 'gpt-5.5',
         reasoningEffort: env.CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_REASONING_EFFORT || 'low',
         sandbox: env.CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_SANDBOX || 'read-only',

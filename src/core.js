@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createCodexExecAutoPromoteAuditor } from './audit/codex_exec.js';
+import { createCodexSdkPythonAutoPromoteAuditor } from './audit/codex_sdk_python.js';
 import { loadConfig } from './config/index.js';
 import { createDistillProvider } from './distill/index.js';
 import { checkCodexExecProvider } from './distill/providers/codex_exec.js';
@@ -1513,13 +1514,19 @@ export function createContextForge(options = {}) {
     if (!audit.enabled) {
       return null;
     }
-    if (audit.provider !== 'codex_exec') {
-      throw new Error(`Unsupported auto-promotion audit provider "${audit.provider}".`);
+    if (audit.provider === 'codex_exec') {
+      return createCodexExecAutoPromoteAuditor({
+        ...audit,
+        runner: options.autoPromoteAuditRunner,
+      });
     }
-    return createCodexExecAutoPromoteAuditor({
-      ...audit,
-      runner: options.autoPromoteAuditRunner,
-    });
+    if (audit.provider === 'codex_sdk_python') {
+      return createCodexSdkPythonAutoPromoteAuditor({
+        ...audit,
+        runner: options.autoPromoteAuditRunner,
+      });
+    }
+    throw new Error(`Unsupported auto-promotion audit provider "${audit.provider}".`);
   }
 
   function buildDbInfo(store) {

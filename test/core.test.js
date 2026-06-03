@@ -5858,6 +5858,93 @@ test('autoPromoteMemoryCandidates keeps candidates pending when audit runner fai
   assert.equal(app.getMemory({ scope: 'repo', scopeKey: 'audit-fail-repo', key: 'audit-failed-runbook' }), null);
 });
 
+test('autoPromoteMemoryCandidates can audit through the Codex Python SDK provider', async () => {
+  const dataDir = await makeTempDir();
+  const auditInvocations = [];
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'python_sdk_audit_provider',
+      CONTEXTFORGE_AUTO_PROMOTE_ENABLED: 'true',
+      CONTEXTFORGE_AUTO_PROMOTE_AUDIT_PROVIDER: 'codex_sdk_python',
+      CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_BIN: '/home/ubuntu/.local/bin/codex',
+      CONTEXTFORGE_AUTO_PROMOTE_AUDIT_PYTHON_COMMAND: 'python3',
+      CONTEXTFORGE_AUTO_PROMOTE_AUDIT_PYTHONPATH: '/tmp/contextforge-codex-sdk',
+    },
+    cwd: process.cwd(),
+    autoPromoteAuditRunner: async (invocation) => {
+      auditInvocations.push(invocation);
+      return {
+        stdout: JSON.stringify({
+          final_response: JSON.stringify({
+            approved: true,
+            decision: 'approve',
+            reason: 'The candidate is stable and supported by checkpoint evidence.',
+            riskCodes: [],
+          }),
+          elapsed_ms: 12,
+        }),
+        stderr: '',
+      };
+    },
+    distillProviders: {
+      python_sdk_audit_provider: async () => ({
+        summaryShort: 'Python SDK audit checkpoint.',
+        summaryText: 'Closeout produced a candidate that should be audited through the Python SDK provider.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'python-sdk-audit-runbook',
+            content: 'The runbook is stable and safe enough for automatic durable promotion after audit.',
+            category: 'runbook',
+            candidateType: 'runbook',
+            confidence: 0.96,
+            stability: 0.96,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+        ],
+      }),
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'python-sdk-audit-repo',
+    sessionId: 'python-sdk-audit-session',
+    role: 'assistant',
+    content: 'Python SDK audit candidate.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'python-sdk-audit-repo',
+    sessionId: 'python-sdk-audit-session',
+  });
+
+  const result = await app.autoPromoteMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'python-sdk-audit-repo',
+    sessionId: 'python-sdk-audit-session',
+    trigger: 'manual_closeout',
+    dryRun: false,
+  });
+
+  assert.equal(result.policy.audit.provider, 'codex_sdk_python');
+  assert.equal(result.promoted.length, 1);
+  assert.equal(result.promoted[0].audit.metadata.provider, 'codex_sdk_python');
+  assert.equal(result.promoted[0].audit.metadata.codexBin, '/home/ubuntu/.local/bin/codex');
+  assert.equal(result.promoted[0].audit.metadata.pythonPath, '/tmp/contextforge-codex-sdk');
+  assert.equal(auditInvocations.length, 1);
+  assert.equal(auditInvocations[0].codexBin, '/home/ubuntu/.local/bin/codex');
+  assert.equal(auditInvocations[0].pythonCommand, 'python3');
+  assert.equal(auditInvocations[0].pythonPath, '/tmp/contextforge-codex-sdk');
+  assert.match(auditInvocations[0].prompt, /ContextForge automatic memory promotion auditor/);
+  assert.ok(
+    app.getMemory({ scope: 'repo', scopeKey: 'python-sdk-audit-repo', key: 'python-sdk-audit-runbook' }),
+  );
+});
+
 test('autoPromoteMemoryCandidates rejects unsupported audit providers', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({
