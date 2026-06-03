@@ -78,7 +78,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Migrate Scope',
       description:
-        'Move existing rows from one explicit scope key to another after a repository rename or transfer. Defaults to dryRun=true and reports row counts plus conflicts; use dryRun=false only after reviewing the dry-run result.',
+        'Move existing rows from one explicit scope key to another after a repository rename or transfer. Defaults to dryRun=true and reports row counts plus conflicts; use dryRun=false only after reviewing the dry-run result. The from scope is treated as the raw stored scope and is not alias-canonicalized.',
       inputSchema: {
         fromScope: scopeSchema.optional(),
         fromScopeType: scopeSchema.optional(),

@@ -35,6 +35,9 @@ function scopeAliasEntry(from, to) {
   if (!VALID_SCOPES.has(parsedFrom.scopeType) || !VALID_SCOPES.has(parsedTo.scopeType)) {
     throw new Error('scope alias scope type must be shared, repo, or local.');
   }
+  if (parsedFrom.scopeType !== parsedTo.scopeType) {
+    throw new Error('scope aliases cannot change scope type.');
+  }
   if (!parsedFrom.scopeKey || !parsedTo.scopeKey) {
     throw new Error('scope alias entries require both source and target scope keys.');
   }
@@ -51,7 +54,11 @@ export function parseScopeAliases(value) {
   const text = String(value).trim();
   let parsed = null;
   if (text.startsWith('{') || text.startsWith('[')) {
-    parsed = JSON.parse(text);
+    try {
+      parsed = JSON.parse(text);
+    } catch (error) {
+      throw new Error(`CONTEXTFORGE_SCOPE_ALIASES must be valid JSON or alias text: ${error.message}`);
+    }
   }
   if (Array.isArray(parsed)) {
     return parsed.map((entry) => scopeAliasEntry(entry.from, entry.to));

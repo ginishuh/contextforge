@@ -3267,6 +3267,9 @@ export class ContextForgeStore {
 
   scopeMigrationConflicts({ fromScopeType, fromScopeKey, toScopeType, toScopeKey }) {
     return SCOPE_MIGRATION_CONFLICTS.map(({ table, keyColumn }) => {
+      if (!this.tableExists(table)) {
+        return null;
+      }
       const count = Number(
         this.db
           .prepare(`
@@ -3302,7 +3305,7 @@ export class ContextForgeStore {
         count,
         sampleKeys: rows,
       };
-    }).filter((item) => item.count > 0);
+    }).filter((item) => item?.count > 0);
   }
 
   migrateScope({ fromScopeType, fromScopeKey, toScopeType, toScopeKey, dryRun = true }) {
@@ -3317,7 +3320,10 @@ export class ContextForgeStore {
     const totalRows = Object.values(before).reduce((total, count) => total + count, 0);
     if (dryRun || conflicts.length) {
       return {
-        dryRun: true,
+        dryRun: Boolean(dryRun),
+        requestedDryRun: Boolean(dryRun),
+        blocked: conflicts.length > 0,
+        blockedReason: conflicts.length > 0 ? 'conflicts' : null,
         from,
         to,
         totalRows,
@@ -3328,8 +3334,8 @@ export class ContextForgeStore {
       };
     }
 
-    const updated = this.withTransaction(() =>
-      Object.fromEntries(
+    const updated = this.withTransaction(() => {
+      const changes = Object.fromEntries(
         SCOPE_MIGRATION_UPDATE_TABLES.map((table) => {
           if (!this.tableExists(table)) {
             return [table, 0];
@@ -3339,12 +3345,16 @@ export class ContextForgeStore {
             .run(toScopeType, toScopeKey, fromScopeType, fromScopeKey);
           return [table, result.changes];
         }),
-      ),
-    );
-    this.rebuildMemoryFts();
-    updated.memory_fts = before.memory_fts;
+      );
+      this.rebuildMemoryFts();
+      changes.memory_fts = before.memory_fts;
+      return changes;
+    });
     return {
       dryRun: false,
+      requestedDryRun: false,
+      blocked: false,
+      blockedReason: null,
       from,
       to,
       totalRows,

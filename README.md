@@ -161,8 +161,11 @@ CONTEXTFORGE_SCOPE_ALIASES='repo:github.com/old/suite=repo:github.com/new/suite'
 ```
 
 Scope prefixes are optional and default to `repo`. `dbInfo` reports the loaded
-aliases. Existing rows are not moved implicitly; inspect and migrate them
-explicitly:
+aliases. Aliases cannot change scope type; use `repo:old=repo:new`, not
+`repo:old=shared:new`. JSON object and array forms are also accepted for
+deployments that prefer structured environment values. Existing rows are not
+moved implicitly, and once an alias is enabled those old rows are hidden from
+normal scoped reads until you migrate them. Inspect and migrate them explicitly:
 
 ```bash
 node src/cli.js migrateScope \
@@ -178,6 +181,10 @@ node src/cli.js migrateScope \
   --toScopeKey github.com/new/suite \
   --dryRun false
 ```
+
+`migrateScope` treats `fromScope`/`fromScopeKey` as the raw stored scope, without
+alias canonicalization, so it can still find rows written before the alias was
+configured. `toScope`/`toScopeKey` is canonicalized through aliases.
 
 ## Usage Modes
 
