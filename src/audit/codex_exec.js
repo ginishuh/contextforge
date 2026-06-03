@@ -6,7 +6,7 @@ import { parseCodexExecJson, runCodexExecCommand } from '../distill/providers/co
 export const AUTO_PROMOTE_AUDIT_PROMPT_VERSION = 'auto_promote_audit.codex_exec.v1';
 export const AUTO_PROMOTE_AUDIT_SCHEMA_VERSION = 'contextforge.auto_promote_audit.v1';
 
-const AUDIT_OUTPUT_SCHEMA = {
+export const AUDIT_OUTPUT_SCHEMA = {
   $id: AUTO_PROMOTE_AUDIT_SCHEMA_VERSION,
   type: 'object',
   additionalProperties: false,
@@ -36,7 +36,7 @@ function truncate(value, maxChars = 2000) {
   return text.length > maxChars ? `${text.slice(0, maxChars)}\n[truncated]` : text;
 }
 
-function buildAuditPrompt(input, metadata) {
+export function buildAuditPrompt(input, metadata) {
   const candidate = input.candidate?.candidate || {};
   const payload = {
     task: 'Audit whether one ContextForge memory candidate is safe for automatic durable-memory promotion.',

@@ -27,6 +27,7 @@ const REMOTE_METHODS = [
   'rejectMemoryUpdateCandidate',
   'skipMemoryUpdateCandidate',
   'suggestMemoryPromotions',
+  'auditMemoryCandidates',
   'autoPromoteMemoryCandidates',
   'reconcileMemory',
   'getMemory',

@@ -172,6 +172,9 @@ function fillSettingsForm() {
   form.auditEnabled.checked = effective.autoPromoteAudit.enabled !== false;
   form.auditProvider.value = effective.autoPromoteAudit.provider || 'codex_exec';
   form.auditCommand.value = effective.autoPromoteAudit.command || 'codex';
+  form.auditCodexBin.value = effective.autoPromoteAudit.codexBin || effective.autoPromoteAudit.command || 'codex';
+  form.auditPythonCommand.value = effective.autoPromoteAudit.pythonCommand || 'python3';
+  form.auditPythonPath.value = effective.autoPromoteAudit.pythonPath || '';
   form.auditModel.value = effective.autoPromoteAudit.model || 'gpt-5.5';
   form.auditReasoningEffort.value = effective.autoPromoteAudit.reasoningEffort || 'low';
   form.auditTimeoutMs.value = effective.autoPromoteAudit.timeoutMs || 120000;
@@ -253,6 +256,9 @@ $('#settingsForm').addEventListener('submit', async (event) => {
       enabled: form.auditEnabled.checked,
       provider: form.auditProvider.value,
       command: form.auditCommand.value,
+      codexBin: form.auditCodexBin.value || form.auditCommand.value,
+      pythonCommand: form.auditPythonCommand.value || 'python3',
+      pythonPath: form.auditPythonPath.value || null,
       model: form.auditModel.value || 'gpt-5.5',
       reasoningEffort: form.auditReasoningEffort.value || 'low',
       timeoutMs: formNumber(form, 'auditTimeoutMs') || 120000,

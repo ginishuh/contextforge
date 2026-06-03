@@ -317,6 +317,33 @@ uses a separate audit runner before the durable memory write. The default audit
 runner is `codex_exec` with `gpt-5.5` and reasoning effort `low`, independent
 from the distillation runner.
 
+For agent closeout review without writes, use `audit_memory_candidates`. It uses
+the same closeout-scoped safety policy and configured audit provider, returns
+audited `promote`/`review` recommendations, and never promotes durable memory or
+changes candidate status. Keep `auto_promote_memory_candidates dryRun=false` for
+the separate explicit automation path.
+
+For Python-backed services, the audit gate can also use the experimental
+`codex_sdk_python` provider. It calls the Codex Python SDK from a small Python
+runner and points that SDK at an existing Codex binary:
+
+```bash
+CONTEXTFORGE_AUTO_PROMOTE_AUDIT_PROVIDER=codex_sdk_python
+CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_BIN=/home/ubuntu/.local/bin/codex
+CONTEXTFORGE_AUTO_PROMOTE_AUDIT_PYTHON_COMMAND=python3
+CONTEXTFORGE_AUTO_PROMOTE_AUDIT_PYTHONPATH=/opt/contextforge/openai-codex-sdk
+```
+
+If the SDK's pinned `openai-codex-cli-bin` wheel is not available for the
+server platform, install only the Python SDK package and its pure Python
+dependency into the configured `PYTHONPATH`, then rely on
+`CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_BIN` for the runtime binary:
+
+```bash
+uv pip install --target /opt/contextforge/openai-codex-sdk --no-deps openai-codex
+uv pip install --target /opt/contextforge/openai-codex-sdk 'pydantic>=2.12'
+```
+
 Use a long random token and store the same value on client machines as
 `CONTEXTFORGE_REMOTE_TOKEN`. Treat this token as an administrator credential:
 it can call every remote API method, including pruning raw evidence and running
@@ -1228,6 +1255,7 @@ The MCP server exposes a narrow tool surface over the same core API:
 - `list_due_distill_sessions`
 - `process_due_distills`
 - `suggest_memory_promotions`
+- `audit_memory_candidates`
 - `auto_promote_memory_candidates`
 - `reconcile_memory`
 - `promote_memory`

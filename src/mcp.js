@@ -31,6 +31,7 @@ const MCP_INSTRUCTIONS = [
   'Search result types have different trust roles: memory is reviewed durable fact or decision; checkpoint is credible recent handoff state for continuity, planning, prior intent, recent decisions, and unfinished work, but mutable live-state claims must be verified with git/GitHub/CI/runtime/migrations before acting; memory_candidate is unreviewed promotion material and not durable truth.',
   'For task start or loose continuation prompts such as "지난 환경 작업과 동기화", "어제 하던 거 이어서", "previous work", or "continue", call bootstrap_context first; it includes latest checkpoint handoff independent of search ranking. Use sync_resume_context only when you know the exact sessionId and need session working state or raw tail.',
   'For closeout triggers only, call suggest_memory_promotions with the current sessionId or the checkpointId returned by distill_checkpoint: after this agent merges a PR, after the user says they merged and the agent syncs main/cleans branches, or when the user explicitly says today\'s work is done. Suggest at most 1-3 durable memory promotions and never promote automatically.',
+  'When an agent needs audited closeout recommendations without writes, call audit_memory_candidates with sessionId or checkpointId. It runs the configured audit provider and returns proposals for promote/edit/skip/reject, but never mutates durable memory or candidate status.',
   'For strict closeout-scoped safe automatic promotion, call auto_promote_memory_candidates only when the user wants automatic promotion and always include sessionId or checkpointId. By default use dryRun=true. Use dryRun=false only when CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true is intentionally configured; never use scope-wide backlog fallback and never auto-promote preference candidates.',
   'Preference-like candidates are tracked as merged occurrences; use list_preference_occurrences to review repeated evidence and weakened corrections, but do not treat occurrence evidence alone as durable preference truth.',
   'For user corrections such as "너 잘못 알고 있잖아", "그거 아니야", "그건 X가 아니라 Y야", or "기억 수정해", call reconcile_memory. Show the basis for prior knowledge, assess conflicts, and only apply safe corrections when the user explicitly asks to fix memory.',
@@ -760,6 +761,38 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
       },
     },
     async (args) => jsonResult(await app.autoPromoteMemoryCandidates(args)),
+  );
+
+  server.registerTool(
+    'audit_memory_candidates',
+    {
+      title: 'Audit Memory Candidates',
+      description:
+        'Run the configured audit provider on closeout-scoped pending memory candidates and return read-only audited recommendations for the agent/user to choose from. Requires sessionId or checkpointId, never scans scope fallback, and never promotes or changes candidate status.',
+      inputSchema: {
+        ...scopedSchema,
+        sessionId: z.string().optional(),
+        checkpointId: z.string().optional(),
+        trigger: z.enum([
+          'agent_merged_pr',
+          'user_merged_then_synced',
+          'user_declared_work_done',
+          'manual_closeout',
+        ]),
+        limit: z.number().int().positive().optional(),
+        scanLimit: z.number().int().positive().optional(),
+        minConfidence: z.number().optional(),
+        minStability: z.number().optional(),
+        allowedCategories: z.array(z.string()).optional(),
+        promotionRecommendation: z.string().optional(),
+      },
+      annotations: {
+        title: 'Audit Memory Candidates',
+        readOnlyHint: true,
+        idempotentHint: false,
+      },
+    },
+    async (args) => jsonResult(await app.auditMemoryCandidates(args)),
   );
 
   server.registerTool(
