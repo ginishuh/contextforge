@@ -4557,7 +4557,7 @@ test('codex_exec provider distills synthetic raw events through a runner', async
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.model, 'gpt-test');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.reasoningEffort, 'low');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.timeoutMs, 1234);
-  assert.equal(checkpoint.metadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v7');
+  assert.equal(checkpoint.metadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v8');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.outputSchemaVersion, 'contextforge.checkpoint.v6');
   assert.equal(checkpoint.structured.schemaVersion, STRUCTURED_CHECKPOINT_SCHEMA_VERSION);
   assert.equal(checkpoint.metadata.structured.schemaVersion, STRUCTURED_CHECKPOINT_SCHEMA_VERSION);
@@ -4566,6 +4566,8 @@ test('codex_exec provider distills synthetic raw events through a runner', async
   const promptPayload = JSON.parse(invocation.prompt.slice(invocation.prompt.indexOf('{')));
   assert.equal(promptPayload.requestedOutputSchema.structured.schemaVersion, STRUCTURED_CHECKPOINT_SCHEMA_VERSION);
   assert.match(invocation.prompt, /structured\.liveState/);
+  assert.match(invocation.prompt, /human-readable memoryCandidate review fields in Korean/);
+  assert.match(invocation.prompt, /content, reason, durabilityReason, and riskReason/);
   assert.deepEqual(invocation.args.slice(0, 2), ['exec', '--skip-git-repo-check']);
   assert.ok(invocation.args.includes('--output-schema'));
   assert.ok(invocation.args.includes('--output-last-message'));
@@ -4632,9 +4634,9 @@ test('codex_exec provider distills synthetic raw events through a runner', async
     sessionId: 'codex-session',
   });
   assert.equal(runs[0].status, 'succeeded');
-  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v7');
+  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v8');
   assert.equal(runs[0].inputMetadata.providerMetadata.outputSchemaVersion, 'contextforge.checkpoint.v6');
-  assert.equal(runs[0].outputMetadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v7');
+  assert.equal(runs[0].outputMetadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v8');
 });
 
 test('codex_exec records JSON brace fallback recovery metadata', async () => {
@@ -5264,8 +5266,8 @@ test('codex_exec parse failures preserve raw evidence', async () => {
   });
   assert.equal(runs[0].status, 'failed');
   assert.equal(runs[0].outputMetadata.providerFailed, true);
-  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v7');
-  assert.equal(runs[0].outputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v7');
+  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v8');
+  assert.equal(runs[0].outputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v8');
 });
 
 test('bootstrapContext returns semantic retrieval with trust and verification hints', async () => {
@@ -6449,6 +6451,7 @@ test('autoPromoteMemoryCandidates can audit through the Codex Python SDK provide
   assert.equal(auditInvocations[0].pythonCommand, 'python3');
   assert.equal(auditInvocations[0].pythonPath, '/tmp/contextforge-codex-sdk');
   assert.match(auditInvocations[0].prompt, /ContextForge automatic memory promotion auditor/);
+  assert.match(auditInvocations[0].prompt, /human-readable reason in Korean/);
   assert.ok(
     app.getMemory({ scope: 'repo', scopeKey: 'python-sdk-audit-repo', key: 'python-sdk-audit-runbook' }),
   );

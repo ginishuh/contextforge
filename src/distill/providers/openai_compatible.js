@@ -1,7 +1,7 @@
 import { buildCodexExecPrompt, CHECKPOINT_OUTPUT_SCHEMA, CODEX_EXEC_OUTPUT_SCHEMA_VERSION } from './codex_exec.js';
 import { validateDistillOutput } from '../validate.js';
 
-export const OPENAI_COMPATIBLE_PROMPT_VERSION = 'openai_compatible.prompt.v1';
+export const OPENAI_COMPATIBLE_PROMPT_VERSION = 'openai_compatible.prompt.v2';
 
 const DEFAULT_TIMEOUT_MS = 120000;
 const DEFAULT_BASE_URL = 'https://api.deepseek.com';

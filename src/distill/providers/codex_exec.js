@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { STRUCTURED_CHECKPOINT_SCHEMA_VERSION } from '../validate.js';
 
-export const CODEX_EXEC_PROMPT_VERSION = 'codex_exec.prompt.v7';
+export const CODEX_EXEC_PROMPT_VERSION = 'codex_exec.prompt.v8';
 export const CODEX_EXEC_OUTPUT_SCHEMA_VERSION = 'contextforge.checkpoint.v6';
 
 function nullableStringSchema() {
@@ -347,6 +347,9 @@ export function buildCodexExecPrompt(input, options = {}) {
       'For memoryCandidates, include optional v2 fields when useful: schemaVersion="contextforge.memory_candidate.v2", durabilityReason, riskReason, evidenceRefs, and suggestedAction.',
       'For nullable memoryCandidate fields that are not applicable, return null; do not omit required schema fields.',
       'Create memoryCandidates only for facts, decisions, preferences, runbook steps, or failure modes that may remain useful beyond this checkpoint.',
+      'Write human-readable memoryCandidate review fields in Korean by default: content, reason, durabilityReason, and riskReason.',
+      'Do not mix English prose into those Korean memoryCandidate review fields unless preserving exact technical identifiers, code symbols, file paths, commands, model names, API names, product names, or quoted error strings.',
+      'Keep memoryCandidate keys, categories, tags, enum values, sourceEventIds, evidenceRefs, and schemaVersion machine-readable and in their original technical form.',
       'For memoryCandidate content, include decision plus rationale when both exist; put future-search keywords in tags and reason instead of flattening them away.',
       'Set promotionRecommendation to promote only for stable, reviewed-looking durable facts; otherwise prefer review, ignore, or reject.',
       'Use low confidence or low stability for guesses, temporary state, implementation-in-progress details, and facts that require current runtime verification.',
