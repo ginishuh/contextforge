@@ -117,6 +117,11 @@ remote API 호출에는 `CONTEXTFORGE_REMOTE_TOKEN`이 필요하다.
 운영 UI는 `/ui/`에서 사용할 수 있다. UI에서는 runtime 설정, distill provider,
 모델, threshold, memory candidates, durable memory correction 등을 확인하고
 수정할 수 있다. API key는 write-only로 저장되며 응답에 노출되지 않는다.
+admin UI cookie는 기본적으로 `CONTEXTFORGE_ADMIN_COOKIE_SECURE=auto`로 동작한다.
+직접 HTTP 접속에서는 로컬 운영 세션이 동작하도록 non-`Secure` cookie를 쓰고,
+신뢰된 reverse proxy가 HTTPS 요청으로 표시한 경우에는 `Secure` cookie를 쓴다.
+Node가 직접 TLS를 종료하는 배포라면 `CONTEXTFORGE_ADMIN_COOKIE_SECURE=true`를
+설정하고, reverse proxy는 client가 보낸 `X-Forwarded-Proto`를 덮어써야 한다.
 
 ## 모델 분리
 

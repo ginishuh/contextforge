@@ -156,6 +156,7 @@ function parseAdminCookieSecureMode(value) {
 }
 
 function requestIsSecure(request) {
+  if (request.socket.encrypted) return true;
   const forwardedProto = String(request.headers['x-forwarded-proto'] || '')
     .split(',')[0]
     .trim()
@@ -464,7 +465,7 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
 
     if (request.method === 'GET' && requestUrl.pathname === '/ui') {
       response.writeHead(308, {
-        location: '/ui/',
+        location: `/ui/${requestUrl.search}`,
         'cache-control': 'no-store',
       });
       response.end();

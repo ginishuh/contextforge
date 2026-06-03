@@ -402,7 +402,12 @@ provenance. Runtime settings saved in the UI override env defaults for new
 calls without restarting the server. API keys are write-only in the UI/API:
 callers can set, replace, clear, and test them, but stored values are never
 returned. Optional admin password login is cookie-session based; bearer-token
-access remains available for API clients.
+access remains available for API clients. Admin UI cookies use
+`CONTEXTFORGE_ADMIN_COOKIE_SECURE=auto` by default: direct HTTP access gets a
+non-`Secure` cookie so local operator sessions work, while requests marked as
+HTTPS by a trusted reverse proxy get a `Secure` cookie. If the server is exposed
+directly over TLS, set `CONTEXTFORGE_ADMIN_COOKIE_SECURE=true`; reverse proxies
+must overwrite client-supplied `X-Forwarded-Proto` before forwarding requests.
 
 `CONTEXTFORGE_OPENAI_API_KEY` is only needed on the process that performs
 embedding calls. In remote/server-backed deployments, keep that key only in the

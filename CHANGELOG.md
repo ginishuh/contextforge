@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Fixed `/ui` asset loading for requests without a trailing slash and made
+  admin UI session cookies HTTP-aware by default while preserving `Secure`
+  cookies for HTTPS reverse-proxy deployments.
+- Updated the `codex_exec` checkpoint output schema for strict structured
+  output compatibility. New distill outputs must include the nullable
+  memory-candidate v2 review fields (`schemaVersion`, `durabilityReason`,
+  `riskReason`, `evidenceRefs`, and `suggestedAction`) when using the bundled
+  strict schema.
+- Localized human-readable memory-candidate review text and audit reasons to
+  Korean by default while keeping keys, enum values, paths, commands, and other
+  technical identifiers machine-readable.
+
 ## 0.5.0 - 2026-06-03
 
 - Added optional structured checkpoint handoff payloads for agent resume state,

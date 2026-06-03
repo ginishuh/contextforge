@@ -7950,6 +7950,10 @@ test('HTTP server serves admin UI assets', async () => {
     assert.equal(redirect.status, 308);
     assert.equal(redirect.headers.get('location'), '/ui/');
 
+    const redirectWithQuery = await fetch(`${remote.url}/ui?tab=memory`, { redirect: 'manual' });
+    assert.equal(redirectWithQuery.status, 308);
+    assert.equal(redirectWithQuery.headers.get('location'), '/ui/?tab=memory');
+
     const response = await fetch(`${remote.url}/ui/`);
     assert.equal(response.status, 200);
     assert.equal(response.headers.get('cache-control'), 'no-store');
@@ -8014,6 +8018,35 @@ test('HTTP server accepts admin UI login sessions', async () => {
   }
 });
 
+test('HTTP server auto-secures admin UI cookies behind HTTPS reverse proxies', async () => {
+  const dataDir = await makeTempDir();
+  const password = 'proxy-cookie-CON' + 'TEXT';
+  const remote = await startContextForgeServer({
+    port: 0,
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+      CONTEXTFORGE_ADMIN_USER: 'ginishuh',
+      CONTEXTFORGE_ADMIN_PASSWORD_PBKDF2: testAdminPasswordHash(password),
+    },
+  });
+
+  try {
+    const login = await fetch(`${remote.url}/ui/login`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-forwarded-proto': 'https',
+      },
+      body: JSON.stringify({ username: 'ginishuh', password }),
+    });
+    assert.equal(login.status, 200);
+    assert.match(login.headers.get('set-cookie'), /;\s*Secure\b/);
+  } finally {
+    await remote.close();
+  }
+});
+
 test('HTTP server can force secure admin UI cookies for HTTPS deployments', async () => {
   const dataDir = await makeTempDir();
   const password = 'secure-cookie-CON' + 'TEXT';
@@ -8039,6 +8072,22 @@ test('HTTP server can force secure admin UI cookies for HTTPS deployments', asyn
   } finally {
     await remote.close();
   }
+});
+
+test('HTTP server rejects invalid admin cookie secure mode', async () => {
+  const dataDir = await makeTempDir();
+  assert.throws(
+    () =>
+      startContextForgeServer({
+        port: 0,
+        env: {
+          CONTEXTFORGE_DATA_DIR: dataDir,
+          CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+          CONTEXTFORGE_ADMIN_COOKIE_SECURE: 'sometimes',
+        },
+      }),
+    /CONTEXTFORGE_ADMIN_COOKIE_SECURE/,
+  );
 });
 
 test('HTTP server keeps admin UI login disabled unless credentials are configured', async () => {

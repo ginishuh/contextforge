@@ -114,6 +114,11 @@ Meaning:
 - `/v0/*` is the JSON remote API.
 - Binding to a non-loopback host requires `CONTEXTFORGE_REMOTE_TOKEN`.
 - Public internet exposure should go through HTTPS reverse proxy when possible.
+- The operator UI cookie defaults to `CONTEXTFORGE_ADMIN_COOKIE_SECURE=auto`.
+  In this mode, direct HTTP access receives a non-`Secure` cookie, and requests
+  marked as HTTPS by a trusted reverse proxy receive a `Secure` cookie. If Node
+  terminates TLS directly, set `CONTEXTFORGE_ADMIN_COOKIE_SECURE=true`. Reverse
+  proxies must overwrite client-supplied `X-Forwarded-Proto`.
 
 Useful checks:
 
