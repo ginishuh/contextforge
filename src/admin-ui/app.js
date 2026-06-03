@@ -4,6 +4,7 @@ const state = {
   scopeKeys: [],
   memories: [],
   candidates: [],
+  runs: [],
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -106,8 +107,39 @@ function table(rows, columns) {
     .join('')}</tbody></table>`;
 }
 
+function countLabel(label, value) {
+  const count = Array.isArray(value) ? value.length : 0;
+  return `${label} ${count}`;
+}
+
 function showDetail(title, content) {
   $('#detail').innerHTML = `<h2>${escapeHtml(title)}</h2><pre>${escapeHtml(JSON.stringify(content, null, 2))}</pre>`;
+  $('#detailDialog').showModal();
+}
+
+function showDistillDetail(bundle) {
+  const checkpoint = bundle.checkpoint;
+  const structured = checkpoint?.structured || checkpoint?.metadata?.structured || null;
+  const work = structured?.work || {};
+  const liveState = structured?.liveState || {};
+  $('#detail').innerHTML = `<h2>구조화 디스틸</h2>
+    <dl>
+      <dt>Run</dt><dd>${escapeHtml(bundle.run.id)}</dd>
+      <dt>Checkpoint</dt><dd>${escapeHtml(checkpoint?.id || bundle.run.outputMetadata?.checkpointId || '')}</dd>
+      <dt>세션</dt><dd>${escapeHtml(bundle.run.sessionId || '')}</dd>
+      <dt>프로바이더</dt><dd>${escapeHtml(bundle.run.provider || '')}</dd>
+      <dt>상태</dt><dd>${escapeHtml(bundle.run.status || '')}</dd>
+      <dt>작업 의도</dt><dd>${escapeHtml(work.intent || '')}</dd>
+      <dt>작업 상태</dt><dd>${escapeHtml(work.status || '')}</dd>
+      <dt>결과</dt><dd>${escapeHtml(work.outcome || '')}</dd>
+      <dt>브랜치</dt><dd>${escapeHtml(liveState.branch || '')}</dd>
+      <dt>PR</dt><dd>${escapeHtml(liveState.prNumber || liveState.prUrl || '')}</dd>
+      <dt>재검증 필요</dt><dd>${escapeHtml(liveState.verificationRequired == null ? '' : String(liveState.verificationRequired))}</dd>
+    </dl>
+    <h3>요약</h3>
+    <p>${escapeHtml(checkpoint?.summaryText || checkpoint?.summaryShort || '')}</p>
+    <h3>structured</h3>
+    <pre>${escapeHtml(JSON.stringify(structured, null, 2))}</pre>`;
   $('#detailDialog').showModal();
 }
 
@@ -327,15 +359,52 @@ async function loadRuns(target = '#runsTable', options = {}) {
   if (!scopeKey) return;
   const sessionId = options.sessionId ?? $('#runSession')?.value;
   const runs = await call('listDistillRuns', { scope, scopeKey, ...(sessionId ? { sessionId } : {}), limit: 25, order: 'desc' });
-  $(target).innerHTML = table(runs, [
-    { label: '생성 시각', value: (row) => row.createdAt },
-    { label: '스코프', value: (row) => `${row.scopeType}:${row.scopeKey}` },
-    { label: '프로바이더', value: (row) => row.provider },
-    { label: '상태', value: (row) => row.status },
-    { label: '세션', value: (row) => row.sessionId },
-    { label: '이벤트', value: (row) => row.sourceEventCount },
-    { label: '오류', value: (row) => row.errorMessage || '' },
-  ]);
+  const checkpointIds = new Set(runs.map((run) => run.outputMetadata?.checkpointId).filter(Boolean));
+  let checkpointById = new Map();
+  if (checkpointIds.size) {
+    const checkpoints = await call('listCheckpoints', { scope, scopeKey, ...(sessionId ? { sessionId } : {}), level: 0 });
+    checkpointById = new Map(checkpoints.filter((checkpoint) => checkpointIds.has(checkpoint.id)).map((checkpoint) => [checkpoint.id, checkpoint]));
+  }
+  state.runs = runs.map((run) => ({
+    run,
+    checkpoint: checkpointById.get(run.outputMetadata?.checkpointId) || null,
+  }));
+  $(target).innerHTML = state.runs.map(runItem).join('') || '<p class="muted">디스틸 실행 기록이 없습니다.</p>';
+  document.querySelectorAll('[data-run-detail]').forEach((button) => {
+    button.addEventListener('click', () => showDetail('디스틸 실행', state.runs[Number(button.dataset.runDetail)]));
+  });
+  document.querySelectorAll('[data-run-structured]').forEach((button) => {
+    button.addEventListener('click', () => showDistillDetail(state.runs[Number(button.dataset.runStructured)]));
+  });
+}
+
+function runItem(bundle, index) {
+  const { run, checkpoint } = bundle;
+  const structured = checkpoint?.structured || checkpoint?.metadata?.structured || null;
+  const work = structured?.work || {};
+  const liveState = structured?.liveState || {};
+  const checkpointId = checkpoint?.id || run.outputMetadata?.checkpointId || '';
+  const summary = checkpoint?.summaryShort || run.errorMessage || '체크포인트 본문이 없습니다.';
+  const structuredState = structured ? 'structured 있음' : 'structured 없음';
+  const counts = structured
+    ? [
+        countLabel('변경', structured.changes),
+        countLabel('검증', structured.verification),
+        countLabel('위험', structured.risks),
+        countLabel('다음 액션', structured.nextActions),
+      ].join(' · ')
+    : '구조화 payload 없음';
+  return `<article class="item">
+    <header><span class="item-title"><strong>${escapeHtml(run.createdAt || '')}</strong></span><span class="muted">${escapeHtml(run.status)} · ${escapeHtml(run.provider)} · ${escapeHtml(structuredState)}</span></header>
+    <p>${escapeHtml(summary.slice(0, 260))}</p>
+    <p class="muted">${escapeHtml(work.status || work.outcome || '')}${work.status || work.outcome ? ' · ' : ''}${escapeHtml(liveState.branch || liveState.prUrl || '')}</p>
+    <p class="muted">${escapeHtml(counts)}</p>
+    <div class="actions">
+      <button data-run-detail="${index}">실행 상세</button>
+      <button data-run-structured="${index}" ${structured ? '' : 'disabled'}>구조화 보기</button>
+      <span class="muted">${escapeHtml(checkpointId)}</span>
+    </div>
+  </article>`;
 }
 
 async function loadRecentRuns() {
@@ -414,13 +483,29 @@ function memoryItem(memory, index) {
   </article>`;
 }
 
+function candidateRecommendationLabel(value) {
+  const labels = {
+    promote: '승격 추천',
+    review: '검토 필요',
+    ignore: '무시 권장',
+    reject: '거절 권장',
+  };
+  return labels[String(value || '').toLowerCase()] || '추천 없음';
+}
+
 $('#loadCandidates').addEventListener('click', async (event) => {
   event.preventDefault();
   const scope = $('#memoryScope').value;
   const scopeKey = $('#memoryScopeKey').value;
-  const candidates = await call('listMemoryCandidates', { scope, scopeKey, limit: 100 });
+  const promotionRecommendation = $('#candidateRecommendation').value;
+  const request = { scope, scopeKey, status: 'pending', limit: 100 };
+  if (promotionRecommendation) request.promotionRecommendation = promotionRecommendation;
+  const candidates = await call('listMemoryCandidates', request);
   state.candidates = candidates;
-  $('#candidates').innerHTML = candidates.map(candidateItem).join('') || '<p class="muted">후보가 없습니다.</p>';
+  const emptyMessage = promotionRecommendation
+    ? `${candidateRecommendationLabel(promotionRecommendation)} 후보가 없습니다.`
+    : '원시 후보가 없습니다.';
+  $('#candidates').innerHTML = candidates.map(candidateItem).join('') || `<p class="muted">${escapeHtml(emptyMessage)}</p>`;
   document.querySelectorAll('[data-candidate]').forEach((button) => {
     button.addEventListener('click', () => showDetail('후보', candidates[Number(button.dataset.candidate)]));
   });
@@ -457,12 +542,17 @@ $('#loadCandidates').addEventListener('click', async (event) => {
 });
 
 function candidateItem(candidate, index) {
+  const recommendation = candidateRecommendationLabel(candidate.candidate.promotionRecommendation);
+  const type = candidate.candidate.candidateType || 'raw';
+  const confidence = candidate.candidate.confidence == null ? '' : ` · 신뢰도 ${candidate.candidate.confidence}`;
+  const stability = candidate.candidate.stability == null ? '' : ` · 안정성 ${candidate.candidate.stability}`;
   return `<article class="item">
-    <header><span class="item-title"><input type="checkbox" data-candidate-select="${index}" aria-label="후보 선택" /><strong>${escapeHtml(candidate.candidate.key)}</strong></span><span class="muted">${escapeHtml(candidate.status)}</span></header>
+    <header><span class="item-title"><input type="checkbox" data-candidate-select="${index}" aria-label="후보 선택" /><strong>${escapeHtml(candidate.candidate.key)}</strong></span><span class="muted">${escapeHtml(candidate.status)} · ${escapeHtml(recommendation)}</span></header>
     <p>${escapeHtml(candidate.candidate.content.slice(0, 220))}</p>
+    <p class="muted">원시 디스틸 후보 · ${escapeHtml(type)}${escapeHtml(confidence)}${escapeHtml(stability)}</p>
     <div class="actions">
       <button data-candidate="${index}">상세</button>
-      <button data-promote="${index}">승격</button>
+      <button data-promote="${index}">검토 후 승격</button>
       <button class="danger" data-reject="${index}">거절</button>
     </div>
   </article>`;

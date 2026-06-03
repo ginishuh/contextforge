@@ -174,6 +174,7 @@
             <label>스코프 키 <select id="memoryScopeKey"></select></label>
             <label>검색 <input id="memoryQuery" /></label>
             <label>상태 <select id="memoryStatus"><option value="active">활성</option><option value="inactive">비활성</option><option value="all">전체</option></select></label>
+            <label>후보 추천 <select id="candidateRecommendation"><option value="promote">승격 추천</option><option value="review">검토 필요</option><option value="ignore">무시 권장</option><option value="reject">거절 권장</option><option value="">전체 원시 후보</option></select></label>
           </div>
           <div class="actions">
             <button id="loadMemories">메모리 불러오기</button>
@@ -191,7 +192,7 @@
             <div id="memories" class="list"></div>
           </section>
           <section class="panel">
-            <h2>승격 후보</h2>
+            <h2>후보 검토</h2>
             <div class="actions bulkbar">
               <button id="selectAllCandidates">전체 선택</button>
               <button id="clearCandidateSelection">선택 해제</button>
