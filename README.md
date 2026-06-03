@@ -2,6 +2,8 @@
 
 Self-hosted memory and distillation runtime for coding agents.
 
+[한국어 README](README.ko.md)
+
 This is not another memory file. ContextForge is a scoped memory runtime for
 coding agents.
 
@@ -17,12 +19,28 @@ ContextForge is a sidecar memory runtime. It complements existing agent memory
 systems by providing canonical project/repo memory, evidence retention, and
 LLM-backed distillation.
 
-Current 0.4.x builds add a server-hosted operator UI, DB-backed runtime
-settings, OpenAI-compatible distillation for DeepSeek-style Chat Completions
-APIs, separate auto-promotion audit runners, remote-first MCP workflows,
-start/resume handoff tools, correction reconciliation, hybrid retrieval, and an
-embedding job queue so vector indexing can recover independently from memory or
-checkpoint writes.
+Current 0.5.0 builds add structured checkpoint handoff payloads, deterministic
+`handoff.latestHandoff` bootstrap state, preserved memory-candidate review
+fields, a server-hosted operator UI, DB-backed runtime settings,
+OpenAI-compatible distillation for DeepSeek-style Chat Completions APIs,
+separate auto-promotion audit runners including the experimental
+`codex_sdk_python` audit provider, remote-first MCP workflows, correction
+reconciliation, hybrid retrieval, and an embedding job queue so vector indexing
+can recover independently from memory or checkpoint writes.
+
+## What's New In 0.5.0
+
+- Checkpoints can include an optional structured handoff object with work
+  status, observed live state, verification, risks, and next actions.
+- `bootstrapContext` and `syncResumeContext` expose
+  `handoff.latestHandoff` separately from ordinary search results, so agents can
+  read recent continuation state even when the query is narrow or unrelated.
+- Memory candidates preserve v2 review fields such as `durabilityReason`,
+  `riskReason`, `evidenceRefs`, and `suggestedAction` for audit and closeout
+  review surfaces.
+- Auto-promotion audit can run through either `codex_exec` or the experimental
+  `codex_sdk_python` provider. This keeps cheap distillation and stricter audit
+  decisions on separate model/runtime paths.
 
 ## Goals
 
@@ -86,6 +104,17 @@ and records provider run metadata, including prompt and output schema versions.
 The OpenAI-compatible provider calls Chat Completions APIs such as DeepSeek at
 `{baseUrl}/chat/completions`, validates the same checkpoint contract locally,
 and records provider metadata without returning API keys.
+
+Checkpoint output is intentionally split into three lanes:
+
+- human-readable summaries for quick inspection
+- structured handoff payloads for the next agent
+- memory candidates for reviewed durable-memory promotion
+
+For cost and quality separation, a common deployment uses a smaller model for
+distillation, for example `codex_exec` with `gpt-5.4-mini` and reasoning effort
+`low`, while using a stronger audit runner such as `gpt-5.5` with reasoning
+effort `low` before any automatic durable-memory promotion.
 
 ## Quick Start
 
@@ -301,6 +330,11 @@ CONTEXTFORGE_AUTO_PROMOTE_AUDIT_ENABLED=true
 CONTEXTFORGE_AUTO_PROMOTE_AUDIT_PROVIDER=codex_exec
 CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_MODEL=gpt-5.5
 CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_REASONING_EFFORT=low
+# For Python-backed audit deployments, use codex_sdk_python instead:
+# CONTEXTFORGE_AUTO_PROMOTE_AUDIT_PROVIDER=codex_sdk_python
+# CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_BIN=/home/ubuntu/.local/bin/codex
+# CONTEXTFORGE_AUTO_PROMOTE_AUDIT_PYTHON_COMMAND=python3
+# CONTEXTFORGE_AUTO_PROMOTE_AUDIT_PYTHONPATH=/opt/contextforge/openai-codex-sdk
 ```
 
 The default and recommended embedding model is `text-embedding-3-small`.
@@ -340,9 +374,18 @@ dependency into the configured `PYTHONPATH`, then rely on
 `CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_BIN` for the runtime binary:
 
 ```bash
-uv pip install --target /opt/contextforge/openai-codex-sdk --no-deps openai-codex
-uv pip install --target /opt/contextforge/openai-codex-sdk 'pydantic>=2.12'
+uv pip install --python /path/to/python3 \
+  --target /opt/contextforge/openai-codex-sdk \
+  --no-deps openai-codex
+uv pip install --python /path/to/python3 \
+  --target /opt/contextforge/openai-codex-sdk \
+  'pydantic>=2.12'
 ```
+
+Use the same Python interpreter that the ContextForge server will run through
+`CONTEXTFORGE_AUTO_PROMOTE_AUDIT_PYTHON_COMMAND`. If the target directory is
+built with a different Python version, native wheels such as `pydantic-core`
+may fail to import at audit time.
 
 Use a long random token and store the same value on client machines as
 `CONTEXTFORGE_REMOTE_TOKEN`. Treat this token as an administrator credential:
@@ -1452,9 +1495,16 @@ distillation runner:
 
 - `CONTEXTFORGE_AUTO_PROMOTE_AUDIT_ENABLED`: set to `false` to disable the
   audit gate and rely only on local strict checks. Default: enabled.
-- `CONTEXTFORGE_AUTO_PROMOTE_AUDIT_PROVIDER`: currently `codex_exec`.
+- `CONTEXTFORGE_AUTO_PROMOTE_AUDIT_PROVIDER`: `codex_exec` or
+  `codex_sdk_python`.
 - `CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_COMMAND`: Codex executable for the
   audit runner. Defaults to `CONTEXTFORGE_CODEX_EXEC_COMMAND` or `codex`.
+- `CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_BIN`: Codex binary used by the
+  `codex_sdk_python` provider. Defaults to the audit command.
+- `CONTEXTFORGE_AUTO_PROMOTE_AUDIT_PYTHON_COMMAND`: Python executable for the
+  `codex_sdk_python` runner. Default: `python3`.
+- `CONTEXTFORGE_AUTO_PROMOTE_AUDIT_PYTHONPATH`: optional target directory
+  containing the Codex Python SDK and dependencies.
 - `CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_MODEL`: audit model. Default:
   `gpt-5.5`.
 - `CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_REASONING_EFFORT`: audit reasoning

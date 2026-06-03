@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.0 - 2026-06-03
+
 - Added optional structured checkpoint handoff payloads for agent resume state,
   including mutable live-state verification hints.
 - Preserved memory candidate v2 review fields in
