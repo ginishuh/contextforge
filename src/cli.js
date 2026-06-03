@@ -217,6 +217,7 @@ async function main() {
     applyMemoryUpdateCandidate: (app, coreOptions) => app.applyMemoryUpdateCandidate(coreOptions),
     rejectMemoryUpdateCandidate: (app, coreOptions) => app.rejectMemoryUpdateCandidate(coreOptions),
     skipMemoryUpdateCandidate: (app, coreOptions) => app.skipMemoryUpdateCandidate(coreOptions),
+    auditMemoryCandidates: (app, coreOptions) => app.auditMemoryCandidates(coreOptions),
     autoPromoteMemoryCandidates: (app, coreOptions) => app.autoPromoteMemoryCandidates(coreOptions),
     search: (app, coreOptions) => app.search(coreOptions),
     rebuildEmbeddings: (app, coreOptions) => app.rebuildEmbeddings(coreOptions),

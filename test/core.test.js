@@ -5502,6 +5502,104 @@ test('autoPromoteMemoryCandidates requires closeout scope and defaults to dry-ru
   );
 });
 
+test('auditMemoryCandidates returns audited read-only recommendations', async () => {
+  const dataDir = await makeTempDir();
+  const auditInvocations = [];
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'audit_suggestions_provider',
+    },
+    cwd: process.cwd(),
+    autoPromoteAuditor: async ({ candidate, warnings, checkpoint }) => {
+      auditInvocations.push({ candidate, warnings, checkpoint });
+      return {
+        approved: true,
+        decision: 'approve',
+        reason: 'Candidate is stable enough to offer as a closeout recommendation.',
+        riskCodes: [],
+        metadata: {
+          provider: 'codex_exec',
+          model: 'gpt-5.5',
+          reasoningEffort: 'low',
+        },
+      };
+    },
+    distillProviders: {
+      audit_suggestions_provider: async () => ({
+        summaryShort: 'Audit suggestions checkpoint.',
+        summaryText: 'Closeout produced a candidate that should be audited without mutation.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'audited-readonly-runbook',
+            content: 'Agents should audit closeout memory candidates before suggesting promotion.',
+            category: 'runbook',
+            candidateType: 'runbook',
+            confidence: 0.96,
+            stability: 0.96,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+        ],
+      }),
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'audit-suggestions-repo',
+    sessionId: 'audit-suggestions-session',
+    role: 'assistant',
+    content: 'Read-only audited candidate.',
+  });
+  const checkpoint = await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'audit-suggestions-repo',
+    sessionId: 'audit-suggestions-session',
+  });
+
+  const noSource = await app.auditMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'audit-suggestions-repo',
+    trigger: 'manual_closeout',
+  });
+  assert.equal(noSource.kind, 'memory_candidate_audit_suggestions');
+  assert.deepEqual(noSource.proposals, []);
+  assert.equal(noSource.source.mode, 'none');
+  assert.ok(noSource.requestWarnings.some((warning) => warning.code === 'missing_closeout_source'));
+
+  const result = await app.auditMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'audit-suggestions-repo',
+    checkpointId: checkpoint.id,
+    trigger: 'user_declared_work_done',
+    limit: 5,
+  });
+
+  assert.equal(result.kind, 'memory_candidate_audit_suggestions');
+  assert.equal(result.policy.mutates, false);
+  assert.equal(result.policy.audit.executed, true);
+  assert.equal(result.policy.audit.provider, 'none');
+  assert.equal(result.source.mode, 'checkpoint');
+  assert.equal(result.proposals.length, 1);
+  assert.equal(result.proposals[0].key, 'audited-readonly-runbook');
+  assert.equal(result.proposals[0].recommendedAction, 'promote');
+  assert.equal(result.proposals[0].audit.metadata.model, 'gpt-5.5');
+  assert.ok(result.requestWarnings.some((warning) => warning.code === 'limit_capped'));
+  assert.equal(auditInvocations.length, 1);
+  assert.equal(auditInvocations[0].checkpoint.id, checkpoint.id);
+  assert.equal(app.getMemory({ scope: 'repo', scopeKey: 'audit-suggestions-repo', key: 'audited-readonly-runbook' }), null);
+  const pendingCandidates = app.listMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'audit-suggestions-repo',
+    status: 'pending',
+  });
+  assert.equal(pendingCandidates.length, 1);
+  assert.equal(pendingCandidates[0].candidate.key, 'audited-readonly-runbook');
+});
+
 test('autoPromoteMemoryCandidates returns stable empty arrays and preference input warnings', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({
@@ -5943,6 +6041,100 @@ test('autoPromoteMemoryCandidates can audit through the Codex Python SDK provide
   assert.ok(
     app.getMemory({ scope: 'repo', scopeKey: 'python-sdk-audit-repo', key: 'python-sdk-audit-runbook' }),
   );
+});
+
+test('auditMemoryCandidates can use the Codex Python SDK provider without enabling auto-promotion', async () => {
+  const dataDir = await makeTempDir();
+  const auditInvocations = [];
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'python_sdk_audit_suggestions_provider',
+      CONTEXTFORGE_AUTO_PROMOTE_AUDIT_PROVIDER: 'codex_sdk_python',
+      CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_BIN: '/home/ubuntu/.local/bin/codex',
+      CONTEXTFORGE_AUTO_PROMOTE_AUDIT_PYTHON_COMMAND: 'python3',
+      CONTEXTFORGE_AUTO_PROMOTE_AUDIT_PYTHONPATH: '/tmp/contextforge-codex-sdk',
+    },
+    cwd: process.cwd(),
+    autoPromoteAuditRunner: async (invocation) => {
+      auditInvocations.push(invocation);
+      return {
+        stdout: JSON.stringify({
+          final_response: JSON.stringify({
+            approved: false,
+            decision: 'needs_review',
+            reason: 'The agent should review this candidate before promotion.',
+            riskCodes: ['needs_human_review'],
+          }),
+          elapsed_ms: 21,
+        }),
+        stderr: '',
+      };
+    },
+    distillProviders: {
+      python_sdk_audit_suggestions_provider: async () => ({
+        summaryShort: 'Python SDK audit suggestions checkpoint.',
+        summaryText: 'Closeout produced a candidate that should be audited without auto-promotion.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'python-sdk-readonly-audit',
+            content: 'The Python SDK audit provider can produce read-only closeout recommendations.',
+            category: 'runbook',
+            candidateType: 'runbook',
+            confidence: 0.96,
+            stability: 0.96,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+        ],
+      }),
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'python-sdk-audit-suggestions-repo',
+    sessionId: 'python-sdk-audit-suggestions-session',
+    role: 'assistant',
+    content: 'Python SDK read-only audited candidate.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'python-sdk-audit-suggestions-repo',
+    sessionId: 'python-sdk-audit-suggestions-session',
+  });
+
+  const result = await app.auditMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'python-sdk-audit-suggestions-repo',
+    sessionId: 'python-sdk-audit-suggestions-session',
+    trigger: 'manual_closeout',
+  });
+
+  assert.equal(result.policy.audit.provider, 'codex_sdk_python');
+  assert.equal(result.policy.audit.executed, true);
+  assert.equal(result.proposals.length, 1);
+  assert.equal(result.proposals[0].recommendedAction, 'review');
+  assert.equal(result.proposals[0].audit.metadata.provider, 'codex_sdk_python');
+  assert.equal(result.proposals[0].audit.metadata.codexBin, '/home/ubuntu/.local/bin/codex');
+  assert.equal(auditInvocations.length, 1);
+  assert.equal(auditInvocations[0].pythonCommand, 'python3');
+  assert.equal(
+    app.getMemory({
+      scope: 'repo',
+      scopeKey: 'python-sdk-audit-suggestions-repo',
+      key: 'python-sdk-readonly-audit',
+    }),
+    null,
+  );
+  const pendingCandidates = app.listMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'python-sdk-audit-suggestions-repo',
+    status: 'pending',
+  });
+  assert.equal(pendingCandidates.length, 1);
 });
 
 test('autoPromoteMemoryCandidates rejects unsupported audit providers', async () => {
@@ -6651,6 +6843,7 @@ test('REMOTE_METHODS exposes resume, suggestion, auto-promotion, and reconciliat
   assert.ok(REMOTE_METHODS.includes('processDueDistills'));
   assert.ok(REMOTE_METHODS.includes('listMemories'));
   assert.ok(REMOTE_METHODS.includes('suggestMemoryPromotions'));
+  assert.ok(REMOTE_METHODS.includes('auditMemoryCandidates'));
   assert.ok(REMOTE_METHODS.includes('autoPromoteMemoryCandidates'));
   assert.ok(REMOTE_METHODS.includes('reconcileMemory'));
   assert.ok(REMOTE_METHODS.includes('listPreferenceOccurrences'));
@@ -6813,6 +7006,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.deepEqual(toolNames, [
       'append_raw',
       'apply_memory_update_candidate',
+      'audit_memory_candidates',
       'auto_promote_memory_candidates',
       'begin_session',
       'bootstrap_context',
@@ -6913,6 +7107,10 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.ok(autoPromoteTool.inputSchema.properties.minConfidence);
     assert.ok(autoPromoteTool.inputSchema.properties.allowedCategories);
     assert.ok(autoPromoteTool.description.includes('missing_closeout_source'));
+    const auditCandidatesTool = toolList.tools.find((tool) => tool.name === 'audit_memory_candidates');
+    assert.ok(auditCandidatesTool.inputSchema.properties.minConfidence);
+    assert.ok(auditCandidatesTool.inputSchema.properties.promotionRecommendation);
+    assert.ok(auditCandidatesTool.description.includes('never promotes'));
     const promoteTool = toolList.tools.find((tool) => tool.name === 'promote_memory');
     assert.ok(promoteTool.description.includes('sourceCheckpointId'));
     const promoteCandidateTool = toolList.tools.find((tool) => tool.name === 'promote_memory_candidate');

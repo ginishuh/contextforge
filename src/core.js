@@ -1007,6 +1007,17 @@ function autoPromotionWouldPromote(indexedCandidate, warnings, rank) {
   };
 }
 
+function auditedPromotionProposal(indexedCandidate, warnings, audit, rank) {
+  const proposal = promotionProposal(indexedCandidate, warnings, rank);
+  const approved = audit?.approved === true;
+  return {
+    ...proposal,
+    audit,
+    auditReason: audit?.reason || null,
+    recommendedAction: approved ? 'promote' : 'review',
+  };
+}
+
 function promoteCandidateToMemory(
   store,
   scope,
@@ -2681,6 +2692,205 @@ export function createContextForge(options = {}) {
           nextActions: [
             'Ask the user to choose: promote, edit then promote, skip, or reject.',
             'Do not promote automatically.',
+          ],
+        };
+      });
+    },
+
+    async auditMemoryCandidates(options = {}) {
+      const scope = normalizeScopeOptions(options, config);
+      const trigger = options.trigger;
+      if (!CLOSEOUT_TRIGGERS.has(trigger)) {
+        throw new Error('trigger must be a closeout trigger.');
+      }
+      const requestedLimit = positiveNumber(options.limit == null ? 3 : Number(options.limit), 'limit');
+      const limit = Math.min(3, requestedLimit);
+      const requestWarnings =
+        requestedLimit > 3
+          ? [
+              {
+                code: 'limit_capped',
+                message: 'audit_memory_candidates returns at most 3 proposals.',
+                requestedLimit,
+                effectiveLimit: limit,
+              },
+            ]
+          : [];
+      const minConfidence = Number(options.minConfidence ?? 0.85);
+      const minStability = Number(options.minStability ?? 0.85);
+      if (!Number.isFinite(minConfidence) || minConfidence < 0 || minConfidence > 1) {
+        throw new Error('minConfidence must be between 0 and 1.');
+      }
+      if (!Number.isFinite(minStability) || minStability < 0 || minStability > 1) {
+        throw new Error('minStability must be between 0 and 1.');
+      }
+      const categoryPolicy = normalizeAllowedCategories(options.allowedCategories);
+      const allowedCategories = categoryPolicy.allowedCategories;
+      if (categoryPolicy.strippedPreference) {
+        requestWarnings.push({
+          code: 'preference_input_stripped',
+          message: 'Preference candidates cannot be audited for automatic-style promotion until occurrence/merge tracking exists.',
+        });
+      }
+      const scanLimit = positiveNumber(options.scanLimit == null ? 10 : Number(options.scanLimit), 'scanLimit');
+      const promotionRecommendation = options.promotionRecommendation || 'promote';
+      if (!options.sessionId && !options.checkpointId) {
+        return {
+          kind: 'memory_candidate_audit_suggestions',
+          trigger,
+          source: {
+            sessionId: null,
+            checkpointId: null,
+            mode: 'none',
+          },
+          policy: {
+            minConfidence,
+            minStability,
+            allowedCategories: Array.from(allowedCategories),
+            scopeFallback: false,
+            mutates: false,
+            audit: {
+              enabled: false,
+              executed: false,
+              provider: 'none',
+              model: null,
+              reasoningEffort: null,
+            },
+          },
+          proposals: [],
+          skipped: [],
+          requestWarnings: [
+            ...requestWarnings,
+            {
+              ...missingCloseoutSourceWarning('audit_memory_candidates'),
+              detail:
+                'Audited suggestions never use scope fallback. Pass the checkpointId returned by distill_checkpoint or the current sessionId.',
+            },
+          ],
+          nextActions: [
+            'No current-session closeout candidates were reviewed because sessionId/checkpointId was missing.',
+            'Provide sessionId or checkpointId; audited suggestions never scan the scope backlog.',
+            'No memory candidates were promoted.',
+          ],
+        };
+      }
+
+      return useStore(async (store) => {
+        let checkpointId = options.checkpointId || null;
+        let sourceMode = null;
+        if (checkpointId) {
+          sourceMode = 'checkpoint';
+        } else {
+          const latestCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId, level: 0 });
+          checkpointId = latestCheckpoint?.id || null;
+          sourceMode = 'latest_checkpoint';
+        }
+        const auditor = checkpointId ? getAutoPromoteAuditor(store) : null;
+        const auditPolicy = {
+          enabled: Boolean(auditor),
+          executed: false,
+          provider: auditor?.metadata?.provider || 'none',
+          model: auditor?.metadata?.model || null,
+          reasoningEffort: auditor?.metadata?.reasoningEffort || null,
+        };
+        if (options.sessionId && !checkpointId) {
+          return {
+            kind: 'memory_candidate_audit_suggestions',
+            trigger,
+            source: {
+              sessionId: options.sessionId,
+              checkpointId: null,
+              mode: sourceMode,
+            },
+            policy: {
+              minConfidence,
+              minStability,
+              allowedCategories: Array.from(allowedCategories),
+              scopeFallback: false,
+              mutates: false,
+              audit: auditPolicy,
+            },
+            proposals: [],
+            skipped: [],
+            requestWarnings,
+            nextActions: [
+              'No latest checkpoint was found for this session; distill a checkpoint before auditing candidates.',
+              'No memory candidates were promoted.',
+            ],
+          };
+        }
+
+        const policy = { minConfidence, minStability, allowedCategories };
+        const candidates = store.listMemoryCandidates({
+          ...scope,
+          sessionId: options.sessionId || null,
+          checkpointId,
+          status: 'pending',
+          promotionRecommendation,
+          sort: 'recommendation',
+          limit: scanLimit,
+        });
+        const assessed = candidates.map((candidate) => {
+          const warnings = autoPromotionWarnings(store, scope, candidate, policy);
+          const score = scorePromotionCandidate(candidate, warnings, AUTO_PROMOTE_SKIP_WARNING_CODES);
+          return { candidate, warnings, score };
+        });
+        const selected = assessed
+          .filter((item) => item.score > 0)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, limit);
+        const audited = [];
+        for (const item of selected) {
+          try {
+            const audit = await auditAutoPromotionCandidate({ auditor, store, scope, item });
+            audited.push({ ...item, audit });
+          } catch (error) {
+            audited.push({
+              ...item,
+              audit: {
+                approved: false,
+                decision: 'needs_review',
+                reason: `Memory candidate audit failed: ${error.message}`,
+                riskCodes: ['audit_failed'],
+                metadata: { errorName: error.name },
+              },
+            });
+          }
+        }
+
+        return {
+          kind: 'memory_candidate_audit_suggestions',
+          trigger,
+          source: {
+            sessionId: options.sessionId || null,
+            checkpointId,
+            mode: sourceMode,
+          },
+          policy: {
+            minConfidence,
+            minStability,
+            allowedCategories: Array.from(allowedCategories),
+            scopeFallback: false,
+            mutates: false,
+            audit: {
+              ...auditPolicy,
+              executed: audited.length > 0,
+            },
+          },
+          proposals: audited.map((item, index) =>
+            auditedPromotionProposal(item.candidate, item.warnings, item.audit, index + 1),
+          ),
+          skipped: assessed
+            .filter((item) => item.score <= 0)
+            .map((item) => ({
+              candidateId: item.candidate.id,
+              reason: candidateWarningReason(item.warnings) || 'low_score',
+            })),
+          requestWarnings,
+          nextActions: [
+            'Ask the user to choose: promote, edit then promote, skip, or reject.',
+            'Use promote_memory_candidate only after reviewed approval; rejected audit candidates remain pending until explicitly rejected or skipped.',
+            'No memory candidates were promoted.',
           ],
         };
       });
