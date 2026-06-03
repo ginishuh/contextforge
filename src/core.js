@@ -1115,6 +1115,13 @@ function auditedPromotionProposal(indexedCandidate, warnings, audit, rank, { aud
   };
 }
 
+function storedAuditProposal(indexedCandidate, rank) {
+  const audit = indexedCandidate.reviewMetadata?.audit || null;
+  return auditedPromotionProposal(indexedCandidate, [], audit, rank, {
+    auditEnabled: Boolean(audit),
+  });
+}
+
 function promoteCandidateToMemory(
   store,
   scope,
@@ -2734,7 +2741,7 @@ export function createContextForge(options = {}) {
           };
         }
 
-        if (options.sessionId && !checkpointId) {
+        if (options.sessionId && sourceMode === 'latest_checkpoint' && !checkpointId) {
           return {
             kind: 'memory_promotion_suggestions',
             trigger,
@@ -2880,12 +2887,14 @@ export function createContextForge(options = {}) {
         let sourceMode = null;
         if (checkpointId) {
           sourceMode = 'checkpoint';
+        } else if (options.sessionId) {
+          sourceMode = 'session_pending_batch';
         } else {
           const latestCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId, level: 0 });
           checkpointId = latestCheckpoint?.id || null;
           sourceMode = 'latest_checkpoint';
         }
-        const auditor = checkpointId ? getAutoPromoteAuditor(store) : null;
+        const auditor = checkpointId || options.sessionId ? getAutoPromoteAuditor(store) : null;
         const auditPolicy = {
           enabled: Boolean(auditor),
           executed: false,
@@ -2893,7 +2902,7 @@ export function createContextForge(options = {}) {
           model: auditor?.metadata?.model || null,
           reasoningEffort: auditor?.metadata?.reasoningEffort || null,
         };
-        if (options.sessionId && !checkpointId) {
+        if (options.sessionId && sourceMode === 'latest_checkpoint' && !checkpointId) {
           return {
             kind: 'memory_candidate_audit_suggestions',
             trigger,
@@ -2921,7 +2930,7 @@ export function createContextForge(options = {}) {
         }
 
         const policy = { minConfidence, minStability, allowedCategories };
-        const candidates = store.listMemoryCandidates({
+        const allCandidates = store.listMemoryCandidates({
           ...scope,
           sessionId: options.sessionId || null,
           checkpointId,
@@ -2930,6 +2939,10 @@ export function createContextForge(options = {}) {
           sort: 'recommendation',
           limit: scanLimit,
         });
+        const storedAudited = truthyOption(options.force)
+          ? []
+          : allCandidates.filter((candidate) => candidate.reviewMetadata?.audit);
+        const candidates = allCandidates.filter((candidate) => truthyOption(options.force) || !candidate.reviewMetadata?.audit);
         const assessed = candidates.map((candidate) => {
           const warnings = autoPromotionWarnings(store, scope, candidate, policy);
           const score = scorePromotionCandidate(candidate, warnings, AUTO_PROMOTE_SKIP_WARNING_CODES);
@@ -2940,20 +2953,51 @@ export function createContextForge(options = {}) {
           .sort((a, b) => b.score - a.score)
           .slice(0, limit);
         const audited = [];
+        const auditBatchId = randomUUID();
         for (const item of selected) {
           try {
             const audit = await auditAutoPromotionCandidate({ auditor, store, scope, item });
-            audited.push({ ...item, audit });
+            const auditedCandidate = store.markMemoryCandidateAudited({
+              ...scope,
+              candidateId: item.candidate.id,
+              audit,
+              reason: audit.reason,
+              metadata: {
+                auditBatchId,
+                trigger,
+                sourceMode,
+                checkpointId,
+                sessionId: options.sessionId || null,
+                mutates: false,
+              },
+            });
+            audited.push({ ...item, candidate: auditedCandidate, audit });
           } catch (error) {
+            const audit = {
+              approved: false,
+              decision: 'needs_review',
+              reason: `Memory candidate audit failed: ${error.message}`,
+              riskCodes: ['audit_failed'],
+              metadata: { errorName: error.name },
+            };
+            const auditedCandidate = store.markMemoryCandidateAudited({
+              ...scope,
+              candidateId: item.candidate.id,
+              audit,
+              reason: audit.reason,
+              metadata: {
+                auditBatchId,
+                trigger,
+                sourceMode,
+                checkpointId,
+                sessionId: options.sessionId || null,
+                mutates: false,
+              },
+            });
             audited.push({
               ...item,
-              audit: {
-                approved: false,
-                decision: 'needs_review',
-                reason: `Memory candidate audit failed: ${error.message}`,
-                riskCodes: ['audit_failed'],
-                metadata: { errorName: error.name },
-              },
+              candidate: auditedCandidate,
+              audit,
             });
           }
         }
@@ -2977,11 +3021,14 @@ export function createContextForge(options = {}) {
               executed: Boolean(auditor) && audited.length > 0,
             },
           },
-          proposals: audited.map((item, index) =>
-            auditedPromotionProposal(item.candidate, item.warnings, item.audit, index + 1, {
-              auditEnabled: Boolean(auditor),
-            }),
-          ),
+          proposals: [
+            ...storedAudited.map((candidate, index) => storedAuditProposal(candidate, index + 1)),
+            ...audited.map((item, index) =>
+              auditedPromotionProposal(item.candidate, item.warnings, item.audit, storedAudited.length + index + 1, {
+                auditEnabled: Boolean(auditor),
+              }),
+            ),
+          ].slice(0, limit),
           skipped: assessed
             .filter((item) => item.score <= 0)
             .map((item) => ({
@@ -3079,12 +3126,14 @@ export function createContextForge(options = {}) {
         let sourceMode = null;
         if (checkpointId) {
           sourceMode = 'checkpoint';
+        } else if (options.sessionId) {
+          sourceMode = 'session_pending_batch';
         } else {
           const latestCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId, level: 0 });
           checkpointId = latestCheckpoint?.id || null;
           sourceMode = 'latest_checkpoint';
         }
-        if (options.sessionId && !checkpointId) {
+        if (options.sessionId && sourceMode === 'latest_checkpoint' && !checkpointId) {
           return {
             kind: 'auto_memory_promotion_result',
             trigger,
@@ -3134,21 +3183,36 @@ export function createContextForge(options = {}) {
         const auditor = getAutoPromoteAuditor(store);
         const audited = [];
         if (!dryRun) {
-          for (const item of selected) {
-            try {
-              const audit = await auditAutoPromotionCandidate({ auditor, store, scope, item });
-              audited.push({ ...item, audit });
-            } catch (error) {
+          if (!auditor) {
+            for (const item of selected) {
               audited.push({
                 ...item,
                 audit: {
                   approved: false,
                   decision: 'needs_review',
-                  reason: `Auto-promotion audit failed: ${error.message}`,
-                  riskCodes: ['audit_failed'],
-                  metadata: { errorName: error.name },
+                  reason: 'Auto-promotion audit provider is disabled; automatic promotion requires audit approval.',
+                  riskCodes: ['audit_disabled'],
+                  metadata: { provider: 'none' },
                 },
               });
+            }
+          } else {
+            for (const item of selected) {
+              try {
+                const audit = await auditAutoPromotionCandidate({ auditor, store, scope, item });
+                audited.push({ ...item, audit });
+              } catch (error) {
+                audited.push({
+                  ...item,
+                  audit: {
+                    approved: false,
+                    decision: 'needs_review',
+                    reason: `Auto-promotion audit failed: ${error.message}`,
+                    riskCodes: ['audit_failed'],
+                    metadata: { errorName: error.name },
+                  },
+                });
+              }
             }
           }
         }
@@ -4081,12 +4145,140 @@ export function createContextForge(options = {}) {
           throw checkpointError;
         }
 
+        let candidateAudit = {
+          enabled: false,
+          executed: false,
+          reason: 'no_candidates',
+          audited: 0,
+          promoted: 0,
+          error: null,
+        };
+        try {
+          const auditTrigger = options.auditTrigger || options.trigger || null;
+          const forceAudit = CLOSEOUT_TRIGGERS.has(auditTrigger);
+          const effectiveForAudit = getEffectiveRuntime(store);
+          const auditConfig = effectiveForAudit.autoPromoteAudit || {};
+          const minBatchCandidates = Number(auditConfig.minBatchCandidates || 5);
+          const batchLimit = Number(auditConfig.batchLimit || 5);
+          const unauditedPending = store
+            .listMemoryCandidates({
+              ...scope,
+              sessionId: options.sessionId,
+              status: 'pending',
+              promotionRecommendation: 'promote',
+              sort: 'recommendation',
+              limit: Math.max(minBatchCandidates, batchLimit, 1),
+            })
+            .filter((candidate) => !candidate.reviewMetadata?.audit);
+          const shouldAudit =
+            checkpointLevel === 0 &&
+            unauditedPending.length > 0 &&
+            (forceAudit || unauditedPending.length >= minBatchCandidates);
+          if (!shouldAudit) {
+            candidateAudit = {
+              ...candidateAudit,
+              enabled: auditConfig.enabled !== false,
+              reason:
+                checkpointLevel !== 0
+                  ? 'non_level_zero_checkpoint'
+                  : unauditedPending.length === 0
+                    ? 'no_unaudited_pending_candidates'
+                    : 'below_batch_threshold',
+              pendingUnaudited: unauditedPending.length,
+              minBatchCandidates,
+            };
+          } else {
+            const auditor = getAutoPromoteAuditor(store);
+            const policy = {
+              minConfidence: 0.85,
+              minStability: 0.85,
+              allowedCategories: SAFE_AUTO_PROMOTE_CATEGORIES,
+            };
+            const assessed = unauditedPending.map((candidate) => {
+              const warnings = autoPromotionWarnings(store, scope, candidate, policy);
+              const score = scorePromotionCandidate(candidate, warnings, AUTO_PROMOTE_SKIP_WARNING_CODES);
+              return { candidate, warnings, score };
+            });
+            const selected = assessed
+              .filter((item) => item.score > 0)
+              .sort((a, b) => b.score - a.score)
+              .slice(0, batchLimit);
+            const auditBatchId = randomUUID();
+            let auditedCount = 0;
+            let promotedCount = 0;
+            for (const item of selected) {
+              let audit;
+              try {
+                audit = await auditAutoPromotionCandidate({ auditor, store, scope, item });
+              } catch (error) {
+                audit = {
+                  approved: false,
+                  decision: 'needs_review',
+                  reason: `Automatic candidate audit failed: ${error.message}`,
+                  riskCodes: ['audit_failed'],
+                  metadata: { errorName: error.name },
+                };
+              }
+              const auditedCandidate = store.markMemoryCandidateAudited({
+                ...scope,
+                candidateId: item.candidate.id,
+                audit,
+                reason: audit.reason,
+                metadata: {
+                  auditBatchId,
+                  trigger: auditTrigger || 'batch_threshold',
+                  sourceMode: forceAudit ? 'closeout_batch' : 'threshold_batch',
+                  sessionId: options.sessionId,
+                  checkpointId: checkpoint.id,
+                  minBatchCandidates,
+                  batchLimit,
+                  autoPromoteEnabled: config.autoPromote.enabled,
+                },
+              });
+              auditedCount += 1;
+              if (config.autoPromote.enabled && auditor && audit.approved === true) {
+                const reason =
+                  'Auto-promoted after automatic batched candidate audit approved this strict safe candidate.';
+                const memory = autoPromoteIndexedCandidate(store, scope, auditedCandidate, item.warnings, reason, audit);
+                enqueueEmbeddingSources(store, [store.embeddingSourceForMemory(memory)]);
+                promotedCount += 1;
+              }
+            }
+            candidateAudit = {
+              enabled: Boolean(auditor),
+              executed: selected.length > 0,
+              reason: forceAudit ? 'closeout_trigger' : 'batch_threshold',
+              trigger: auditTrigger || null,
+              pendingUnaudited: unauditedPending.length,
+              selected: selected.length,
+              audited: auditedCount,
+              promoted: promotedCount,
+              minBatchCandidates,
+              batchLimit,
+              provider: auditor?.metadata?.provider || 'none',
+              model: auditor?.metadata?.model || null,
+              reasoningEffort: auditor?.metadata?.reasoningEffort || null,
+              error: null,
+            };
+          }
+        } catch (error) {
+          candidateAudit = {
+            enabled: true,
+            executed: false,
+            reason: 'audit_error',
+            audited: 0,
+            promoted: 0,
+            error: errorSummary(error),
+          };
+        }
+
         store.completeDistillRun({
           id: distillRun.id,
           outputMetadata: {
             checkpointId: checkpoint.id,
             provider: checkpoint.provider,
             memoryCandidateCount: output.memoryCandidates.length,
+            candidateAudit,
             workingSummaryUpdated: Boolean(workingSummary),
             workingSummaryId: workingSummary?.id || null,
             workingSummaryError: errorSummary(workingSummaryError),
@@ -4126,6 +4318,7 @@ export function createContextForge(options = {}) {
         return {
           ...checkpoint,
           memoryCandidateCount: output.memoryCandidates.length,
+          candidateAudit,
           workingSummary: {
             updated: Boolean(workingSummary),
             id: workingSummary?.id || null,

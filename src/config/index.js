@@ -254,6 +254,16 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
           'CONTEXTFORGE_AUTO_PROMOTE_AUDIT_CODEX_TIMEOUT_MS',
           120000,
         ),
+        minBatchCandidates: parsePositiveInteger(
+          env.CONTEXTFORGE_AUTO_PROMOTE_AUDIT_MIN_BATCH_CANDIDATES,
+          'CONTEXTFORGE_AUTO_PROMOTE_AUDIT_MIN_BATCH_CANDIDATES',
+          5,
+        ),
+        batchLimit: parsePositiveInteger(
+          env.CONTEXTFORGE_AUTO_PROMOTE_AUDIT_BATCH_LIMIT,
+          'CONTEXTFORGE_AUTO_PROMOTE_AUDIT_BATCH_LIMIT',
+          5,
+        ),
       },
     },
     codexExec: {

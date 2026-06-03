@@ -112,6 +112,10 @@ function countLabel(label, value) {
   return `${label} ${count}`;
 }
 
+function checkpointStructured(checkpoint) {
+  return checkpoint?.structured || checkpoint?.metadata?.structured || null;
+}
+
 function showDetail(title, content) {
   $('#detail').innerHTML = `<h2>${escapeHtml(title)}</h2><pre>${escapeHtml(JSON.stringify(content, null, 2))}</pre>`;
   $('#detailDialog').showModal();
@@ -119,7 +123,7 @@ function showDetail(title, content) {
 
 function showDistillDetail(bundle) {
   const checkpoint = bundle.checkpoint;
-  const structured = checkpoint?.structured || checkpoint?.metadata?.structured || null;
+  const structured = checkpointStructured(checkpoint);
   const work = structured?.work || {};
   const liveState = structured?.liveState || {};
   $('#detail').innerHTML = `<h2>구조화 디스틸</h2>
@@ -376,11 +380,27 @@ async function loadRuns(target = '#runsTable', options = {}) {
   document.querySelectorAll('[data-run-structured]').forEach((button) => {
     button.addEventListener('click', () => showDistillDetail(state.runs[Number(button.dataset.runStructured)]));
   });
+  document.querySelectorAll('[data-run-audit]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const bundle = state.runs[Number(button.dataset.runAudit)];
+      const checkpointId = bundle.checkpoint?.id || bundle.run.outputMetadata?.checkpointId || '';
+      if (!checkpointId) return;
+      $('#memoryScope').value = bundle.run.scopeType;
+      await fillScopeKeySelect($('#memoryScopeKey'), bundle.run.scopeType);
+      $('#memoryScopeKey').value = bundle.run.scopeKey;
+      $('#candidateSession').value = bundle.run.sessionId || '';
+      $('#candidateCheckpoint').value = checkpointId;
+      document.querySelectorAll('.tabs button, .tab').forEach((item) => item.classList.remove('active'));
+      document.querySelector('[data-tab="memory"]').classList.add('active');
+      $('#memory').classList.add('active');
+      await loadAuditedCandidates();
+    });
+  });
 }
 
 function runItem(bundle, index) {
   const { run, checkpoint } = bundle;
-  const structured = checkpoint?.structured || checkpoint?.metadata?.structured || null;
+  const structured = checkpointStructured(checkpoint);
   const work = structured?.work || {};
   const liveState = structured?.liveState || {};
   const checkpointId = checkpoint?.id || run.outputMetadata?.checkpointId || '';
@@ -402,6 +422,7 @@ function runItem(bundle, index) {
     <div class="actions">
       <button data-run-detail="${index}">실행 상세</button>
       <button data-run-structured="${index}" ${structured ? '' : 'disabled'}>구조화 보기</button>
+      <button data-run-audit="${index}" ${checkpointId ? '' : 'disabled'}>감사 후보 보기</button>
       <span class="muted">${escapeHtml(checkpointId)}</span>
     </div>
   </article>`;
@@ -483,76 +504,102 @@ function memoryItem(memory, index) {
   </article>`;
 }
 
-function candidateRecommendationLabel(value) {
+function auditedActionLabel(value) {
   const labels = {
-    promote: '승격 추천',
-    review: '검토 필요',
-    ignore: '무시 권장',
-    reject: '거절 권장',
+    promote: '감사 승인',
+    review: '사람 검토',
+    ask_user: '사용자 확인',
+    dry_run_only: '드라이런',
   };
-  return labels[String(value || '').toLowerCase()] || '추천 없음';
+  return labels[String(value || '').toLowerCase()] || '감사 결과';
 }
 
-$('#loadCandidates').addEventListener('click', async (event) => {
-  event.preventDefault();
+function auditDecisionLabel(audit) {
+  if (!audit) return '감사 미실행';
+  const labels = {
+    approve: 'approve',
+    needs_review: 'needs_review',
+    reject: 'reject',
+  };
+  return labels[String(audit.decision || '').toLowerCase()] || String(audit.decision || 'unknown');
+}
+
+async function loadAuditedCandidates() {
   const scope = $('#memoryScope').value;
   const scopeKey = $('#memoryScopeKey').value;
-  const promotionRecommendation = $('#candidateRecommendation').value;
-  const request = { scope, scopeKey, status: 'pending', limit: 100 };
-  if (promotionRecommendation) request.promotionRecommendation = promotionRecommendation;
-  const candidates = await call('listMemoryCandidates', request);
-  state.candidates = candidates;
-  const emptyMessage = promotionRecommendation
-    ? `${candidateRecommendationLabel(promotionRecommendation)} 후보가 없습니다.`
-    : '원시 후보가 없습니다.';
-  $('#candidates').innerHTML = candidates.map(candidateItem).join('') || `<p class="muted">${escapeHtml(emptyMessage)}</p>`;
+  const sessionId = $('#candidateSession').value.trim();
+  const checkpointId = $('#candidateCheckpoint').value.trim();
+  if (!sessionId && !checkpointId) {
+    state.candidates = [];
+    $('#candidates').innerHTML =
+      '<p class="muted">감사할 세션 또는 체크포인트를 선택하세요. 실행 기록에서 감사 후보 보기를 누르면 자동으로 채워집니다.</p>';
+    return;
+  }
+  const result = await call('auditMemoryCandidates', {
+    scope,
+    scopeKey,
+    trigger: 'manual_closeout',
+    ...(checkpointId ? { checkpointId } : { sessionId }),
+    limit: 3,
+    scanLimit: 100,
+  });
+  state.candidates = result.proposals || [];
+  const warnings = (result.requestWarnings || []).map((warning) => warning.message || warning.code).join('\n');
+  const emptyMessage = warnings || 'GPT-5.5 감사 후보가 없습니다.';
+  $('#candidates').innerHTML = state.candidates.map(candidateItem).join('') || `<p class="muted">${escapeHtml(emptyMessage)}</p>`;
   document.querySelectorAll('[data-candidate]').forEach((button) => {
-    button.addEventListener('click', () => showDetail('후보', candidates[Number(button.dataset.candidate)]));
+    button.addEventListener('click', () => showDetail('감사 후보', state.candidates[Number(button.dataset.candidate)]));
   });
   document.querySelectorAll('[data-promote]').forEach((button) => {
     button.addEventListener('click', async () => {
-      const candidate = candidates[Number(button.dataset.promote)];
-      const key = prompt('메모리 키', candidate.candidate.key);
+      const candidate = state.candidates[Number(button.dataset.promote)];
+      const key = prompt('메모리 키', candidate.key);
       if (!key) return;
-      const content = prompt('메모리 내용', candidate.candidate.content);
+      const content = prompt('메모리 내용', candidate.content);
       if (!content) return;
       await call('promoteMemoryCandidate', {
         scope,
         scopeKey,
-        candidateId: candidate.id,
+        candidateId: candidate.candidateId,
         key,
         content,
-        category: candidate.candidate.category || 'note',
-        tags: candidate.candidate.tags || [],
-        importance: candidate.candidate.importance || 0,
+        category: candidate.category || 'note',
+        tags: [],
+        importance: 0,
         allowWarnings: true,
       });
-      $('#loadCandidates').click();
+      await loadAuditedCandidates();
     });
   });
   document.querySelectorAll('[data-reject]').forEach((button) => {
     button.addEventListener('click', async () => {
-      const candidate = candidates[Number(button.dataset.reject)];
+      const candidate = state.candidates[Number(button.dataset.reject)];
       const reason = prompt('후보 거절 이유를 입력하세요.');
       if (!reason) return;
-      await call('rejectMemoryCandidate', { scope, scopeKey, candidateId: candidate.id, reason });
-      $('#loadCandidates').click();
+      await call('rejectMemoryCandidate', { scope, scopeKey, candidateId: candidate.candidateId, reason });
+      await loadAuditedCandidates();
     });
   });
+}
+
+$('#loadCandidates').addEventListener('click', async (event) => {
+  event.preventDefault();
+  await loadAuditedCandidates();
 });
 
 function candidateItem(candidate, index) {
-  const recommendation = candidateRecommendationLabel(candidate.candidate.promotionRecommendation);
-  const type = candidate.candidate.candidateType || 'raw';
-  const confidence = candidate.candidate.confidence == null ? '' : ` · 신뢰도 ${candidate.candidate.confidence}`;
-  const stability = candidate.candidate.stability == null ? '' : ` · 안정성 ${candidate.candidate.stability}`;
+  const action = auditedActionLabel(candidate.recommendedAction);
+  const decision = auditDecisionLabel(candidate.audit);
+  const risks = Array.isArray(candidate.audit?.riskCodes) && candidate.audit.riskCodes.length
+    ? ` · 위험 ${candidate.audit.riskCodes.join(', ')}`
+    : '';
   return `<article class="item">
-    <header><span class="item-title"><input type="checkbox" data-candidate-select="${index}" aria-label="후보 선택" /><strong>${escapeHtml(candidate.candidate.key)}</strong></span><span class="muted">${escapeHtml(candidate.status)} · ${escapeHtml(recommendation)}</span></header>
-    <p>${escapeHtml(candidate.candidate.content.slice(0, 220))}</p>
-    <p class="muted">원시 디스틸 후보 · ${escapeHtml(type)}${escapeHtml(confidence)}${escapeHtml(stability)}</p>
+    <header><span class="item-title"><input type="checkbox" data-candidate-select="${index}" aria-label="후보 선택" /><strong>${escapeHtml(candidate.key)}</strong></span><span class="muted">${escapeHtml(action)} · ${escapeHtml(decision)}</span></header>
+    <p>${escapeHtml(candidate.content.slice(0, 220))}</p>
+    <p class="muted">GPT 감사 후보 · ${escapeHtml(candidate.category || 'note')} · ${escapeHtml(candidate.auditReason || candidate.whyDurable || '')}${escapeHtml(risks)}</p>
     <div class="actions">
       <button data-candidate="${index}">상세</button>
-      <button data-promote="${index}">검토 후 승격</button>
+      <button data-promote="${index}" ${candidate.recommendedAction === 'promote' ? '' : 'disabled'}>승격</button>
       <button class="danger" data-reject="${index}">거절</button>
     </div>
   </article>`;
