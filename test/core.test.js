@@ -4557,7 +4557,7 @@ test('codex_exec provider distills synthetic raw events through a runner', async
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.model, 'gpt-test');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.reasoningEffort, 'low');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.timeoutMs, 1234);
-  assert.equal(checkpoint.metadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v8');
+  assert.equal(checkpoint.metadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v9');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.outputSchemaVersion, 'contextforge.checkpoint.v6');
   assert.equal(checkpoint.structured.schemaVersion, STRUCTURED_CHECKPOINT_SCHEMA_VERSION);
   assert.equal(checkpoint.metadata.structured.schemaVersion, STRUCTURED_CHECKPOINT_SCHEMA_VERSION);
@@ -4568,6 +4568,8 @@ test('codex_exec provider distills synthetic raw events through a runner', async
   assert.match(invocation.prompt, /structured\.liveState/);
   assert.match(invocation.prompt, /human-readable memoryCandidate review fields in Korean/);
   assert.match(invocation.prompt, /content, reason, durabilityReason, and riskReason/);
+  assert.match(invocation.prompt, /one-time PR status updates/);
+  assert.match(invocation.prompt, /review comments posted/);
   assert.deepEqual(invocation.args.slice(0, 2), ['exec', '--skip-git-repo-check']);
   assert.ok(invocation.args.includes('--output-schema'));
   assert.ok(invocation.args.includes('--output-last-message'));
@@ -4634,9 +4636,9 @@ test('codex_exec provider distills synthetic raw events through a runner', async
     sessionId: 'codex-session',
   });
   assert.equal(runs[0].status, 'succeeded');
-  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v8');
+  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v9');
   assert.equal(runs[0].inputMetadata.providerMetadata.outputSchemaVersion, 'contextforge.checkpoint.v6');
-  assert.equal(runs[0].outputMetadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v8');
+  assert.equal(runs[0].outputMetadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v9');
 });
 
 test('codex_exec records JSON brace fallback recovery metadata', async () => {
@@ -5266,8 +5268,8 @@ test('codex_exec parse failures preserve raw evidence', async () => {
   });
   assert.equal(runs[0].status, 'failed');
   assert.equal(runs[0].outputMetadata.providerFailed, true);
-  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v8');
-  assert.equal(runs[0].outputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v8');
+  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v9');
+  assert.equal(runs[0].outputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v9');
 });
 
 test('bootstrapContext returns semantic retrieval with trust and verification hints', async () => {
@@ -7957,11 +7959,19 @@ test('HTTP server serves admin UI assets', async () => {
     const response = await fetch(`${remote.url}/ui/`);
     assert.equal(response.status, 200);
     assert.equal(response.headers.get('cache-control'), 'no-store');
-    assert.match(await response.text(), /ContextForge 관리/);
+    const html = await response.text();
+    assert.match(html, /ContextForge 관리/);
+    assert.match(html, /후보 검토/);
+    assert.match(html, /candidateRecommendation/);
 
     const script = await fetch(`${remote.url}/ui/app.js`);
     assert.equal(script.status, 200);
     assert.match(script.headers.get('content-type'), /text\/javascript/);
+    const scriptText = await script.text();
+    assert.match(scriptText, /promotionRecommendation/);
+    assert.match(scriptText, /원시 디스틸 후보/);
+    assert.match(scriptText, /구조화 디스틸/);
+    assert.match(scriptText, /structured 있음/);
 
     const stylesheet = await fetch(`${remote.url}/ui/styles.css`);
     assert.equal(stylesheet.status, 200);

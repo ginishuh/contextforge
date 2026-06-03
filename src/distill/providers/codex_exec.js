@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { STRUCTURED_CHECKPOINT_SCHEMA_VERSION } from '../validate.js';
 
-export const CODEX_EXEC_PROMPT_VERSION = 'codex_exec.prompt.v8';
+export const CODEX_EXEC_PROMPT_VERSION = 'codex_exec.prompt.v9';
 export const CODEX_EXEC_OUTPUT_SCHEMA_VERSION = 'contextforge.checkpoint.v6';
 
 function nullableStringSchema() {
@@ -347,6 +347,8 @@ export function buildCodexExecPrompt(input, options = {}) {
       'For memoryCandidates, include optional v2 fields when useful: schemaVersion="contextforge.memory_candidate.v2", durabilityReason, riskReason, evidenceRefs, and suggestedAction.',
       'For nullable memoryCandidate fields that are not applicable, return null; do not omit required schema fields.',
       'Create memoryCandidates only for facts, decisions, preferences, runbook steps, or failure modes that may remain useful beyond this checkpoint.',
+      'Do not create memoryCandidates for one-time PR status updates, ordinary test pass records, review comments posted, temporary smoke-test ports, draft CI state, branch cleanup, or other transient work logs unless they reveal a reusable repo runbook, stable preference, architecture decision, API contract, or recurring failure mode.',
+      'Do not set promotionRecommendation="promote" for PR-specific findings, review comments, or verification snapshots until they have been resolved or generalized into durable guidance.',
       'Write human-readable memoryCandidate review fields in Korean by default: content, reason, durabilityReason, and riskReason.',
       'Do not mix English prose into those Korean memoryCandidate review fields unless preserving exact technical identifiers, code symbols, file paths, commands, model names, API names, product names, or quoted error strings.',
       'Keep memoryCandidate keys, categories, tags, enum values, sourceEventIds, evidenceRefs, and schemaVersion machine-readable and in their original technical form.',
