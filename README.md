@@ -947,6 +947,43 @@ receives it together with the new raw-event window so it can update current
 state instead of emitting a delta-only summary. Treat it as current session
 state, not reviewed durable memory.
 
+Checkpoint providers may also return an optional structured handoff payload:
+
+```json
+{
+  "structured": {
+    "schemaVersion": "contextforge.structured_checkpoint.v1",
+    "work": {
+      "intent": "What the user wanted",
+      "status": "in_progress | implemented | verified | blocked | abandoned",
+      "outcome": "What actually happened"
+    },
+    "liveState": {
+      "repo": "github.com/example/contextforge",
+      "branch": "feature/example",
+      "headCommit": "abcdef0",
+      "ciStatus": "pass | fail | pending | unknown",
+      "observedAt": "2026-06-03T00:00:00Z",
+      "verificationRequired": true,
+      "staleReasons": ["branch, commit, and CI are mutable live state"],
+      "verifyHints": ["git status --short --branch", "gh pr view 123 --json statusCheckRollup"]
+    },
+    "changes": [],
+    "verification": [],
+    "risks": [],
+    "nextActions": []
+  }
+}
+```
+
+The structured payload is stored as `checkpoint.metadata.structured` and exposed
+as `checkpoint.structured`. It is a handoff object, not durable memory. Mutable
+branch, PR, commit, CI, worktree, runtime, and deployment state may appear in
+`liveState`, but agents must treat it as observed state and recheck it before
+acting. Memory candidates can include optional review fields such as
+`durabilityReason`, `riskReason`, `evidenceRefs`, and `suggestedAction`; these
+fields are preserved in the candidate index for suggestion and audit surfaces.
+
 `bootstrapContext` includes recent checkpoint handoff separately from ordinary
 query results. By default it returns the latest level-0 checkpoint for the
 requested scope in `handoff.latestCheckpoints`, even when that checkpoint does
@@ -977,6 +1014,9 @@ The bootstrap response keeps these channels separate:
   independently of query ranking; read these before durable memory for current
   work status, recent decisions, open todos, branch/PR/CI flow, and next
   actions.
+- `handoff.latestHandoff`: the first latest checkpoint in deterministic handoff
+  order, including structured handoff payload and live-state stale warnings when
+  available.
 - `results`: durable memories, checkpoints, and memory candidates from search.
 - `workingSummary`: latest rolling handoff state for the requested session.
 - `rawTail`: newest raw events for last-mile continuity.
