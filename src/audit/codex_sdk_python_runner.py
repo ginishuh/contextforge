@@ -13,6 +13,7 @@ SANDBOX_BY_VALUE = {
     Sandbox.workspace_write.value: Sandbox.workspace_write,
     Sandbox.full_access.value: Sandbox.full_access,
 }
+REASONING_EFFORTS = {"minimal", "low", "medium", "high"}
 
 
 def parse_args():
@@ -27,11 +28,20 @@ def parse_args():
 
 def main():
     args = parse_args()
-    payload = json.load(sys.stdin)
-    prompt = payload["prompt"]
+    try:
+        payload = json.load(sys.stdin)
+        prompt = payload["prompt"]
+    except (json.JSONDecodeError, KeyError, TypeError) as error:
+        print(json.dumps({"error": f"Invalid audit payload: {error}"}), file=sys.stderr)
+        sys.exit(1)
     sandbox = SANDBOX_BY_VALUE.get(args.sandbox)
     if sandbox is None:
         raise ValueError(f"Unsupported sandbox preset: {args.sandbox}")
+    if args.reasoning_effort and args.reasoning_effort not in REASONING_EFFORTS:
+        raise ValueError(
+            f"Unsupported reasoning effort: {args.reasoning_effort}. "
+            f"Expected one of: {', '.join(sorted(REASONING_EFFORTS))}"
+        )
 
     config_overrides = ()
     if args.reasoning_effort:

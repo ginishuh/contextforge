@@ -1007,9 +1007,9 @@ function autoPromotionWouldPromote(indexedCandidate, warnings, rank) {
   };
 }
 
-function auditedPromotionProposal(indexedCandidate, warnings, audit, rank) {
+function auditedPromotionProposal(indexedCandidate, warnings, audit, rank, { auditEnabled = true } = {}) {
   const proposal = promotionProposal(indexedCandidate, warnings, rank);
-  const approved = audit?.approved === true;
+  const approved = auditEnabled && audit?.approved === true;
   return {
     ...proposal,
     audit,
@@ -2874,11 +2874,13 @@ export function createContextForge(options = {}) {
             mutates: false,
             audit: {
               ...auditPolicy,
-              executed: audited.length > 0,
+              executed: Boolean(auditor) && audited.length > 0,
             },
           },
           proposals: audited.map((item, index) =>
-            auditedPromotionProposal(item.candidate, item.warnings, item.audit, index + 1),
+            auditedPromotionProposal(item.candidate, item.warnings, item.audit, index + 1, {
+              auditEnabled: Boolean(auditor),
+            }),
           ),
           skipped: assessed
             .filter((item) => item.score <= 0)

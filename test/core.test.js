@@ -10,6 +10,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import Database from 'better-sqlite3';
+import { createCodexSdkPythonAutoPromoteAuditor } from '../src/audit/codex_sdk_python.js';
 import { createContextForge } from '../src/core.js';
 import { validateDistillOutput } from '../src/distill/validate.js';
 import { createOpenAiEmbeddingProvider } from '../src/embeddings/index.js';
@@ -5600,6 +5601,66 @@ test('auditMemoryCandidates returns audited read-only recommendations', async ()
   assert.equal(pendingCandidates[0].candidate.key, 'audited-readonly-runbook');
 });
 
+test('auditMemoryCandidates keeps recommendations conservative when audit is disabled', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'audit_disabled_provider',
+      CONTEXTFORGE_AUTO_PROMOTE_AUDIT_ENABLED: 'false',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      audit_disabled_provider: async () => ({
+        summaryShort: 'Audit disabled checkpoint.',
+        summaryText: 'Closeout produced a candidate while the audit provider is disabled.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'audit-disabled-runbook',
+            content: 'Read-only audit suggestions should not recommend promotion when audit is disabled.',
+            category: 'runbook',
+            candidateType: 'runbook',
+            confidence: 0.96,
+            stability: 0.96,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+        ],
+      }),
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'audit-disabled-repo',
+    sessionId: 'audit-disabled-session',
+    role: 'assistant',
+    content: 'Audit disabled read-only candidate.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'audit-disabled-repo',
+    sessionId: 'audit-disabled-session',
+  });
+
+  const result = await app.auditMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'audit-disabled-repo',
+    sessionId: 'audit-disabled-session',
+    trigger: 'manual_closeout',
+  });
+
+  assert.equal(result.policy.audit.enabled, false);
+  assert.equal(result.policy.audit.executed, false);
+  assert.equal(result.proposals.length, 1);
+  assert.equal(result.proposals[0].recommendedAction, 'review');
+  assert.equal(result.proposals[0].audit.approved, true);
+  assert.equal(result.proposals[0].audit.metadata.provider, 'none');
+  assert.equal(app.getMemory({ scope: 'repo', scopeKey: 'audit-disabled-repo', key: 'audit-disabled-runbook' }), null);
+});
+
 test('autoPromoteMemoryCandidates returns stable empty arrays and preference input warnings', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({
@@ -6135,6 +6196,37 @@ test('auditMemoryCandidates can use the Codex Python SDK provider without enabli
     status: 'pending',
   });
   assert.equal(pendingCandidates.length, 1);
+});
+
+test('Codex Python SDK auditor treats empty final_response as needs_review', async () => {
+  const auditor = createCodexSdkPythonAutoPromoteAuditor({
+    codexBin: '/home/ubuntu/.local/bin/codex',
+    pythonCommand: 'python3',
+    runner: async () => ({
+      stdout: JSON.stringify({
+        final_response: null,
+        elapsed_ms: 7,
+      }),
+      stderr: '',
+    }),
+  });
+
+  const result = await auditor({
+    candidate: {
+      candidate: {
+        key: 'empty-final-response',
+        content: 'The audit runner returned no final response.',
+        category: 'runbook',
+      },
+    },
+    warnings: [],
+    checkpoint: null,
+  });
+
+  assert.equal(result.approved, false);
+  assert.equal(result.decision, 'needs_review');
+  assert.deepEqual(result.riskCodes, ['empty_final_response']);
+  assert.equal(result.metadata.runnerElapsedMs, 7);
 });
 
 test('autoPromoteMemoryCandidates rejects unsupported audit providers', async () => {

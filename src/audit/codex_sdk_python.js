@@ -98,6 +98,12 @@ export function runCodexSdkPythonCommand({
       clearTimeout(timeout);
       reject(error);
     });
+    child.stdin.on('error', (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      reject(error);
+    });
     child.on('close', (code) => {
       if (settled) return;
       settled = true;
@@ -158,7 +164,20 @@ export function createCodexSdkPythonAutoPromoteAuditor(options = {}) {
       env: process.env,
     });
     const runnerOutput = parseCodexExecJson(result.stdout || '');
-    const output = parseCodexExecJson(runnerOutput.final_response || result.stdout || '');
+    if (typeof runnerOutput.final_response !== 'string' || runnerOutput.final_response.trim() === '') {
+      return {
+        approved: false,
+        decision: 'needs_review',
+        reason: 'Codex Python SDK audit returned an empty final_response.',
+        riskCodes: ['empty_final_response'],
+        metadata: {
+          ...metadata,
+          elapsedMs: Date.now() - startedAt,
+          runnerElapsedMs: runnerOutput.elapsed_ms || null,
+        },
+      };
+    }
+    const output = parseCodexExecJson(runnerOutput.final_response);
     const approved = output.approved === true && output.decision === 'approve';
     return {
       approved,
