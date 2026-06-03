@@ -327,6 +327,7 @@ function resultTextForVerification(result) {
       ...(result.checkpoint.decisions || []),
       ...(result.checkpoint.todos || []),
       ...(result.checkpoint.openQuestions || []),
+      structuredVerificationText(result.checkpoint.structured || result.checkpoint.metadata?.structured),
     ].join(' ');
   }
   if (result.candidate) {
@@ -339,6 +340,28 @@ function resultTextForVerification(result) {
     ].join(' ');
   }
   return '';
+}
+
+function structuredVerificationText(structured) {
+  if (!structured || typeof structured !== 'object' || Array.isArray(structured)) {
+    return '';
+  }
+  const liveState = structured.liveState && typeof structured.liveState === 'object' ? structured.liveState : {};
+  const values = [
+    liveState.repo,
+    liveState.branch,
+    liveState.baseBranch,
+    liveState.headCommit,
+    liveState.prNumber == null || liveState.prNumber === '' ? '' : `PR #${liveState.prNumber}`,
+    liveState.prUrl,
+    liveState.ciStatus,
+    liveState.worktreeStatus,
+    liveState.runtimeStatus,
+    liveState.deploymentStatus,
+    ...(Array.isArray(liveState.staleReasons) ? liveState.staleReasons : []),
+    ...(Array.isArray(liveState.verifyHints) ? liveState.verifyHints : []),
+  ];
+  return values.filter(Boolean).join(' ');
 }
 
 function requiresLiveStateVerification(result) {
@@ -502,6 +525,18 @@ function structuredLiveStateWarnings(structured) {
   ].filter((field) => liveState[field] != null && liveState[field] !== '');
   if (!mutableFields.length && !liveState.verificationRequired) {
     return [];
+  }
+  if (!mutableFields.length) {
+    return [
+      {
+        code: 'verification_required',
+        fields: [],
+        observedAt: liveState.observedAt || liveState.verifiedAt || null,
+        staleReasons: Array.isArray(liveState.staleReasons) ? liveState.staleReasons : [],
+        verifyHints: Array.isArray(liveState.verifyHints) ? liveState.verifyHints : [],
+        message: 'Structured checkpoint liveState requires live verification before acting.',
+      },
+    ];
   }
   return [
     {
@@ -939,19 +974,22 @@ function promotionProposal(indexedCandidate, warnings, rank) {
       sourceEventIds: candidate.sourceEventIds || [],
       checkpointId: indexedCandidate.checkpointId,
       sessionId: indexedCandidate.sessionId,
+      ...(Array.isArray(candidate.evidenceRefs) && candidate.evidenceRefs.length
+        ? { evidenceRefs: candidate.evidenceRefs }
+        : {}),
     },
     whyDurable:
       candidate.durabilityReason ||
       candidate.reason ||
       'Candidate appears stable and useful beyond the current checkpoint.',
     warnings,
-    recommendedAction: candidate.suggestedAction || 'ask_user',
+    recommendedAction: 'ask_user',
   };
+  if (candidate.suggestedAction) {
+    proposal.providerSuggestedAction = candidate.suggestedAction;
+  }
   if (candidate.riskReason) {
     proposal.riskReason = candidate.riskReason;
-  }
-  if (Array.isArray(candidate.evidenceRefs) && candidate.evidenceRefs.length) {
-    proposal.evidence.evidenceRefs = candidate.evidenceRefs;
   }
   if (candidate.schemaVersion) {
     proposal.candidateSchemaVersion = candidate.schemaVersion;

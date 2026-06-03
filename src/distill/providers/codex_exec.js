@@ -94,7 +94,7 @@ export const CHECKPOINT_OUTPUT_SCHEMA = {
           schemaVersion: { type: ['string', 'null'] },
           durabilityReason: { type: ['string', 'null'] },
           riskReason: { type: ['string', 'null'] },
-          evidenceRefs: { type: 'array', items: { type: 'string' } },
+          evidenceRefs: { type: ['array', 'null'], items: { type: 'string' } },
           suggestedAction: { type: ['string', 'null'], enum: ['promote', 'review', 'reject', 'skip', null] },
         },
       },

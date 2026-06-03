@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added optional structured checkpoint handoff payloads for agent resume state,
+  including mutable live-state verification hints.
+- Preserved memory candidate v2 review fields in
+  `memory_candidate_index.candidate_json`.
+- Exposed deterministic latest checkpoint handoff in bootstrap/resume context.
+
 ## 0.4.2 - 2026-05-31
 
 - Added bounded distillation catch-up commands:

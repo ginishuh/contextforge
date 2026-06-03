@@ -325,8 +325,11 @@ function validateDimensions(dimensions) {
   return parsed;
 }
 
+const SUGGESTED_ACTIONS = new Set(['promote', 'review', 'reject', 'skip']);
+
 function normalizeCandidate(candidate) {
   const value = candidate && typeof candidate === 'object' && !Array.isArray(candidate) ? candidate : {};
+  const suggestedAction = value.suggestedAction ? String(value.suggestedAction) : null;
   return {
     schemaVersion: value.schemaVersion ? String(value.schemaVersion) : null,
     key: String(value.key || ''),
@@ -344,16 +347,14 @@ function normalizeCandidate(candidate) {
     durabilityReason: value.durabilityReason ? String(value.durabilityReason) : null,
     riskReason: value.riskReason ? String(value.riskReason) : null,
     evidenceRefs: Array.isArray(value.evidenceRefs) ? value.evidenceRefs.map((item) => String(item)) : [],
-    suggestedAction: value.suggestedAction ? String(value.suggestedAction) : null,
+    suggestedAction: suggestedAction && SUGGESTED_ACTIONS.has(suggestedAction) ? suggestedAction : null,
   };
 }
 
 function candidateJsonForIndex(rawCandidate, candidate) {
-  const raw = rawCandidate && typeof rawCandidate === 'object' && !Array.isArray(rawCandidate) ? rawCandidate : {};
-  return {
-    ...raw,
-    ...candidate,
-  };
+  // Preserve the normalized candidate contract, including v2 review fields, without
+  // passing through arbitrary provider-supplied keys into list/audit surfaces.
+  return candidate;
 }
 
 function stringValue(value) {
@@ -391,7 +392,6 @@ function structuredCheckpointEmbeddingText(structured) {
     stringValue(liveState.worktreeStatus),
     ...structuredItemsText(structured.changes, ['type', 'name', 'path', 'description']),
     ...structuredItemsText(structured.verification, ['type', 'command', 'result', 'details']),
-    ...structuredItemsText(structured.decisions, ['decision', 'reason', 'durability']),
     ...structuredItemsText(structured.risks, ['risk', 'status', 'mitigation']),
     ...structuredItemsText(structured.nextActions, ['action', 'priority', 'reason']),
   ]

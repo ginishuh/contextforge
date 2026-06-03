@@ -4574,10 +4574,11 @@ test('codex_exec provider distills synthetic raw events through a runner', async
   assert.equal(invocation.timeoutMs, 1234);
   assert.equal(schema.required.includes('structured'), false);
   assert.ok(schema.properties.structured);
+  assert.equal(schema.properties.structured.properties.schemaVersion.const, STRUCTURED_CHECKPOINT_SCHEMA_VERSION);
   const candidateSchema = schema.properties.memoryCandidates.items;
   assert.ok(candidateSchema.properties.durabilityReason);
   assert.ok(candidateSchema.properties.riskReason);
-  assert.ok(candidateSchema.properties.evidenceRefs);
+  assert.deepEqual(candidateSchema.properties.evidenceRefs.type, ['array', 'null']);
   assert.ok(candidateSchema.properties.suggestedAction);
   assert.ok(schema.properties.sessionWorkingContext);
   assert.deepEqual(
@@ -4605,6 +4606,8 @@ test('codex_exec provider distills synthetic raw events through a runner', async
   });
   assert.equal(suggestions.proposals[0].whyDurable, 'Provider contract details can guide future distill debugging.');
   assert.equal(suggestions.proposals[0].riskReason, 'This is synthetic test evidence, not an operational incident.');
+  assert.equal(suggestions.proposals[0].recommendedAction, 'ask_user');
+  assert.equal(suggestions.proposals[0].providerSuggestedAction, 'promote');
   assert.deepEqual(suggestions.proposals[0].evidence.evidenceRefs, [
     'test:codex_exec provider distills synthetic raw events through a runner',
   ]);
