@@ -40,7 +40,7 @@ function sendJson(response, statusCode, body) {
 }
 
 async function sendStaticUi(requestUrl, response) {
-  const pathname = requestUrl.pathname === '/ui' ? '/ui/' : requestUrl.pathname;
+  const pathname = requestUrl.pathname;
   let relative;
   try {
     relative = pathname === '/ui/' ? 'index.html' : decodeURIComponent(pathname.slice('/ui/'.length));
@@ -144,6 +144,31 @@ function originMatchesHost(request) {
   } catch {
     return false;
   }
+}
+
+function parseAdminCookieSecureMode(value) {
+  if (value == null || value === '') return 'auto';
+  const normalized = String(value).trim().toLowerCase();
+  if (['true', '1', 'yes'].includes(normalized)) return 'always';
+  if (['false', '0', 'no'].includes(normalized)) return 'never';
+  if (normalized === 'auto') return 'auto';
+  throw new Error('CONTEXTFORGE_ADMIN_COOKIE_SECURE must be true, false, or auto.');
+}
+
+function requestIsSecure(request) {
+  if (request.socket.encrypted) return true;
+  const forwardedProto = String(request.headers['x-forwarded-proto'] || '')
+    .split(',')[0]
+    .trim()
+    .toLowerCase();
+  if (forwardedProto) return forwardedProto === 'https';
+  return Boolean(request.socket.encrypted);
+}
+
+function adminCookieSecureForRequest(request, mode) {
+  if (mode === 'always') return true;
+  if (mode === 'never') return false;
+  return requestIsSecure(request);
 }
 
 function parsePositiveInteger(value, fallback) {
@@ -322,7 +347,7 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
     env.CONTEXTFORGE_ADMIN_LOGIN_MAX_FAILURES,
     DEFAULT_ADMIN_LOGIN_MAX_FAILURES,
   );
-  const adminCookieSecure = env.CONTEXTFORGE_ADMIN_COOKIE_SECURE !== 'false';
+  const adminCookieSecureMode = parseAdminCookieSecureMode(env.CONTEXTFORGE_ADMIN_COOKIE_SECURE);
   const adminSessions = new Map();
   const failedAdminLogins = new Map();
 
@@ -407,7 +432,7 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
           'cache-control': 'no-store',
           'set-cookie': makeCookie(ADMIN_COOKIE_NAME, session, {
             maxAge: Math.ceil(adminSessionTtlMs / 1000),
-            secure: adminCookieSecure,
+            secure: adminCookieSecureForRequest(request, adminCookieSecureMode),
           }),
         });
         response.end(`${JSON.stringify({ ok: true })}\n`);
@@ -423,13 +448,31 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
       response.writeHead(200, {
         'content-type': 'application/json',
         'cache-control': 'no-store',
-        'set-cookie': makeCookie(ADMIN_COOKIE_NAME, '', { maxAge: 0, secure: adminCookieSecure }),
+        'set-cookie': makeCookie(ADMIN_COOKIE_NAME, '', {
+          maxAge: 0,
+          secure: adminCookieSecureForRequest(request, adminCookieSecureMode),
+        }),
       });
       response.end('{"ok":true}\n');
       return;
     }
 
-    if (request.method === 'GET' && (requestUrl.pathname === '/ui' || requestUrl.pathname.startsWith('/ui/'))) {
+    if (request.method === 'GET' && requestUrl.pathname === '/favicon.ico') {
+      response.writeHead(204, { 'cache-control': 'no-store' });
+      response.end();
+      return;
+    }
+
+    if (request.method === 'GET' && requestUrl.pathname === '/ui') {
+      response.writeHead(308, {
+        location: `/ui/${requestUrl.search}`,
+        'cache-control': 'no-store',
+      });
+      response.end();
+      return;
+    }
+
+    if (request.method === 'GET' && requestUrl.pathname.startsWith('/ui/')) {
       await sendStaticUi(requestUrl, response);
       return;
     }

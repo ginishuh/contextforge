@@ -8,7 +8,7 @@ import {
   buildAuditPrompt,
 } from './codex_exec.js';
 
-export const AUTO_PROMOTE_AUDIT_PYTHON_SDK_PROMPT_VERSION = 'auto_promote_audit.codex_sdk_python.v1';
+export const AUTO_PROMOTE_AUDIT_PYTHON_SDK_PROMPT_VERSION = 'auto_promote_audit.codex_sdk_python.v2';
 
 const RUNNER_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'codex_sdk_python_runner.py');
 const REASONING_EFFORTS = new Set(['minimal', 'low', 'medium', 'high']);

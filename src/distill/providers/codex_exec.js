@@ -4,8 +4,94 @@ import os from 'node:os';
 import path from 'node:path';
 import { STRUCTURED_CHECKPOINT_SCHEMA_VERSION } from '../validate.js';
 
-export const CODEX_EXEC_PROMPT_VERSION = 'codex_exec.prompt.v7';
+export const CODEX_EXEC_PROMPT_VERSION = 'codex_exec.prompt.v8';
 export const CODEX_EXEC_OUTPUT_SCHEMA_VERSION = 'contextforge.checkpoint.v6';
+
+function nullableStringSchema() {
+  return { type: ['string', 'null'] };
+}
+
+function nullableBooleanSchema() {
+  return { type: ['boolean', 'null'] };
+}
+
+function stringArraySchema() {
+  return { type: 'array', items: { type: 'string' } };
+}
+
+function strictObjectSchema(properties, { nullable = false } = {}) {
+  return {
+    type: nullable ? ['object', 'null'] : 'object',
+    additionalProperties: false,
+    required: Object.keys(properties),
+    properties,
+  };
+}
+
+function strictObjectArraySchema(properties) {
+  return {
+    type: 'array',
+    items: strictObjectSchema(properties),
+  };
+}
+
+const STRUCTURED_OUTPUT_SCHEMA = strictObjectSchema(
+  {
+    schemaVersion: { type: 'string', enum: [STRUCTURED_CHECKPOINT_SCHEMA_VERSION] },
+    work: strictObjectSchema(
+      {
+        intent: nullableStringSchema(),
+        status: nullableStringSchema(),
+        outcome: nullableStringSchema(),
+      },
+      { nullable: true },
+    ),
+    liveState: strictObjectSchema(
+      {
+        repo: nullableStringSchema(),
+        branch: nullableStringSchema(),
+        baseBranch: nullableStringSchema(),
+        headCommit: nullableStringSchema(),
+        prNumber: { type: ['integer', 'null'] },
+        prUrl: nullableStringSchema(),
+        ciStatus: nullableStringSchema(),
+        worktreeStatus: nullableStringSchema(),
+        runtimeStatus: nullableStringSchema(),
+        deploymentStatus: nullableStringSchema(),
+        observedAt: nullableStringSchema(),
+        verifiedAt: nullableStringSchema(),
+        verificationRequired: nullableBooleanSchema(),
+        staleReasons: stringArraySchema(),
+        verifyHints: stringArraySchema(),
+      },
+      { nullable: true },
+    ),
+    changes: strictObjectArraySchema({
+      type: nullableStringSchema(),
+      name: nullableStringSchema(),
+      path: nullableStringSchema(),
+      description: nullableStringSchema(),
+    }),
+    verification: strictObjectArraySchema({
+      type: nullableStringSchema(),
+      command: nullableStringSchema(),
+      result: nullableStringSchema(),
+      details: nullableStringSchema(),
+      requiresLiveRecheck: nullableBooleanSchema(),
+    }),
+    risks: strictObjectArraySchema({
+      risk: nullableStringSchema(),
+      status: nullableStringSchema(),
+      mitigation: nullableStringSchema(),
+    }),
+    nextActions: strictObjectArraySchema({
+      action: nullableStringSchema(),
+      priority: nullableStringSchema(),
+      reason: nullableStringSchema(),
+    }),
+  },
+  { nullable: true },
+);
 
 export const CHECKPOINT_OUTPUT_SCHEMA = {
   $id: CODEX_EXEC_OUTPUT_SCHEMA_VERSION,
@@ -20,6 +106,7 @@ export const CHECKPOINT_OUTPUT_SCHEMA = {
     'todos',
     'openQuestions',
     'memoryCandidates',
+    'structured',
     'sourceEventCount',
     'provider',
     'metadata',
@@ -77,6 +164,11 @@ export const CHECKPOINT_OUTPUT_SCHEMA = {
           'sensitivity',
           'promotionRecommendation',
           'sourceEventIds',
+          'schemaVersion',
+          'durabilityReason',
+          'riskReason',
+          'evidenceRefs',
+          'suggestedAction',
         ],
         properties: {
           key: { type: 'string' },
@@ -99,14 +191,7 @@ export const CHECKPOINT_OUTPUT_SCHEMA = {
         },
       },
     },
-    structured: {
-      type: 'object',
-      additionalProperties: true,
-      required: ['schemaVersion'],
-      properties: {
-        schemaVersion: { const: STRUCTURED_CHECKPOINT_SCHEMA_VERSION },
-      },
-    },
+    structured: STRUCTURED_OUTPUT_SCHEMA,
     sourceEventCount: { type: 'integer', minimum: 0 },
     provider: { type: 'string' },
     metadata: {
@@ -239,6 +324,7 @@ export function buildCodexExecPrompt(input, options = {}) {
       'When tool verification matters, summarize the assistant-interpreted conclusion instead of copying raw command output.',
       'Write the checkpoint as recent continuity for handoff and search, not as canonical durable truth.',
       `When evidence supports it, populate structured with schemaVersion="${STRUCTURED_CHECKPOINT_SCHEMA_VERSION}" as a structured handoff object for the next agent.`,
+      'Return structured=null when the supplied evidence does not support a useful structured handoff.',
       'Use structured.work for user intent, current status, and actual outcome.',
       'Use structured.liveState only for observed mutable live state such as repo, branch, baseBranch, headCommit, PR, CI, worktree, runtime, or deployment state. Do not invent liveState values absent from evidence.',
       'For structured.liveState, include observedAt when known, verificationRequired=true for mutable fields, staleReasons explaining why it may drift, and verifyHints with concrete commands or API calls a future agent should run.',
@@ -261,6 +347,9 @@ export function buildCodexExecPrompt(input, options = {}) {
       'For memoryCandidates, include optional v2 fields when useful: schemaVersion="contextforge.memory_candidate.v2", durabilityReason, riskReason, evidenceRefs, and suggestedAction.',
       'For nullable memoryCandidate fields that are not applicable, return null; do not omit required schema fields.',
       'Create memoryCandidates only for facts, decisions, preferences, runbook steps, or failure modes that may remain useful beyond this checkpoint.',
+      'Write human-readable memoryCandidate review fields in Korean by default: content, reason, durabilityReason, and riskReason.',
+      'Do not mix English prose into those Korean memoryCandidate review fields unless preserving exact technical identifiers, code symbols, file paths, commands, model names, API names, product names, or quoted error strings.',
+      'Keep memoryCandidate keys, categories, tags, enum values, sourceEventIds, evidenceRefs, and schemaVersion machine-readable and in their original technical form.',
       'For memoryCandidate content, include decision plus rationale when both exist; put future-search keywords in tags and reason instead of flattening them away.',
       'Set promotionRecommendation to promote only for stable, reviewed-looking durable facts; otherwise prefer review, ignore, or reject.',
       'Use low confidence or low stability for guesses, temporary state, implementation-in-progress details, and facts that require current runtime verification.',

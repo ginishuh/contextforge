@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { parseCodexExecJson, runCodexExecCommand } from '../distill/providers/codex_exec.js';
 
-export const AUTO_PROMOTE_AUDIT_PROMPT_VERSION = 'auto_promote_audit.codex_exec.v1';
+export const AUTO_PROMOTE_AUDIT_PROMPT_VERSION = 'auto_promote_audit.codex_exec.v2';
 export const AUTO_PROMOTE_AUDIT_SCHEMA_VERSION = 'contextforge.auto_promote_audit.v1';
 
 export const AUDIT_OUTPUT_SCHEMA = {
@@ -47,6 +47,8 @@ export function buildAuditPrompt(input, metadata) {
       'Use needs_review when the candidate might be useful but needs a human edit, narrower wording, or live verification.',
       'Do not approve merely because promotionRecommendation is promote or confidence is high.',
       'Treat this as an audit gate before automatic promotion; be conservative.',
+      'Write the human-readable reason in Korean by default.',
+      'Keep riskCodes as short machine-readable English tokens, and preserve exact technical identifiers, commands, paths, API names, model names, and quoted error strings.',
     ],
     requestedOutputSchema: AUDIT_OUTPUT_SCHEMA,
     auditProvider: metadata,

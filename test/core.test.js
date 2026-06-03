@@ -4557,7 +4557,7 @@ test('codex_exec provider distills synthetic raw events through a runner', async
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.model, 'gpt-test');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.reasoningEffort, 'low');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.timeoutMs, 1234);
-  assert.equal(checkpoint.metadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v7');
+  assert.equal(checkpoint.metadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v8');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.outputSchemaVersion, 'contextforge.checkpoint.v6');
   assert.equal(checkpoint.structured.schemaVersion, STRUCTURED_CHECKPOINT_SCHEMA_VERSION);
   assert.equal(checkpoint.metadata.structured.schemaVersion, STRUCTURED_CHECKPOINT_SCHEMA_VERSION);
@@ -4566,16 +4566,32 @@ test('codex_exec provider distills synthetic raw events through a runner', async
   const promptPayload = JSON.parse(invocation.prompt.slice(invocation.prompt.indexOf('{')));
   assert.equal(promptPayload.requestedOutputSchema.structured.schemaVersion, STRUCTURED_CHECKPOINT_SCHEMA_VERSION);
   assert.match(invocation.prompt, /structured\.liveState/);
+  assert.match(invocation.prompt, /human-readable memoryCandidate review fields in Korean/);
+  assert.match(invocation.prompt, /content, reason, durabilityReason, and riskReason/);
   assert.deepEqual(invocation.args.slice(0, 2), ['exec', '--skip-git-repo-check']);
   assert.ok(invocation.args.includes('--output-schema'));
   assert.ok(invocation.args.includes('--output-last-message'));
   assert.ok(invocation.args.includes('-c'));
   assert.ok(invocation.args.includes('model_reasoning_effort="low"'));
   assert.equal(invocation.timeoutMs, 1234);
-  assert.equal(schema.required.includes('structured'), false);
+  assert.equal(schema.required.includes('structured'), true);
   assert.ok(schema.properties.structured);
-  assert.equal(schema.properties.structured.properties.schemaVersion.const, STRUCTURED_CHECKPOINT_SCHEMA_VERSION);
+  assert.deepEqual(schema.properties.structured.type, ['object', 'null']);
+  assert.equal(schema.properties.structured.additionalProperties, false);
+  assert.deepEqual(schema.properties.structured.required, [
+    'schemaVersion',
+    'work',
+    'liveState',
+    'changes',
+    'verification',
+    'risks',
+    'nextActions',
+  ]);
+  assert.deepEqual(schema.properties.structured.properties.schemaVersion.enum, [STRUCTURED_CHECKPOINT_SCHEMA_VERSION]);
+  assert.equal(schema.properties.structured.properties.liveState.additionalProperties, false);
+  assert.ok(schema.properties.structured.properties.liveState.required.includes('verifyHints'));
   const candidateSchema = schema.properties.memoryCandidates.items;
+  assert.equal(candidateSchema.required.includes('schemaVersion'), true);
   assert.ok(candidateSchema.properties.durabilityReason);
   assert.ok(candidateSchema.properties.riskReason);
   assert.deepEqual(candidateSchema.properties.evidenceRefs.type, ['array', 'null']);
@@ -4618,9 +4634,9 @@ test('codex_exec provider distills synthetic raw events through a runner', async
     sessionId: 'codex-session',
   });
   assert.equal(runs[0].status, 'succeeded');
-  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v7');
+  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v8');
   assert.equal(runs[0].inputMetadata.providerMetadata.outputSchemaVersion, 'contextforge.checkpoint.v6');
-  assert.equal(runs[0].outputMetadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v7');
+  assert.equal(runs[0].outputMetadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v8');
 });
 
 test('codex_exec records JSON brace fallback recovery metadata', async () => {
@@ -5250,8 +5266,8 @@ test('codex_exec parse failures preserve raw evidence', async () => {
   });
   assert.equal(runs[0].status, 'failed');
   assert.equal(runs[0].outputMetadata.providerFailed, true);
-  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v7');
-  assert.equal(runs[0].outputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v7');
+  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v8');
+  assert.equal(runs[0].outputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v8');
 });
 
 test('bootstrapContext returns semantic retrieval with trust and verification hints', async () => {
@@ -6435,6 +6451,7 @@ test('autoPromoteMemoryCandidates can audit through the Codex Python SDK provide
   assert.equal(auditInvocations[0].pythonCommand, 'python3');
   assert.equal(auditInvocations[0].pythonPath, '/tmp/contextforge-codex-sdk');
   assert.match(auditInvocations[0].prompt, /ContextForge automatic memory promotion auditor/);
+  assert.match(auditInvocations[0].prompt, /human-readable reason in Korean/);
   assert.ok(
     app.getMemory({ scope: 'repo', scopeKey: 'python-sdk-audit-repo', key: 'python-sdk-audit-runbook' }),
   );
@@ -7929,10 +7946,29 @@ test('HTTP server serves admin UI assets', async () => {
   });
 
   try {
+    const redirect = await fetch(`${remote.url}/ui`, { redirect: 'manual' });
+    assert.equal(redirect.status, 308);
+    assert.equal(redirect.headers.get('location'), '/ui/');
+
+    const redirectWithQuery = await fetch(`${remote.url}/ui?tab=memory`, { redirect: 'manual' });
+    assert.equal(redirectWithQuery.status, 308);
+    assert.equal(redirectWithQuery.headers.get('location'), '/ui/?tab=memory');
+
     const response = await fetch(`${remote.url}/ui/`);
     assert.equal(response.status, 200);
     assert.equal(response.headers.get('cache-control'), 'no-store');
     assert.match(await response.text(), /ContextForge 관리/);
+
+    const script = await fetch(`${remote.url}/ui/app.js`);
+    assert.equal(script.status, 200);
+    assert.match(script.headers.get('content-type'), /text\/javascript/);
+
+    const stylesheet = await fetch(`${remote.url}/ui/styles.css`);
+    assert.equal(stylesheet.status, 200);
+    assert.match(stylesheet.headers.get('content-type'), /text\/css/);
+
+    const favicon = await fetch(`${remote.url}/favicon.ico`);
+    assert.equal(favicon.status, 204);
   } finally {
     await remote.close();
   }
@@ -7948,7 +7984,6 @@ test('HTTP server accepts admin UI login sessions', async () => {
       CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
       CONTEXTFORGE_ADMIN_USER: 'ginishuh',
       CONTEXTFORGE_ADMIN_PASSWORD_PBKDF2: testAdminPasswordHash(password),
-      CONTEXTFORGE_ADMIN_COOKIE_SECURE: 'false',
     },
   });
 
@@ -7962,6 +7997,7 @@ test('HTTP server accepts admin UI login sessions', async () => {
     assert.equal(login.headers.get('cache-control'), 'no-store');
     const cookie = login.headers.get('set-cookie');
     assert.match(cookie, /contextforge_admin=/);
+    assert.doesNotMatch(cookie, /;\s*Secure\b/);
     const session = await fetch(`${remote.url}/ui/session`, {
       headers: { cookie },
     });
@@ -7980,6 +8016,78 @@ test('HTTP server accepts admin UI login sessions', async () => {
   } finally {
     await remote.close();
   }
+});
+
+test('HTTP server auto-secures admin UI cookies behind HTTPS reverse proxies', async () => {
+  const dataDir = await makeTempDir();
+  const password = 'proxy-cookie-CON' + 'TEXT';
+  const remote = await startContextForgeServer({
+    port: 0,
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+      CONTEXTFORGE_ADMIN_USER: 'ginishuh',
+      CONTEXTFORGE_ADMIN_PASSWORD_PBKDF2: testAdminPasswordHash(password),
+    },
+  });
+
+  try {
+    const login = await fetch(`${remote.url}/ui/login`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-forwarded-proto': 'https',
+      },
+      body: JSON.stringify({ username: 'ginishuh', password }),
+    });
+    assert.equal(login.status, 200);
+    assert.match(login.headers.get('set-cookie'), /;\s*Secure\b/);
+  } finally {
+    await remote.close();
+  }
+});
+
+test('HTTP server can force secure admin UI cookies for HTTPS deployments', async () => {
+  const dataDir = await makeTempDir();
+  const password = 'secure-cookie-CON' + 'TEXT';
+  const remote = await startContextForgeServer({
+    port: 0,
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+      CONTEXTFORGE_ADMIN_USER: 'ginishuh',
+      CONTEXTFORGE_ADMIN_PASSWORD_PBKDF2: testAdminPasswordHash(password),
+      CONTEXTFORGE_ADMIN_COOKIE_SECURE: 'true',
+    },
+  });
+
+  try {
+    const login = await fetch(`${remote.url}/ui/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'ginishuh', password }),
+    });
+    assert.equal(login.status, 200);
+    assert.match(login.headers.get('set-cookie'), /;\s*Secure\b/);
+  } finally {
+    await remote.close();
+  }
+});
+
+test('HTTP server rejects invalid admin cookie secure mode', async () => {
+  const dataDir = await makeTempDir();
+  assert.throws(
+    () =>
+      startContextForgeServer({
+        port: 0,
+        env: {
+          CONTEXTFORGE_DATA_DIR: dataDir,
+          CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+          CONTEXTFORGE_ADMIN_COOKIE_SECURE: 'sometimes',
+        },
+      }),
+    /CONTEXTFORGE_ADMIN_COOKIE_SECURE/,
+  );
 });
 
 test('HTTP server keeps admin UI login disabled unless credentials are configured', async () => {
