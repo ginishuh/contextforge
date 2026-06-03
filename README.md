@@ -158,6 +158,7 @@ comma, newline, or semicolon separated entries with `=` or `->` separators:
 
 ```bash
 CONTEXTFORGE_SCOPE_ALIASES='repo:github.com/old/suite=repo:github.com/new/suite'
+CONTEXTFORGE_SCOPE_ALIASES='{"repo:github.com/old/suite":"repo:github.com/new/suite"}'
 ```
 
 Scope prefixes are optional and default to `repo`. `dbInfo` reports the loaded

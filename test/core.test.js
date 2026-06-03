@@ -589,10 +589,14 @@ test('migrateScope dry-runs and moves existing scoped rows into the canonical sc
   assert.equal(dryRun.requestedDryRun, true);
   assert.equal(dryRun.blocked, false);
   assert.equal(dryRun.canMigrate, true);
+  assert.equal(dryRun.hasRows, true);
+  assert.equal(dryRun.empty, false);
+  assert.equal(dryRun.totalRows, 6);
   assert.equal(dryRun.counts.memories, 1);
   assert.equal(dryRun.counts.raw_events, 1);
   assert.equal(dryRun.counts.checkpoints, 1);
   assert.equal(dryRun.counts.memory_candidate_index, 1);
+  assert.equal(dryRun.derivedRows.memory_fts, 1);
 
   const migrated = app.migrateScope({
     fromScope: 'repo',
@@ -604,10 +608,13 @@ test('migrateScope dry-runs and moves existing scoped rows into the canonical sc
   assert.equal(migrated.dryRun, false);
   assert.equal(migrated.requestedDryRun, false);
   assert.equal(migrated.blocked, false);
+  assert.equal(migrated.totalRows, 6);
   assert.equal(migrated.updated.memories, 1);
   assert.equal(migrated.updated.raw_events, 1);
   assert.equal(migrated.updated.checkpoints, 1);
   assert.equal(migrated.updated.memory_candidate_index, 1);
+  assert.equal(migrated.updated.memory_fts, undefined);
+  assert.equal(migrated.rebuilt.memory_fts, 1);
 
   const scopes = app.listScopeKeys({ scope: 'repo' }).map((item) => item.scopeKey);
   assert.deepEqual(scopes, ['github.com/new/suite']);
@@ -667,6 +674,8 @@ test('migrateScope reports conflicts without pretending an actual request was a 
   assert.equal(result.requestedDryRun, false);
   assert.equal(result.blocked, true);
   assert.equal(result.blockedReason, 'conflicts');
+  assert.equal(result.hasRows, true);
+  assert.equal(result.empty, false);
   assert.equal(result.canMigrate, false);
   assert.equal(result.conflicts[0].table, 'memories');
   assert.deepEqual(result.conflicts[0].sampleKeys, ['conflicting-memory']);

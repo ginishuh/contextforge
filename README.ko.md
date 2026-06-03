@@ -93,6 +93,7 @@ repo가 이전되거나 이름이 바뀐 경우에는 서버 또는 local runtim
 
 ```bash
 CONTEXTFORGE_SCOPE_ALIASES='repo:github.com/old/suite=repo:github.com/new/suite'
+CONTEXTFORGE_SCOPE_ALIASES='{"repo:github.com/old/suite":"repo:github.com/new/suite"}'
 ```
 
 scope prefix를 생략하면 `repo`로 취급한다. `dbInfo`에서 로드된 alias를 확인할

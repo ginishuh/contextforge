@@ -428,7 +428,8 @@ const SCOPE_MIGRATION_TABLES = [
   'embedding_index',
 ];
 
-const SCOPE_MIGRATION_UPDATE_TABLES = SCOPE_MIGRATION_TABLES.filter((table) => table !== 'memory_fts');
+const SCOPE_MIGRATION_DERIVED_TABLES = new Set(['memory_fts']);
+const SCOPE_MIGRATION_UPDATE_TABLES = SCOPE_MIGRATION_TABLES.filter((table) => !SCOPE_MIGRATION_DERIVED_TABLES.has(table));
 
 const SCOPE_MIGRATION_CONFLICTS = [
   { table: 'memories', keyColumn: 'memory_key' },
@@ -3317,7 +3318,14 @@ export class ContextForgeStore {
     const before = this.countScopeRows(from);
     const targetBefore = this.countScopeRows(to);
     const conflicts = this.scopeMigrationConflicts({ fromScopeType, fromScopeKey, toScopeType, toScopeKey });
-    const totalRows = Object.values(before).reduce((total, count) => total + count, 0);
+    const totalRows = SCOPE_MIGRATION_UPDATE_TABLES.reduce((total, table) => total + (before[table] || 0), 0);
+    const derivedRows = Object.fromEntries(
+      SCOPE_MIGRATION_TABLES.filter((table) => SCOPE_MIGRATION_DERIVED_TABLES.has(table)).map((table) => [
+        table,
+        before[table] || 0,
+      ]),
+    );
+    const hasRows = totalRows > 0;
     if (dryRun || conflicts.length) {
       return {
         dryRun: Boolean(dryRun),
@@ -3327,10 +3335,13 @@ export class ContextForgeStore {
         from,
         to,
         totalRows,
+        derivedRows,
+        hasRows,
+        empty: !hasRows,
         counts: before,
         targetCounts: targetBefore,
         conflicts,
-        canMigrate: totalRows > 0 && conflicts.length === 0,
+        canMigrate: hasRows && conflicts.length === 0,
       };
     }
 
@@ -3347,7 +3358,6 @@ export class ContextForgeStore {
         }),
       );
       this.rebuildMemoryFts();
-      changes.memory_fts = before.memory_fts;
       return changes;
     });
     return {
@@ -3358,9 +3368,15 @@ export class ContextForgeStore {
       from,
       to,
       totalRows,
+      derivedRows,
+      hasRows,
+      empty: !hasRows,
       counts: before,
       targetCounts: targetBefore,
       updated,
+      rebuilt: {
+        memory_fts: before.memory_fts,
+      },
       conflicts: [],
       canMigrate: true,
     };
