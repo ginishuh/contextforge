@@ -87,6 +87,41 @@ node src/cli.js dbInfo
 기본값은 현재 checkout 아래 `.contextforge/contextforge.db`에 저장하는
 `project-local` 모드다. 이 디렉터리와 SQLite sidecar 파일은 git에 넣지 않는다.
 
+repo가 이전되거나 이름이 바뀐 경우에는 서버 또는 local runtime에
+`CONTEXTFORGE_SCOPE_ALIASES`를 설정해서 이후 read/write를 canonical scope로
+접을 수 있다.
+
+```bash
+CONTEXTFORGE_SCOPE_ALIASES='repo:github.com/old/suite=repo:github.com/new/suite'
+CONTEXTFORGE_SCOPE_ALIASES='{"repo:github.com/old/suite":"repo:github.com/new/suite"}'
+```
+
+scope prefix를 생략하면 `repo`로 취급한다. `dbInfo`에서 로드된 alias를 확인할
+수 있다. alias는 scope type을 바꿀 수 없으므로 `repo:old=repo:new`처럼 같은
+scope type 안에서만 사용한다. 구조화된 env 값을 선호하는 배포에서는 JSON object
+또는 array 형식도 사용할 수 있다. 기존 row는 자동으로 옮기지 않으며, alias를 켜면
+old scope row는 일반 scoped read에서 가려진다. 먼저 dry-run으로 확인한 뒤
+명시적으로 migration을 실행한다.
+
+```bash
+node src/cli.js migrateScope \
+  --fromScope repo \
+  --fromScopeKey github.com/old/suite \
+  --toScope repo \
+  --toScopeKey github.com/new/suite
+
+node src/cli.js migrateScope \
+  --fromScope repo \
+  --fromScopeKey github.com/old/suite \
+  --toScope repo \
+  --toScopeKey github.com/new/suite \
+  --dryRun false
+```
+
+`migrateScope`의 `fromScope`/`fromScopeKey`는 alias canonicalization을 거치지
+않는 raw stored scope로 처리한다. 그래서 alias 설정 전에 쓰인 old row를 찾을 수
+있다. `toScope`/`toScopeKey`는 alias를 거쳐 canonical scope로 접힌다.
+
 ## 저장 모드
 
 - `project-local`: checkout-local SQLite. 기본값이며 실험에 좋다.

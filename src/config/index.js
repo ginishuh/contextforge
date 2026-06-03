@@ -7,6 +7,99 @@ const VALID_SCOPES = new Set(['shared', 'repo', 'local']);
 const VALID_STORAGE_MODES = new Set(['local', 'project-local', 'remote']);
 const VALID_EMBEDDINGS_PROVIDERS = new Set(['none', 'openai']);
 
+function parseScopedKey(value, fallbackScope = 'repo') {
+  const text = String(value || '').trim();
+  if (!text) {
+    throw new Error('scope alias entries must not be empty.');
+  }
+  const match = text.match(/^(shared|repo|local):(.+)$/);
+  if (match) {
+    return {
+      scopeType: match[1],
+      scopeKey: match[2].trim(),
+    };
+  }
+  return {
+    scopeType: fallbackScope,
+    scopeKey: text,
+  };
+}
+
+function scopeAliasEntry(from, to) {
+  const parsedFrom = typeof from === 'object' && from
+    ? { scopeType: from.scopeType || from.scope || 'repo', scopeKey: from.scopeKey }
+    : parseScopedKey(from);
+  const parsedTo = typeof to === 'object' && to
+    ? { scopeType: to.scopeType || to.scope || parsedFrom.scopeType, scopeKey: to.scopeKey }
+    : parseScopedKey(to, parsedFrom.scopeType);
+  if (!VALID_SCOPES.has(parsedFrom.scopeType) || !VALID_SCOPES.has(parsedTo.scopeType)) {
+    throw new Error('scope alias scope type must be shared, repo, or local.');
+  }
+  if (parsedFrom.scopeType !== parsedTo.scopeType) {
+    throw new Error('scope aliases cannot change scope type.');
+  }
+  if (!parsedFrom.scopeKey || !parsedTo.scopeKey) {
+    throw new Error('scope alias entries require both source and target scope keys.');
+  }
+  return {
+    from: parsedFrom,
+    to: parsedTo,
+  };
+}
+
+export function parseScopeAliases(value) {
+  if (value == null || value === '') {
+    return [];
+  }
+  const text = String(value).trim();
+  let parsed = null;
+  if (text.startsWith('{') || text.startsWith('[')) {
+    try {
+      parsed = JSON.parse(text);
+    } catch (error) {
+      throw new Error(`CONTEXTFORGE_SCOPE_ALIASES must be valid JSON or alias text: ${error.message}`);
+    }
+  }
+  if (Array.isArray(parsed)) {
+    return parsed.map((entry) => scopeAliasEntry(entry.from, entry.to));
+  }
+  if (parsed && typeof parsed === 'object') {
+    return Object.entries(parsed).map(([from, to]) => scopeAliasEntry(from, to));
+  }
+
+  return text
+    .split(/[,\n;]/)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const parts = entry.includes('->') ? entry.split('->') : entry.split('=');
+      if (parts.length !== 2) {
+        throw new Error('CONTEXTFORGE_SCOPE_ALIASES entries must use "=" or "->".');
+      }
+      return scopeAliasEntry(parts[0], parts[1]);
+    });
+}
+
+export function canonicalizeScope(scope, aliases = []) {
+  let current = { scopeType: scope.scopeType, scopeKey: scope.scopeKey };
+  const seen = new Set();
+  for (let depth = 0; depth < 20; depth += 1) {
+    const signature = `${current.scopeType}:${current.scopeKey}`;
+    if (seen.has(signature)) {
+      throw new Error(`Scope alias cycle detected at ${signature}.`);
+    }
+    seen.add(signature);
+    const alias = aliases.find(
+      (item) => item.from.scopeType === current.scopeType && item.from.scopeKey === current.scopeKey,
+    );
+    if (!alias) {
+      return current;
+    }
+    current = { ...alias.to };
+  }
+  throw new Error('Scope alias chain is too deep.');
+}
+
 function parsePositiveInteger(value, name, fallback) {
   if (value == null || value === '') {
     return fallback;
@@ -194,8 +287,14 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
     10 * 60 * 1000,
   );
   const defaultSharedScopeKey = env.CONTEXTFORGE_SHARED_SCOPE_KEY || 'global';
-  const defaultScopeKey =
-    env.CONTEXTFORGE_DEFAULT_SCOPE_KEY || defaultScopeKeyFor(defaultScope, resolvedCwd, defaultSharedScopeKey);
+  const scopeAliases = parseScopeAliases(env.CONTEXTFORGE_SCOPE_ALIASES);
+  const defaultScopeKey = canonicalizeScope(
+    {
+      scopeType: defaultScope,
+      scopeKey: env.CONTEXTFORGE_DEFAULT_SCOPE_KEY || defaultScopeKeyFor(defaultScope, resolvedCwd, defaultSharedScopeKey),
+    },
+    scopeAliases,
+  ).scopeKey;
 
   return {
     storageMode,
@@ -204,6 +303,7 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
     defaultScope,
     defaultScopeKey,
     defaultSharedScopeKey,
+    scopeAliases,
     distillProvider: env.CONTEXTFORGE_DISTILL_PROVIDER || 'mock',
     embeddings: {
       provider: embeddingsProvider,

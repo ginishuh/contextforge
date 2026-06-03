@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { inferRepoScopeKey } from '../config/index.js';
+import { canonicalizeScope, inferRepoScopeKey } from '../config/index.js';
 
 const VALID_SCOPE_TYPES = new Set(['shared', 'repo', 'local']);
 
@@ -27,5 +27,5 @@ export function normalizeScopeOptions(options, config) {
   if (!scopeKey) {
     scopeKey = config.defaultScopeKey;
   }
-  return validateScope(scopeType, scopeKey);
+  return canonicalizeScope(validateScope(scopeType, scopeKey), config.scopeAliases || []);
 }

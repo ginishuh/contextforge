@@ -413,6 +413,31 @@ function normalizeConfidence(value) {
   return Math.max(0, Math.min(1, parsed));
 }
 
+const SCOPE_MIGRATION_TABLES = [
+  'memories',
+  'raw_events',
+  'checkpoints',
+  'distill_runs',
+  'working_summaries',
+  'session_working_context',
+  'memory_candidate_index',
+  'preference_occurrences',
+  'embedding_jobs',
+  'memory_update_candidates',
+  'memory_fts',
+  'embedding_index',
+];
+
+const SCOPE_MIGRATION_DERIVED_TABLES = new Set(['memory_fts']);
+const SCOPE_MIGRATION_UPDATE_TABLES = SCOPE_MIGRATION_TABLES.filter((table) => !SCOPE_MIGRATION_DERIVED_TABLES.has(table));
+
+const SCOPE_MIGRATION_CONFLICTS = [
+  { table: 'memories', keyColumn: 'memory_key' },
+  { table: 'working_summaries', keyColumn: 'session_id' },
+  { table: 'session_working_context', keyColumn: 'session_id' },
+  { table: 'preference_occurrences', keyColumn: 'merge_key' },
+];
+
 export class ContextForgeStore {
   constructor({ dataDir }) {
     this.dataDir = dataDir;
@@ -3213,6 +3238,148 @@ export class ContextForgeStore {
         checkpoints: Number(row.checkpoints || 0),
         lastTouchedAt: row.last_touched_at,
       }));
+  }
+
+  countScopeRows({ scopeType, scopeKey }) {
+    return Object.fromEntries(
+      SCOPE_MIGRATION_TABLES.map((table) => {
+        if (!this.tableExists(table)) {
+          return [table, 0];
+        }
+        return [
+          table,
+          Number(
+            this.db
+              .prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE scope_type = ? AND scope_key = ?`)
+              .get(scopeType, scopeKey).count || 0,
+          ),
+        ];
+      }),
+    );
+  }
+
+  tableExists(table) {
+    return Boolean(
+      this.db
+        .prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'virtual table') AND name = ?")
+        .get(table),
+    );
+  }
+
+  scopeMigrationConflicts({ fromScopeType, fromScopeKey, toScopeType, toScopeKey }) {
+    return SCOPE_MIGRATION_CONFLICTS.map(({ table, keyColumn }) => {
+      if (!this.tableExists(table)) {
+        return null;
+      }
+      const count = Number(
+        this.db
+          .prepare(`
+            SELECT COUNT(*) AS count
+            FROM ${table} source
+            INNER JOIN ${table} target
+              ON target.${keyColumn} = source.${keyColumn}
+             AND target.scope_type = ?
+             AND target.scope_key = ?
+            WHERE source.scope_type = ?
+              AND source.scope_key = ?
+          `)
+          .get(toScopeType, toScopeKey, fromScopeType, fromScopeKey).count || 0,
+      );
+      const rows = this.db
+        .prepare(`
+          SELECT source.${keyColumn} AS key
+          FROM ${table} source
+          INNER JOIN ${table} target
+            ON target.${keyColumn} = source.${keyColumn}
+           AND target.scope_type = ?
+           AND target.scope_key = ?
+          WHERE source.scope_type = ?
+            AND source.scope_key = ?
+          ORDER BY source.${keyColumn} ASC
+          LIMIT 20
+        `)
+        .all(toScopeType, toScopeKey, fromScopeType, fromScopeKey)
+        .map((row) => row.key);
+      return {
+        table,
+        keyColumn,
+        count,
+        sampleKeys: rows,
+      };
+    }).filter((item) => item?.count > 0);
+  }
+
+  migrateScope({ fromScopeType, fromScopeKey, toScopeType, toScopeKey, dryRun = true }) {
+    if (fromScopeType === toScopeType && fromScopeKey === toScopeKey) {
+      throw new Error('Cannot migrate a scope to itself.');
+    }
+    const from = { scopeType: fromScopeType, scopeKey: fromScopeKey };
+    const to = { scopeType: toScopeType, scopeKey: toScopeKey };
+    const before = this.countScopeRows(from);
+    const targetBefore = this.countScopeRows(to);
+    const conflicts = this.scopeMigrationConflicts({ fromScopeType, fromScopeKey, toScopeType, toScopeKey });
+    const totalRows = SCOPE_MIGRATION_UPDATE_TABLES.reduce((total, table) => total + (before[table] || 0), 0);
+    const derivedRows = Object.fromEntries(
+      SCOPE_MIGRATION_TABLES.filter((table) => SCOPE_MIGRATION_DERIVED_TABLES.has(table)).map((table) => [
+        table,
+        before[table] || 0,
+      ]),
+    );
+    const hasRows = totalRows > 0;
+    if (dryRun || conflicts.length) {
+      return {
+        dryRun: Boolean(dryRun),
+        requestedDryRun: Boolean(dryRun),
+        blocked: conflicts.length > 0,
+        blockedReason: conflicts.length > 0 ? 'conflicts' : null,
+        from,
+        to,
+        totalRows,
+        derivedRows,
+        hasRows,
+        empty: !hasRows,
+        counts: before,
+        targetCounts: targetBefore,
+        conflicts,
+        canMigrate: hasRows && conflicts.length === 0,
+      };
+    }
+
+    const updated = this.withTransaction(() => {
+      const changes = Object.fromEntries(
+        SCOPE_MIGRATION_UPDATE_TABLES.map((table) => {
+          if (!this.tableExists(table)) {
+            return [table, 0];
+          }
+          const result = this.db
+            .prepare(`UPDATE ${table} SET scope_type = ?, scope_key = ? WHERE scope_type = ? AND scope_key = ?`)
+            .run(toScopeType, toScopeKey, fromScopeType, fromScopeKey);
+          return [table, result.changes];
+        }),
+      );
+      this.rebuildMemoryFts();
+      return changes;
+    });
+    return {
+      dryRun: false,
+      requestedDryRun: false,
+      blocked: false,
+      blockedReason: null,
+      from,
+      to,
+      totalRows,
+      derivedRows,
+      hasRows,
+      empty: !hasRows,
+      counts: before,
+      targetCounts: targetBefore,
+      updated,
+      rebuilt: {
+        memory_fts: before.memory_fts,
+      },
+      conflicts: [],
+      canMigrate: true,
+    };
   }
 
   getRuntimeSettings({ includeSecrets = false } = {}) {

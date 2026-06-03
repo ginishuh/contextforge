@@ -152,6 +152,41 @@ same GitHub repo. Outside a git checkout it falls back to a deterministic
 `path:<hash>:<name>` key. Pass `--scopeKey` or set
 `CONTEXTFORGE_DEFAULT_SCOPE_KEY` when you want an explicit canonical scope key.
 
+When a repository moves or is renamed, set `CONTEXTFORGE_SCOPE_ALIASES` on the
+server or local runtime to canonicalize future reads and writes. Aliases accept
+comma, newline, or semicolon separated entries with `=` or `->` separators:
+
+```bash
+CONTEXTFORGE_SCOPE_ALIASES='repo:github.com/old/suite=repo:github.com/new/suite'
+CONTEXTFORGE_SCOPE_ALIASES='{"repo:github.com/old/suite":"repo:github.com/new/suite"}'
+```
+
+Scope prefixes are optional and default to `repo`. `dbInfo` reports the loaded
+aliases. Aliases cannot change scope type; use `repo:old=repo:new`, not
+`repo:old=shared:new`. JSON object and array forms are also accepted for
+deployments that prefer structured environment values. Existing rows are not
+moved implicitly, and once an alias is enabled those old rows are hidden from
+normal scoped reads until you migrate them. Inspect and migrate them explicitly:
+
+```bash
+node src/cli.js migrateScope \
+  --fromScope repo \
+  --fromScopeKey github.com/old/suite \
+  --toScope repo \
+  --toScopeKey github.com/new/suite
+
+node src/cli.js migrateScope \
+  --fromScope repo \
+  --fromScopeKey github.com/old/suite \
+  --toScope repo \
+  --toScopeKey github.com/new/suite \
+  --dryRun false
+```
+
+`migrateScope` treats `fromScope`/`fromScopeKey` as the raw stored scope, without
+alias canonicalization, so it can still find rows written before the alias was
+configured. `toScope`/`toScopeKey` is canonicalized through aliases.
+
 ## Usage Modes
 
 ContextForge supports two common deployment modes. Choose one first; mixing the
