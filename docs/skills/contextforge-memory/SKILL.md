@@ -145,15 +145,17 @@ durable memory unless it is stable, reviewed, and no cheaper live source exists.
 
 ## Closeout Promotion
 
-At closeout triggers only, review durable memory candidates:
+At closeout triggers only, make sure durable memory candidates are audited:
 
-1. If `distill_checkpoint` returned candidates, call `suggest_memory_promotions` with the returned `checkpointId` or the current `sessionId`.
-2. If `session_status` reports `latestCheckpointMemoryCandidateCount > 0`, call `suggest_memory_promotions` or `list_memory_candidates` with that same `sessionId` or latest checkpoint id.
-3. If `suggest_memory_promotions` returns `missing_closeout_source`, no current-session review happened. Provide `sessionId` or `checkpointId`.
-4. When the user wants audited recommendations without writes, call
-   `audit_memory_candidates` with the same `sessionId` or `checkpointId`.
-   It should return read-only audit decisions and must not mutate memory or
-   candidate status.
+1. When distilling closeout evidence, pass `auditTrigger` to `distill_checkpoint`
+   so ContextForge runs the configured batched candidate audit automatically.
+2. Automatic candidate audit is scoped to the current `sessionId` or explicit
+   `checkpointId`. It never scans the whole scope backlog.
+3. Audit results are stored on pending candidates. Automatic promotion controls
+   only whether audit-approved strict-safe results are written to durable memory.
+4. Use `audit_memory_candidates` to inspect stored audited recommendations or to
+   audit unaudited candidates in the same closeout batch. It must not mutate
+   durable memory.
 5. Promote only reviewed, stable, scoped, non-secret facts.
 6. Prefer `promote_memory_candidate` by `candidateId`.
 7. Use `remember` or `promote_memory` for a corrected durable write when the candidate key/content is wrong.
@@ -161,11 +163,10 @@ At closeout triggers only, review durable memory candidates:
 
 `suggest_memory_promotions` defaults to `promotionRecommendation: "promote"`. If candidates exist but proposals are empty, inspect with `list_memory_candidates`; for `promotionRecommendation: "review"` candidates, either call `suggest_memory_promotions` with `promotionRecommendation: "review"` or manually review the listed candidates.
 
-Use `auto_promote_memory_candidates` only when automatic promotion is explicitly
-wanted. It must include `sessionId` or `checkpointId`; real promotion requires
-server-side enablement and `dryRun: false`. Dry runs preview policy results but
-may not execute the audit runner; use `audit_memory_candidates` when the user
-specifically wants audited read-only recommendations.
+Use `auto_promote_memory_candidates` only when automatic write-side promotion is
+explicitly wanted. It must include `sessionId` or `checkpointId`; real promotion
+requires server-side enablement and `dryRun: false`. Candidate audit itself is
+not the toggle; promotion writes are the toggle.
 
 ## What To Promote
 

@@ -2770,6 +2770,53 @@ export class ContextForgeStore {
     return this.getMemoryCandidate({ scopeType, scopeKey, candidateId });
   }
 
+  markMemoryCandidateAudited({
+    scopeType,
+    scopeKey,
+    candidateId,
+    audit,
+    reason = null,
+    metadata = {},
+    expectedStatus = 'pending',
+  }) {
+    const existing = this.getMemoryCandidate({ scopeType, scopeKey, candidateId });
+    if (!existing) {
+      throw new Error(`Memory candidate not found: ${candidateId}`);
+    }
+    if (existing.status !== expectedStatus) {
+      throw new Error(`Memory candidate ${candidateId} is ${existing.status}; expected ${expectedStatus}.`);
+    }
+    const reviewedAt = nowIso();
+    const reviewMetadata = {
+      ...(existing.reviewMetadata || {}),
+      audit,
+      auditMetadata: metadata,
+      auditedAt: reviewedAt,
+    };
+    const result = this.db
+      .prepare(`
+        UPDATE memory_candidate_index
+        SET reviewed_at = ?,
+            review_reason = ?,
+            review_metadata_json = ?
+        WHERE scope_type = ?
+          AND scope_key = ?
+          AND id = ?
+      `)
+      .run(
+        reviewedAt,
+        reason || audit?.reason || existing.reviewReason || null,
+        json(reviewMetadata, {}),
+        scopeType,
+        scopeKey,
+        candidateId,
+      );
+    if (result.changes === 0) {
+      throw new Error(`Memory candidate not found: ${candidateId}`);
+    }
+    return this.getMemoryCandidate({ scopeType, scopeKey, candidateId });
+  }
+
   insertCheckpoint({
     scopeType,
     scopeKey,

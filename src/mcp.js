@@ -30,9 +30,9 @@ const MCP_INSTRUCTIONS = [
   'Read bootstrap_context.handoff.latestCheckpoints before durable memory for recent work status, recent decisions, open todos, branch/PR/CI flow, and next actions. Durable memory is for reviewed stable facts, contracts, policies, and runbooks. Verify mutable checkpoint claims with git/GitHub/CI/runtime/migrations before final action.',
   'Search result types have different trust roles: memory is reviewed durable fact or decision; checkpoint is credible recent handoff state for continuity, planning, prior intent, recent decisions, and unfinished work, but mutable live-state claims must be verified with git/GitHub/CI/runtime/migrations before acting; memory_candidate is unreviewed promotion material and not durable truth.',
   'For task start or loose continuation prompts such as "지난 환경 작업과 동기화", "어제 하던 거 이어서", "previous work", or "continue", call bootstrap_context first; it includes latest checkpoint handoff independent of search ranking. Use sync_resume_context only when you know the exact sessionId and need session working state or raw tail.',
-  'For closeout triggers only, call suggest_memory_promotions with the current sessionId or the checkpointId returned by distill_checkpoint: after this agent merges a PR, after the user says they merged and the agent syncs main/cleans branches, or when the user explicitly says today\'s work is done. Suggest at most 1-3 durable memory promotions and never promote automatically.',
-  'When an agent needs audited closeout recommendations without writes, call audit_memory_candidates with sessionId or checkpointId. It runs the configured audit provider and returns proposals for promote/edit/skip/reject, but never mutates durable memory or candidate status.',
-  'For strict closeout-scoped safe automatic promotion, call auto_promote_memory_candidates only when the user wants automatic promotion and always include sessionId or checkpointId. By default use dryRun=true. Use dryRun=false only when CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true is intentionally configured; never use scope-wide backlog fallback and never auto-promote preference candidates.',
+  'For closeout distillation, pass auditTrigger to distill_checkpoint. Candidate audit is automatic and batched: session pending candidates are audited after closeout triggers or once the configured batch threshold is reached. Audit results are stored on candidates; automatic promotion only controls whether approved strict-safe results are written to durable memory.',
+  'When an agent needs to inspect audited recommendations, call audit_memory_candidates with sessionId or checkpointId. It returns stored audit proposals and audits unaudited candidates in the same scoped batch when needed, but never mutates durable memory.',
+  'For strict closeout-scoped safe automatic promotion, call auto_promote_memory_candidates only when the user wants write-side automatic promotion and always include sessionId or checkpointId. By default use dryRun=true. Use dryRun=false only when CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true is intentionally configured; never use scope-wide backlog fallback and never auto-promote preference candidates.',
   'Preference-like candidates are tracked as merged occurrences; use list_preference_occurrences to review repeated evidence and weakened corrections, but do not treat occurrence evidence alone as durable preference truth.',
   'For user corrections such as "너 잘못 알고 있잖아", "그거 아니야", "그건 X가 아니라 Y야", or "기억 수정해", call reconcile_memory. Show the basis for prior knowledge, assess conflicts, and only apply safe corrections when the user explicitly asks to fix memory.',
   'Use list_memory_update_candidates to review proposed durable-memory corrections, deactivations, duplicate merges, or corrective notes. reconcile_memory propose mode is read-only by default; pass createUpdateCandidates=true only when persistent review proposals are wanted. Apply or reject update candidates only after explicit user approval.',
@@ -504,7 +504,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Distill Checkpoint',
       description:
-        'Distill raw session evidence into a checkpoint with the configured provider. Keep the returned checkpointId and memoryCandidateCount for closeout review with suggest_memory_promotions, list_memory_candidates, or auto_promote_memory_candidates. level defaults to 0 for session distills; higher levels are reserved for later daily/weekly consolidation.',
+        'Distill raw session evidence into a checkpoint with the configured provider. Returns checkpointId and memoryCandidateCount. Candidate audit runs automatically in scoped batches when auditTrigger is supplied or the batch threshold is reached; automatic promotion only writes approved strict-safe audit results when enabled. level defaults to 0 for session distills; higher levels are reserved for later daily/weekly consolidation.',
       inputSchema: {
         ...scopedSchema,
         sessionId: z.string(),
@@ -517,6 +517,9 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
         coversTo: z.string().optional(),
         source: z.enum(['distill', 'daily_consolidation', 'weekly_consolidation', 'topic_batch', 'manual']).optional(),
         sourceRef: z.string().optional(),
+        auditTrigger: z
+          .enum(['agent_merged_pr', 'user_merged_then_synced', 'user_declared_work_done', 'manual_closeout'])
+          .optional(),
       },
       annotations: {
         title: 'Distill Checkpoint',
@@ -768,7 +771,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Audit Memory Candidates',
       description:
-        'Run the configured audit provider on closeout-scoped pending memory candidates and return read-only audited recommendations for the agent/user to choose from. Requires sessionId or checkpointId, never scans scope fallback, and never promotes or changes candidate status.',
+        'Return stored audited recommendations and run the configured audit provider on unaudited closeout-scoped pending memory candidates when needed. Requires sessionId or checkpointId, never scans scope fallback, and never promotes or changes candidate status.',
       inputSchema: {
         ...scopedSchema,
         sessionId: z.string().optional(),
