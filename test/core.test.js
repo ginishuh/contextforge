@@ -5930,7 +5930,7 @@ test('auditMemoryCandidates returns audited read-only recommendations', async ()
     scopeKey: 'audit-suggestions-repo',
     checkpointId: checkpoint.id,
     trigger: 'user_declared_work_done',
-    limit: 5,
+    limit: 50,
   });
 
   assert.equal(result.kind, 'memory_candidate_audit_suggestions');
@@ -6051,6 +6051,103 @@ test('distillCheckpoint automatically audits session candidate batches', async (
   assert.equal(storedAudit.proposals.length, 2);
   assert.equal(storedAudit.proposals[0].audit.metadata.model, 'gpt-5.5');
   assert.equal(auditInvocations.length, 2);
+});
+
+test('distillCheckpoint audits new candidates even when audited pending candidates fill the first window', async () => {
+  const dataDir = await makeTempDir();
+  const auditInvocations = [];
+  let distillCount = 0;
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'batch_window_provider',
+      CONTEXTFORGE_AUTO_PROMOTE_AUDIT_MIN_BATCH_CANDIDATES: '2',
+      CONTEXTFORGE_AUTO_PROMOTE_AUDIT_BATCH_LIMIT: '2',
+    },
+    cwd: process.cwd(),
+    autoPromoteAuditor: async ({ candidate }) => {
+      auditInvocations.push(candidate.candidate.key);
+      return {
+        approved: true,
+        decision: 'approve',
+        reason: `Audited ${candidate.candidate.key}.`,
+        riskCodes: [],
+        metadata: {
+          provider: 'codex_sdk_python',
+          model: 'gpt-5.5',
+        },
+      };
+    },
+    distillProviders: {
+      batch_window_provider: async () => {
+        distillCount += 1;
+        return {
+          summaryShort: `Batch audit checkpoint ${distillCount}.`,
+          summaryText: 'The checkpoint produced enough candidates for automatic batched audit.',
+          decisions: [],
+          todos: [],
+          openQuestions: [],
+          memoryCandidates: [
+            {
+              key: `batch-window-${distillCount}-a`,
+              content: `Batch audit candidate A ${distillCount}.`,
+              category: 'runbook',
+              candidateType: 'runbook',
+              confidence: 0.96,
+              stability: 0.96,
+              sensitivity: 'low',
+              promotionRecommendation: 'promote',
+            },
+            {
+              key: `batch-window-${distillCount}-b`,
+              content: `Batch audit candidate B ${distillCount}.`,
+              category: 'api-contract',
+              candidateType: 'api-contract',
+              confidence: 0.95,
+              stability: 0.95,
+              sensitivity: 'low',
+              promotionRecommendation: 'promote',
+            },
+          ],
+        };
+      },
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'batch-window-repo',
+    sessionId: 'batch-window-session',
+    role: 'assistant',
+    content: 'First audit batch.',
+  });
+  const first = await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'batch-window-repo',
+    sessionId: 'batch-window-session',
+  });
+  assert.equal(first.candidateAudit.audited, 2);
+
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'batch-window-repo',
+    sessionId: 'batch-window-session',
+    role: 'assistant',
+    content: 'Second audit batch should not be blocked by the first audited pending batch.',
+  });
+  const second = await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'batch-window-repo',
+    sessionId: 'batch-window-session',
+  });
+
+  assert.equal(second.candidateAudit.executed, true);
+  assert.equal(second.candidateAudit.audited, 2);
+  assert.deepEqual(auditInvocations, [
+    'batch-window-1-a',
+    'batch-window-1-b',
+    'batch-window-2-a',
+    'batch-window-2-b',
+  ]);
 });
 
 test('distillCheckpoint waits below audit threshold but closeout trigger forces audit', async () => {
@@ -6175,11 +6272,23 @@ test('auditMemoryCandidates keeps recommendations conservative when audit is dis
     role: 'assistant',
     content: 'Audit disabled read-only candidate.',
   });
-  await app.distillCheckpoint({
+  const checkpoint = await app.distillCheckpoint({
     scope: 'repo',
     scopeKey: 'audit-disabled-repo',
     sessionId: 'audit-disabled-session',
+    auditTrigger: 'manual_closeout',
   });
+  assert.equal(checkpoint.candidateAudit.executed, false);
+  assert.equal(checkpoint.candidateAudit.reason, 'audit_disabled');
+
+  const pendingBeforeAudit = app.listMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'audit-disabled-repo',
+    sessionId: 'audit-disabled-session',
+    status: 'pending',
+  });
+  assert.equal(pendingBeforeAudit.length, 1);
+  assert.equal(pendingBeforeAudit[0].reviewMetadata.audit, undefined);
 
   const result = await app.auditMemoryCandidates({
     scope: 'repo',
@@ -6190,11 +6299,18 @@ test('auditMemoryCandidates keeps recommendations conservative when audit is dis
 
   assert.equal(result.policy.audit.enabled, false);
   assert.equal(result.policy.audit.executed, false);
-  assert.equal(result.proposals.length, 1);
-  assert.equal(result.proposals[0].recommendedAction, 'review');
-  assert.equal(result.proposals[0].audit.approved, true);
-  assert.equal(result.proposals[0].audit.metadata.provider, 'none');
+  assert.equal(result.proposals.length, 0);
+  assert.equal(result.skipped.length, 1);
+  assert.equal(result.skipped[0].reason, 'audit_disabled');
+  assert.ok(result.requestWarnings.some((warning) => warning.code === 'audit_disabled'));
   assert.equal(app.getMemory({ scope: 'repo', scopeKey: 'audit-disabled-repo', key: 'audit-disabled-runbook' }), null);
+  const pendingAfterAudit = app.listMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'audit-disabled-repo',
+    sessionId: 'audit-disabled-session',
+    status: 'pending',
+  });
+  assert.equal(pendingAfterAudit[0].reviewMetadata.audit, undefined);
 });
 
 test('autoPromoteMemoryCandidates returns stable empty arrays and preference input warnings', async () => {

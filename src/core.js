@@ -969,6 +969,8 @@ function promotionProposal(indexedCandidate, warnings, rank) {
     key: candidate.key,
     category: candidate.category,
     content: candidate.content,
+    tags: candidate.tags || [],
+    importance: candidate.importance ?? 0,
     evidence: {
       reason: candidate.reason || null,
       sourceEventIds: candidate.sourceEventIds || [],
@@ -1115,10 +1117,15 @@ function auditedPromotionProposal(indexedCandidate, warnings, audit, rank, { aud
   };
 }
 
+function hasRealAuditProvider(audit) {
+  const provider = audit?.metadata?.provider;
+  return Boolean(provider && provider !== 'none');
+}
+
 function storedAuditProposal(indexedCandidate, rank) {
   const audit = indexedCandidate.reviewMetadata?.audit || null;
   return auditedPromotionProposal(indexedCandidate, [], audit, rank, {
-    auditEnabled: Boolean(audit),
+    auditEnabled: hasRealAuditProvider(audit),
   });
 }
 
@@ -1208,10 +1215,10 @@ function autoPromoteIndexedCandidate(store, scope, indexedCandidate, warnings, r
 async function auditAutoPromotionCandidate({ auditor, store, scope, item }) {
   if (!auditor) {
     return {
-      approved: true,
-      decision: 'approve',
-      reason: 'Auto-promotion audit disabled; local strict safety checks only.',
-      riskCodes: [],
+      approved: false,
+      decision: 'needs_review',
+      reason: 'Auto-promotion audit provider is disabled; GPT audit approval is required.',
+      riskCodes: ['audit_disabled'],
       metadata: { provider: 'none' },
     };
   }
@@ -2811,13 +2818,13 @@ export function createContextForge(options = {}) {
         throw new Error('trigger must be a closeout trigger.');
       }
       const requestedLimit = positiveNumber(options.limit == null ? 3 : Number(options.limit), 'limit');
-      const limit = Math.min(3, requestedLimit);
+      const limit = Math.min(10, requestedLimit);
       const requestWarnings =
-        requestedLimit > 3
+        requestedLimit > 10
           ? [
               {
                 code: 'limit_capped',
-                message: 'audit_memory_candidates returns at most 3 proposals.',
+                message: 'audit_memory_candidates returns at most 10 proposals.',
                 requestedLimit,
                 effectiveLimit: limit,
               },
@@ -2943,6 +2950,41 @@ export function createContextForge(options = {}) {
           ? []
           : allCandidates.filter((candidate) => candidate.reviewMetadata?.audit);
         const candidates = allCandidates.filter((candidate) => truthyOption(options.force) || !candidate.reviewMetadata?.audit);
+        if (!auditor) {
+          return {
+            kind: 'memory_candidate_audit_suggestions',
+            trigger,
+            source: {
+              sessionId: options.sessionId || null,
+              checkpointId,
+              mode: sourceMode,
+            },
+            policy: {
+              minConfidence,
+              minStability,
+              allowedCategories: Array.from(allowedCategories),
+              scopeFallback: false,
+              mutates: false,
+              audit: auditPolicy,
+            },
+            proposals: storedAudited.map((candidate, index) => storedAuditProposal(candidate, index + 1)).slice(0, limit),
+            skipped: candidates.map((candidate) => ({
+              candidateId: candidate.id,
+              reason: 'audit_disabled',
+            })),
+            requestWarnings: [
+              ...requestWarnings,
+              {
+                code: 'audit_disabled',
+                message: 'Automatic candidate audit provider is disabled; no new GPT audit results were stored.',
+              },
+            ],
+            nextActions: [
+              'Enable the automatic candidate audit provider before requesting GPT-reviewed candidate suggestions.',
+              'No memory candidates were promoted.',
+            ],
+          };
+        }
         const assessed = candidates.map((candidate) => {
           const warnings = autoPromotionWarnings(store, scope, candidate, policy);
           const score = scorePromotionCandidate(candidate, warnings, AUTO_PROMOTE_SKIP_WARNING_CODES);
@@ -4160,6 +4202,8 @@ export function createContextForge(options = {}) {
           const auditConfig = effectiveForAudit.autoPromoteAudit || {};
           const minBatchCandidates = Number(auditConfig.minBatchCandidates || 5);
           const batchLimit = Number(auditConfig.batchLimit || 5);
+          const scanLimit = Math.max(minBatchCandidates, batchLimit, 1) * 10;
+          const auditor = getAutoPromoteAuditor(store);
           const unauditedPending = store
             .listMemoryCandidates({
               ...scope,
@@ -4167,28 +4211,40 @@ export function createContextForge(options = {}) {
               status: 'pending',
               promotionRecommendation: 'promote',
               sort: 'recommendation',
-              limit: Math.max(minBatchCandidates, batchLimit, 1),
+              limit: scanLimit,
             })
             .filter((candidate) => !candidate.reviewMetadata?.audit);
           const shouldAudit =
             checkpointLevel === 0 &&
+            Boolean(auditor) &&
             unauditedPending.length > 0 &&
             (forceAudit || unauditedPending.length >= minBatchCandidates);
           if (!shouldAudit) {
+            const wouldAuditIfEnabled =
+              checkpointLevel === 0 &&
+              !auditor &&
+              unauditedPending.length > 0 &&
+              (forceAudit || unauditedPending.length >= minBatchCandidates);
             candidateAudit = {
               ...candidateAudit,
-              enabled: auditConfig.enabled !== false,
+              enabled: Boolean(auditor),
               reason:
                 checkpointLevel !== 0
                   ? 'non_level_zero_checkpoint'
+                  : wouldAuditIfEnabled
+                    ? 'audit_disabled'
                   : unauditedPending.length === 0
                     ? 'no_unaudited_pending_candidates'
                     : 'below_batch_threshold',
               pendingUnaudited: unauditedPending.length,
               minBatchCandidates,
+              batchLimit,
+              scanLimit,
+              provider: auditor?.metadata?.provider || 'none',
+              model: auditor?.metadata?.model || null,
+              reasoningEffort: auditor?.metadata?.reasoningEffort || null,
             };
           } else {
-            const auditor = getAutoPromoteAuditor(store);
             const policy = {
               minConfidence: 0.85,
               minStability: 0.85,
@@ -4255,6 +4311,7 @@ export function createContextForge(options = {}) {
               promoted: promotedCount,
               minBatchCandidates,
               batchLimit,
+              scanLimit,
               provider: auditor?.metadata?.provider || 'none',
               model: auditor?.metadata?.model || null,
               reasoningEffort: auditor?.metadata?.reasoningEffort || null,

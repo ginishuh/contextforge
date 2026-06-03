@@ -540,7 +540,7 @@ async function loadAuditedCandidates() {
     scopeKey,
     trigger: 'manual_closeout',
     ...(checkpointId ? { checkpointId } : { sessionId }),
-    limit: 3,
+    limit: 10,
     scanLimit: 100,
   });
   state.candidates = result.proposals || [];
@@ -564,8 +564,8 @@ async function loadAuditedCandidates() {
         key,
         content,
         category: candidate.category || 'note',
-        tags: [],
-        importance: 0,
+        tags: candidate.tags || [],
+        importance: candidate.importance ?? 0,
         allowWarnings: true,
       });
       await loadAuditedCandidates();
@@ -663,7 +663,7 @@ $('#rejectSelectedCandidates').addEventListener('click', async (event) => {
   for (const index of indexes) {
     const candidate = state.candidates[index];
     if (candidate) {
-      await call('rejectMemoryCandidate', { scope, scopeKey, candidateId: candidate.id, reason });
+      await call('rejectMemoryCandidate', { scope, scopeKey, candidateId: candidate.candidateId, reason });
     }
   }
   $('#loadCandidates').click();
