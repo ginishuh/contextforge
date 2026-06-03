@@ -60,6 +60,12 @@ function toCoreOptions(options) {
   return {
     scope: options.scope,
     scopeKey: options.scopeKey,
+    fromScope: options.fromScope,
+    fromScopeType: options.fromScopeType,
+    fromScopeKey: options.fromScopeKey,
+    toScope: options.toScope,
+    toScopeType: options.toScopeType,
+    toScopeKey: options.toScopeKey,
     cwd: options.cwd,
     repoPath: options.repoPath,
     key: options.key,
@@ -193,6 +199,7 @@ async function main() {
   const { command, options } = parseArgs(process.argv);
   const commands = {
     dbInfo: (app) => app.dbInfo(),
+    migrateScope: (app, coreOptions) => app.migrateScope(coreOptions),
     getRuntimeSettings: (app) => app.getRuntimeSettings(),
     updateRuntimeSettings: (app, coreOptions) => app.updateRuntimeSettings(coreOptions),
     checkDistillProvider: (app, coreOptions) => app.checkDistillProvider(coreOptions),

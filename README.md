@@ -152,6 +152,33 @@ same GitHub repo. Outside a git checkout it falls back to a deterministic
 `path:<hash>:<name>` key. Pass `--scopeKey` or set
 `CONTEXTFORGE_DEFAULT_SCOPE_KEY` when you want an explicit canonical scope key.
 
+When a repository moves or is renamed, set `CONTEXTFORGE_SCOPE_ALIASES` on the
+server or local runtime to canonicalize future reads and writes. Aliases accept
+comma, newline, or semicolon separated entries with `=` or `->` separators:
+
+```bash
+CONTEXTFORGE_SCOPE_ALIASES='repo:github.com/old/suite=repo:github.com/new/suite'
+```
+
+Scope prefixes are optional and default to `repo`. `dbInfo` reports the loaded
+aliases. Existing rows are not moved implicitly; inspect and migrate them
+explicitly:
+
+```bash
+node src/cli.js migrateScope \
+  --fromScope repo \
+  --fromScopeKey github.com/old/suite \
+  --toScope repo \
+  --toScopeKey github.com/new/suite
+
+node src/cli.js migrateScope \
+  --fromScope repo \
+  --fromScopeKey github.com/old/suite \
+  --toScope repo \
+  --toScopeKey github.com/new/suite \
+  --dryRun false
+```
+
 ## Usage Modes
 
 ContextForge supports two common deployment modes. Choose one first; mixing the

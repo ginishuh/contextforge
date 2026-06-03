@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added scope-key aliases plus an explicit `migrateScope` command for safely
+  canonicalizing renamed or transferred repository scopes without read-union
+  ambiguity.
 - Fixed `/ui` asset loading for requests without a trailing slash and made
   admin UI session cookies HTTP-aware by default while preserving `Secure`
   cookies for HTTPS reverse-proxy deployments.

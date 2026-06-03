@@ -2,6 +2,7 @@ import { normalizeScopeOptions } from '../scopes/index.js';
 
 const REMOTE_METHODS = [
   'dbInfo',
+  'migrateScope',
   'getRuntimeSettings',
   'updateRuntimeSettings',
   'checkDistillProvider',
@@ -51,6 +52,7 @@ const REMOTE_METHODS = [
 
 const UNSCOPED_REMOTE_METHODS = new Set([
   'dbInfo',
+  'migrateScope',
   'getRuntimeSettings',
   'updateRuntimeSettings',
   'checkDistillProvider',

@@ -18,6 +18,16 @@ function requireOption(value, name) {
   }
 }
 
+function migrationScopeOptions(options, prefix, fallbackScope = 'repo') {
+  const scopeType = options[`${prefix}ScopeType`] || options[`${prefix}Scope`] || fallbackScope;
+  const scopeKey = options[`${prefix}ScopeKey`];
+  if (!['shared', 'repo', 'local'].includes(scopeType)) {
+    throw new Error(`${prefix}Scope must be shared, repo, or local.`);
+  }
+  requireOption(scopeKey, `${prefix}ScopeKey`);
+  return { scopeType, scopeKey };
+}
+
 function ownValue(source, keys) {
   for (const key of keys) {
     if (Object.prototype.hasOwnProperty.call(source, key) && source[key] !== undefined) {
@@ -1703,6 +1713,10 @@ export function createContextForge(options = {}) {
         ttlDays: config.rawRetention.ttlDays,
         pruneIntervalMs: config.rawRetention.pruneIntervalMs,
       },
+      scopeAliases: {
+        count: config.scopeAliases.length,
+        aliases: config.scopeAliases,
+      },
     };
   }
 
@@ -1891,6 +1905,21 @@ export function createContextForge(options = {}) {
 
     dbInfo() {
       return useStore((store) => buildDbInfo(store));
+    },
+
+    migrateScope(options = {}) {
+      const from = migrationScopeOptions(options, 'from');
+      const toInput = migrationScopeOptions(options, 'to', from.scopeType);
+      const to = normalizeScopeOptions({ scope: toInput.scopeType, scopeKey: toInput.scopeKey }, config);
+      return useStore((store) =>
+        store.migrateScope({
+          fromScopeType: from.scopeType,
+          fromScopeKey: from.scopeKey,
+          toScopeType: to.scopeType,
+          toScopeKey: to.scopeKey,
+          dryRun: options.dryRun == null ? true : truthyOption(options.dryRun),
+        }),
+      );
     },
 
     getRuntimeSettings() {
