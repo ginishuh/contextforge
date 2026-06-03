@@ -18,8 +18,12 @@ Use ContextForge as a scoped memory and distillation sidecar for coding agents. 
 ContextForge has layered state:
 
 - `memory`: reviewed durable facts, decisions, preferences, and runbooks.
-- `checkpoint`: distilled recent handoff state for continuity and planning.
-- `memory_candidate`: unreviewed candidate generated from a checkpoint; review material only.
+- `checkpoint`: distilled recent handoff state for continuity and planning. A
+  checkpoint may include `structured` handoff state for the next agent.
+- `memory_candidate`: unreviewed candidate generated from a checkpoint; review
+  material only. Candidate v2 review fields such as `durabilityReason`,
+  `riskReason`, `evidenceRefs`, and `suggestedAction` may be present, but a
+  provider suggestion is not approval.
 - raw evidence: user/assistant conversation evidence used for distillation.
 - working summary/context: mutable session state, not durable memory.
 
@@ -52,12 +56,19 @@ Before relying on results, check connection metadata and storage authority from 
 At the start of non-trivial project work:
 
 1. Call `bootstrap_context` with a task-derived query, `scope: "repo"`, and `repoPath`, `cwd`, or explicit `scopeKey`.
-2. Read `handoff.latestCheckpoints` before durable memory for recent work status, recent decisions, open todos, branch/PR/CI flow, and next actions. This lane is loaded independently from search ranking.
-3. For multi-repo work, pass repo `relatedScopeKeys` for parent/suite/subrepo scopes whose latest handoff may matter. `latestCheckpointLimit` applies per scope.
-4. Set `includeShared: true` only for cross-repo/user-wide policy, credentials location, deployment, or recurring preference questions.
-5. Read the storage block and result trust roles.
-6. Use targeted `search` calls only when more detail is needed.
-7. Use `get_memory` only when you already know the exact durable key.
+2. Read `handoff.latestHandoff` first when present. It is the deterministic
+   newest handoff checkpoint and is loaded independently from search ranking.
+3. Inspect `handoff.latestHandoff.structured`, especially
+   `structured.liveState`, `warnings`, `staleReasons`, and `verifyHints`.
+   Treat repo/branch/PR/head commit/CI/worktree/runtime/deployment values as
+   observed mutable state and verify them from live sources before acting.
+4. Read `handoff.latestCheckpoints` next for recent work status, decisions,
+   open todos, branch/PR/CI flow, and next actions.
+5. For multi-repo work, pass repo `relatedScopeKeys` for parent/suite/subrepo scopes whose latest handoff may matter. `latestCheckpointLimit` applies per scope.
+6. Set `includeShared: true` only for cross-repo/user-wide policy, credentials location, deployment, or recurring preference questions.
+7. Read the storage block and result trust roles.
+8. Use targeted `search` calls only when more detail is needed.
+9. Use `get_memory` only when you already know the exact durable key.
 
 `bootstrap_context` does not create a session. It retrieves scoped context.
 
@@ -78,11 +89,16 @@ When resuming a known session, pass that `sessionId` to `bootstrap_context`, `sy
 For "continue", "yesterday", prior issue/PR follow-up, or cross-agent handoff:
 
 1. Call `bootstrap_context` first; its latest checkpoint handoff is not dependent on semantic search ranking.
-2. Use `sync_resume_context` only when the exact `sessionId` is known and session working state or raw tail is needed.
-3. Treat checkpoints as credible recent handoff notes and prefer them over durable memory for fast-moving work status.
-4. Treat memory candidates as review material only.
-5. Verify live mutable state before editing or reporting final status.
-6. Do not propose memory promotions during start/resume sync.
+2. Prefer `handoff.latestHandoff` for the immediate resume state, then read
+   other `handoff.latestCheckpoints` if more recent context is needed.
+3. If structured handoff includes live-state warnings or verification hints,
+   run those checks before editing files, reporting status, or making git/GitHub
+   claims.
+4. Use `sync_resume_context` only when the exact `sessionId` is known and session working state or raw tail is needed.
+5. Treat checkpoints as credible recent handoff notes and prefer them over durable memory for fast-moving work status.
+6. Treat memory candidates as review material only.
+7. Verify live mutable state before editing or reporting final status.
+8. Do not propose memory promotions during start/resume sync.
 
 ## Evidence Capture
 
@@ -122,6 +138,11 @@ After `distill_checkpoint`, keep:
 
 Distillation failure must not erase raw evidence.
 
+Checkpoint `structured` output is recent handoff state, not durable truth. It
+can preserve work status, live-state observations, changes, verification,
+risks, and next actions. Do not promote structured live state directly into
+durable memory unless it is stable, reviewed, and no cheaper live source exists.
+
 ## Closeout Promotion
 
 At closeout triggers only, review durable memory candidates:
@@ -129,14 +150,22 @@ At closeout triggers only, review durable memory candidates:
 1. If `distill_checkpoint` returned candidates, call `suggest_memory_promotions` with the returned `checkpointId` or the current `sessionId`.
 2. If `session_status` reports `latestCheckpointMemoryCandidateCount > 0`, call `suggest_memory_promotions` or `list_memory_candidates` with that same `sessionId` or latest checkpoint id.
 3. If `suggest_memory_promotions` returns `missing_closeout_source`, no current-session review happened. Provide `sessionId` or `checkpointId`.
-4. Promote only reviewed, stable, scoped, non-secret facts.
-5. Prefer `promote_memory_candidate` by `candidateId`.
-6. Use `remember` or `promote_memory` for a corrected durable write when the candidate key/content is wrong.
-7. Use `reject_memory_candidate` for wrong candidates.
+4. When the user wants audited recommendations without writes, call
+   `audit_memory_candidates` with the same `sessionId` or `checkpointId`.
+   It should return read-only audit decisions and must not mutate memory or
+   candidate status.
+5. Promote only reviewed, stable, scoped, non-secret facts.
+6. Prefer `promote_memory_candidate` by `candidateId`.
+7. Use `remember` or `promote_memory` for a corrected durable write when the candidate key/content is wrong.
+8. Use `reject_memory_candidate` for wrong candidates.
 
 `suggest_memory_promotions` defaults to `promotionRecommendation: "promote"`. If candidates exist but proposals are empty, inspect with `list_memory_candidates`; for `promotionRecommendation: "review"` candidates, either call `suggest_memory_promotions` with `promotionRecommendation: "review"` or manually review the listed candidates.
 
-Use `auto_promote_memory_candidates` only when automatic promotion is explicitly wanted. It must include `sessionId` or `checkpointId`; real promotion requires server-side enablement and `dryRun: false`.
+Use `auto_promote_memory_candidates` only when automatic promotion is explicitly
+wanted. It must include `sessionId` or `checkpointId`; real promotion requires
+server-side enablement and `dryRun: false`. Dry runs preview policy results but
+may not execute the audit runner; use `audit_memory_candidates` when the user
+specifically wants audited read-only recommendations.
 
 ## What To Promote
 
