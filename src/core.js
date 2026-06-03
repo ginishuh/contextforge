@@ -5,7 +5,7 @@ import { loadConfig } from './config/index.js';
 import { createDistillProvider } from './distill/index.js';
 import { checkCodexExecProvider } from './distill/providers/codex_exec.js';
 import { checkOpenAiCompatibleProvider } from './distill/providers/openai_compatible.js';
-import { validateDistillOutput } from './distill/validate.js';
+import { STRUCTURED_CHECKPOINT_SCHEMA_VERSION, validateDistillOutput } from './distill/validate.js';
 import { createEmbeddingProvider } from './embeddings/index.js';
 import { createRemoteContextForge } from './remote/client.js';
 import { searchMemories } from './retrieval/search.js';
@@ -327,6 +327,7 @@ function resultTextForVerification(result) {
       ...(result.checkpoint.decisions || []),
       ...(result.checkpoint.todos || []),
       ...(result.checkpoint.openQuestions || []),
+      structuredVerificationText(result.checkpoint.structured || result.checkpoint.metadata?.structured),
     ].join(' ');
   }
   if (result.candidate) {
@@ -339,6 +340,28 @@ function resultTextForVerification(result) {
     ].join(' ');
   }
   return '';
+}
+
+function structuredVerificationText(structured) {
+  if (!structured || typeof structured !== 'object' || Array.isArray(structured)) {
+    return '';
+  }
+  const liveState = structured.liveState && typeof structured.liveState === 'object' ? structured.liveState : {};
+  const values = [
+    liveState.repo,
+    liveState.branch,
+    liveState.baseBranch,
+    liveState.headCommit,
+    liveState.prNumber == null || liveState.prNumber === '' ? '' : `PR #${liveState.prNumber}`,
+    liveState.prUrl,
+    liveState.ciStatus,
+    liveState.worktreeStatus,
+    liveState.runtimeStatus,
+    liveState.deploymentStatus,
+    ...(Array.isArray(liveState.staleReasons) ? liveState.staleReasons : []),
+    ...(Array.isArray(liveState.verifyHints) ? liveState.verifyHints : []),
+  ];
+  return values.filter(Boolean).join(' ');
 }
 
 function requiresLiveStateVerification(result) {
@@ -479,8 +502,58 @@ function bootstrapRawTailEvent(event) {
   };
 }
 
+function structuredForCheckpoint(checkpoint) {
+  return checkpoint?.structured || checkpoint?.metadata?.structured || null;
+}
+
+function structuredLiveStateWarnings(structured) {
+  const liveState = structured?.liveState;
+  if (!liveState || typeof liveState !== 'object' || Array.isArray(liveState)) {
+    return [];
+  }
+  const mutableFields = [
+    'repo',
+    'branch',
+    'baseBranch',
+    'headCommit',
+    'prNumber',
+    'prUrl',
+    'ciStatus',
+    'worktreeStatus',
+    'runtimeStatus',
+    'deploymentStatus',
+  ].filter((field) => liveState[field] != null && liveState[field] !== '');
+  if (!mutableFields.length && !liveState.verificationRequired) {
+    return [];
+  }
+  if (!mutableFields.length) {
+    return [
+      {
+        code: 'verification_required',
+        fields: [],
+        observedAt: liveState.observedAt || liveState.verifiedAt || null,
+        staleReasons: Array.isArray(liveState.staleReasons) ? liveState.staleReasons : [],
+        verifyHints: Array.isArray(liveState.verifyHints) ? liveState.verifyHints : [],
+        message: 'Structured checkpoint liveState requires live verification before acting.',
+      },
+    ];
+  }
+  return [
+    {
+      code: 'live_state_may_be_stale',
+      fields: mutableFields.map((field) => `liveState.${field}`),
+      observedAt: liveState.observedAt || liveState.verifiedAt || null,
+      staleReasons: Array.isArray(liveState.staleReasons) ? liveState.staleReasons : [],
+      verifyHints: Array.isArray(liveState.verifyHints) ? liveState.verifyHints : [],
+      message: 'Structured checkpoint liveState is observed mutable state; verify it against live sources before acting.',
+    },
+  ];
+}
+
 function checkpointHandoffCompact(checkpoint, scope) {
   const sourceEventWindow = checkpoint.metadata?.sourceEventWindow || null;
+  const structured = structuredForCheckpoint(checkpoint);
+  const structuredWarnings = structuredLiveStateWarnings(structured);
   return {
     type: 'checkpoint',
     trust: 'credible_recent_handoff',
@@ -504,6 +577,8 @@ function checkpointHandoffCompact(checkpoint, scope) {
     openQuestions: checkpoint.openQuestions || [],
     sourceEventCount: checkpoint.sourceEventCount,
     provider: checkpoint.provider,
+    structured,
+    ...(structuredWarnings.length ? { structuredWarnings } : {}),
     ...(sourceEventWindow
       ? {
           sourceEventWindow: {
@@ -760,6 +835,7 @@ function resumeCheckpoint(result) {
 }
 
 function checkpointHandoffResult(checkpoint, group = 'session') {
+  const structured = structuredForCheckpoint(checkpoint);
   return resumeCheckpoint({
     group,
     type: 'checkpoint',
@@ -786,11 +862,14 @@ function checkpointHandoffResult(checkpoint, group = 'session') {
     coversTo: checkpoint.coversTo,
     checkpointSource: checkpoint.source,
     sourceRef: checkpoint.sourceRef,
+    structured,
+    structuredWarnings: structuredLiveStateWarnings(structured),
     createdAt: checkpoint.createdAt,
   });
 }
 
 function checkpointBasisResult(checkpoint) {
+  const structured = structuredForCheckpoint(checkpoint);
   return {
     type: 'checkpoint',
     key: checkpoint.id,
@@ -818,6 +897,8 @@ function checkpointBasisResult(checkpoint) {
     coversTo: checkpoint.coversTo,
     checkpointSource: checkpoint.source,
     sourceRef: checkpoint.sourceRef,
+    structured,
+    structuredWarnings: structuredLiveStateWarnings(structured),
   };
 }
 
@@ -880,7 +961,7 @@ function scorePromotionCandidate(indexedCandidate, warnings, skipWarningCodes = 
 
 function promotionProposal(indexedCandidate, warnings, rank) {
   const candidate = indexedCandidate.candidate || {};
-  return {
+  const proposal = {
     rank,
     candidateId: indexedCandidate.id,
     scope: indexedCandidate.scopeType,
@@ -893,11 +974,27 @@ function promotionProposal(indexedCandidate, warnings, rank) {
       sourceEventIds: candidate.sourceEventIds || [],
       checkpointId: indexedCandidate.checkpointId,
       sessionId: indexedCandidate.sessionId,
+      ...(Array.isArray(candidate.evidenceRefs) && candidate.evidenceRefs.length
+        ? { evidenceRefs: candidate.evidenceRefs }
+        : {}),
     },
-    whyDurable: candidate.reason || 'Candidate appears stable and useful beyond the current checkpoint.',
+    whyDurable:
+      candidate.durabilityReason ||
+      candidate.reason ||
+      'Candidate appears stable and useful beyond the current checkpoint.',
     warnings,
     recommendedAction: 'ask_user',
   };
+  if (candidate.suggestedAction) {
+    proposal.providerSuggestedAction = candidate.suggestedAction;
+  }
+  if (candidate.riskReason) {
+    proposal.riskReason = candidate.riskReason;
+  }
+  if (candidate.schemaVersion) {
+    proposal.candidateSchemaVersion = candidate.schemaVersion;
+  }
+  return proposal;
 }
 
 function memoryUpdateCandidateProposal(candidate) {
@@ -1919,6 +2016,7 @@ export function createContextForge(options = {}) {
                   .map((checkpoint) => checkpointHandoffCompact(checkpoint, handoffScope)),
               )
             : [];
+        const latestHandoff = latestCheckpoints[0] || null;
         const workingSummary = sessionId
           ? bootstrapWorkingSummary(store.getWorkingSummary({ ...scope, sessionId }))
           : null;
@@ -1937,6 +2035,7 @@ export function createContextForge(options = {}) {
           includeShared,
           sharedLimit: includeShared ? sharedLimit : null,
           handoff: {
+            latestHandoff,
             latestCheckpoints,
             latestCheckpointLimit,
             relatedScopeKeys,
@@ -2002,6 +2101,7 @@ export function createContextForge(options = {}) {
         includeShared: bootstrap.includeShared,
         ...(bootstrap.sessionId ? { sessionId: bootstrap.sessionId } : {}),
         handoff: {
+          latestHandoff: bootstrap.handoff?.latestHandoff || null,
           workingSummary: bootstrap.workingSummary || null,
           structuredWorkingContext: bootstrap.structuredWorkingContext || null,
           rawTail: bootstrap.rawTail || [],
@@ -3802,6 +3902,10 @@ export function createContextForge(options = {}) {
           openQuestions: 'string[]',
           workingSummary: 'string',
           sessionWorkingContext: 'object?',
+          structured: {
+            schemaVersion: STRUCTURED_CHECKPOINT_SCHEMA_VERSION,
+            optional: true,
+          },
           memoryCandidates: 'object[]',
           sourceEventCount: 'number',
           provider: 'string',
@@ -3887,6 +3991,7 @@ export function createContextForge(options = {}) {
           metadata: {
             providerMetadata: output.metadata,
             memoryCandidates: output.memoryCandidates,
+            structured: output.structured || null,
             sourceProvenance,
             sourceRawEventIds: selectedRawEvents.map((event) => event.id),
             sourceEventWindow: distillWindow.metadata,

@@ -1,3 +1,5 @@
+export const STRUCTURED_CHECKPOINT_SCHEMA_VERSION = 'contextforge.structured_checkpoint.v1';
+
 const ARRAY_FIELDS = ['decisions', 'todos', 'openQuestions', 'memoryCandidates'];
 
 function receivedType(value) {
@@ -16,6 +18,19 @@ function assertArray(value, field) {
   if (!Array.isArray(value)) {
     throw new Error(`Provider output field "${field}" must be an array; received ${receivedType(value)}.`);
   }
+}
+
+function normalizeStructuredCheckpoint(value) {
+  if (value == null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`Provider output field "structured" must be an object when present; received ${receivedType(value)}.`);
+  }
+  if (value.schemaVersion !== STRUCTURED_CHECKPOINT_SCHEMA_VERSION) {
+    throw new Error(
+      `Provider output field "structured.schemaVersion" must be "${STRUCTURED_CHECKPOINT_SCHEMA_VERSION}".`,
+    );
+  }
+  return value;
 }
 
 export function validateDistillOutput(output) {
@@ -64,6 +79,8 @@ export function validateDistillOutput(output) {
     );
   }
 
+  const structured = normalizeStructuredCheckpoint(output.structured);
+
   return {
     summaryShort: output.summaryShort,
     summaryText: output.summaryText,
@@ -75,6 +92,7 @@ export function validateDistillOutput(output) {
         ? output.workingSummary
         : output.summaryText,
     memoryCandidates: output.memoryCandidates,
+    structured,
     sessionWorkingContext: output.sessionWorkingContext || null,
     sourceEventCount: output.sourceEventCount,
     provider: output.provider,

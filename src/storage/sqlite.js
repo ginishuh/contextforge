@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 
-export const SCHEMA_VERSION = 15;
+export const SCHEMA_VERSION = 16;
 
 function nowIso() {
   return new Date().toISOString();
@@ -62,6 +62,7 @@ function hydrateRawEvent(row) {
 
 function hydrateCheckpoint(row) {
   if (!row) return null;
+  const metadata = parseJson(row.metadata_json, {});
   return {
     id: row.id,
     scopeType: row.scope_type,
@@ -81,7 +82,8 @@ function hydrateCheckpoint(row) {
     coversTo: row.covers_to,
     source: row.source || 'distill',
     sourceRef: row.source_ref,
-    metadata: parseJson(row.metadata_json, {}),
+    metadata,
+    structured: metadata.structured || null,
     createdAt: row.created_at,
   };
 }
@@ -164,6 +166,7 @@ function hydrateMemoryEvent(row) {
 
 function hydrateMemoryCandidate(row) {
   if (!row) return null;
+  const candidateJson = parseJson(row.candidate_json, {});
   const tags = parseJson(row.tags_json, []);
   return {
     type: 'memory_candidate',
@@ -176,6 +179,7 @@ function hydrateMemoryCandidate(row) {
     index: row.candidate_index,
     status: row.status,
     candidate: {
+      ...(candidateJson && typeof candidateJson === 'object' && !Array.isArray(candidateJson) ? candidateJson : {}),
       key: row.candidate_key,
       content: row.candidate_content,
       reason: row.candidate_reason,
@@ -321,9 +325,13 @@ function validateDimensions(dimensions) {
   return parsed;
 }
 
+const SUGGESTED_ACTIONS = new Set(['promote', 'review', 'reject', 'skip']);
+
 function normalizeCandidate(candidate) {
   const value = candidate && typeof candidate === 'object' && !Array.isArray(candidate) ? candidate : {};
+  const suggestedAction = value.suggestedAction ? String(value.suggestedAction) : null;
   return {
+    schemaVersion: value.schemaVersion ? String(value.schemaVersion) : null,
     key: String(value.key || ''),
     content: String(value.content || ''),
     reason: String(value.reason || ''),
@@ -336,7 +344,59 @@ function normalizeCandidate(candidate) {
     sensitivity: value.sensitivity ? String(value.sensitivity) : null,
     promotionRecommendation: value.promotionRecommendation ? String(value.promotionRecommendation) : null,
     sourceEventIds: Array.isArray(value.sourceEventIds) ? value.sourceEventIds.map((item) => String(item)) : [],
+    durabilityReason: value.durabilityReason ? String(value.durabilityReason) : null,
+    riskReason: value.riskReason ? String(value.riskReason) : null,
+    evidenceRefs: Array.isArray(value.evidenceRefs) ? value.evidenceRefs.map((item) => String(item)) : [],
+    suggestedAction: suggestedAction && SUGGESTED_ACTIONS.has(suggestedAction) ? suggestedAction : null,
   };
+}
+
+function candidateJsonForIndex(rawCandidate, candidate) {
+  // Preserve the normalized candidate contract, including v2 review fields, without
+  // passing through arbitrary provider-supplied keys into list/audit surfaces.
+  return candidate;
+}
+
+function stringValue(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+function structuredItemsText(items, fields) {
+  if (!Array.isArray(items)) return [];
+  return items
+    .map((item) => {
+      if (typeof item === 'string') return item;
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return '';
+      return fields.map((field) => stringValue(item[field])).filter(Boolean).join(' ');
+    })
+    .filter(Boolean);
+}
+
+function structuredCheckpointEmbeddingText(structured) {
+  if (!structured || typeof structured !== 'object' || Array.isArray(structured)) {
+    return '';
+  }
+  const work = structured.work && typeof structured.work === 'object' ? structured.work : {};
+  const liveState = structured.liveState && typeof structured.liveState === 'object' ? structured.liveState : {};
+  const prNumber = liveState.prNumber == null || liveState.prNumber === '' ? '' : `PR #${liveState.prNumber}`;
+  return [
+    stringValue(work.intent),
+    stringValue(work.status),
+    stringValue(work.outcome),
+    stringValue(liveState.repo),
+    stringValue(liveState.branch),
+    stringValue(liveState.baseBranch),
+    stringValue(liveState.headCommit),
+    prNumber,
+    stringValue(liveState.ciStatus),
+    stringValue(liveState.worktreeStatus),
+    ...structuredItemsText(structured.changes, ['type', 'name', 'path', 'description']),
+    ...structuredItemsText(structured.verification, ['type', 'command', 'result', 'details']),
+    ...structuredItemsText(structured.risks, ['risk', 'status', 'mitigation']),
+    ...structuredItemsText(structured.nextActions, ['action', 'priority', 'reason']),
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 function normalizeStringList(value) {
@@ -555,6 +615,7 @@ export class ContextForgeStore {
         sensitivity TEXT,
         promotion_recommendation TEXT,
         source_event_ids_json TEXT NOT NULL DEFAULT '[]',
+        candidate_json TEXT NOT NULL DEFAULT '{}',
         status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'promoted', 'rejected', 'stale', 'snoozed')),
         created_at TEXT NOT NULL,
         reviewed_at TEXT,
@@ -694,6 +755,7 @@ export class ContextForgeStore {
     this.ensureColumn('memory_candidate_index', 'sensitivity', 'TEXT');
     this.ensureColumn('memory_candidate_index', 'promotion_recommendation', 'TEXT');
     this.ensureColumn('memory_candidate_index', 'source_event_ids_json', "TEXT NOT NULL DEFAULT '[]'");
+    this.ensureColumn('memory_candidate_index', 'candidate_json', "TEXT NOT NULL DEFAULT '{}'");
     this.ensureColumn('preference_occurrences', 'negative_count', 'INTEGER NOT NULL DEFAULT 0');
     this.ensureColumn('preference_occurrences', 'last_correction', 'TEXT');
     this.ensureColumn('preference_occurrences', 'review_reason', 'TEXT');
@@ -704,6 +766,7 @@ export class ContextForgeStore {
     this.ensureColumn('embedding_jobs', 'last_error', 'TEXT');
     this.ensureColumn('embedding_jobs', 'completed_at', 'TEXT');
     this.backfillMemoryCandidateIndexOnce();
+    this.backfillMemoryCandidateJsonOnce();
     this.backfillPreferenceOccurrencesOnce();
     this.ensureMemoryFts();
 
@@ -840,6 +903,7 @@ export class ContextForgeStore {
       checkpoint.todos.length ? `todos: ${checkpoint.todos.join('\n')}` : '',
       checkpoint.openQuestions.length ? `open questions: ${checkpoint.openQuestions.join('\n')}` : '',
       retrievalHooks.length ? `retrieval hooks: ${retrievalHooks.join(', ')}` : '',
+      structuredCheckpointEmbeddingText(checkpoint.structured || checkpoint.metadata?.structured),
     ]
       .filter(Boolean)
       .join('\n');
@@ -1461,6 +1525,46 @@ export class ContextForgeStore {
       .run(nowIso());
   }
 
+  backfillMemoryCandidateJsonOnce() {
+    const completed = this.db
+      .prepare("SELECT value FROM schema_meta WHERE key = 'memory_candidate_json_backfill_completed_at'")
+      .get();
+    if (completed?.value) {
+      return;
+    }
+    const rows = this.db
+      .prepare(`
+        SELECT
+          memory_candidate_index.id,
+          memory_candidate_index.candidate_index,
+          checkpoints.metadata_json
+        FROM memory_candidate_index
+        JOIN checkpoints ON checkpoints.id = memory_candidate_index.checkpoint_id
+        WHERE memory_candidate_index.candidate_json IS NULL
+           OR memory_candidate_index.candidate_json = '{}'
+      `)
+      .all();
+    const update = this.db.prepare('UPDATE memory_candidate_index SET candidate_json = ? WHERE id = ?');
+    for (const row of rows) {
+      const checkpointMetadata = parseJson(row.metadata_json, {});
+      const rawCandidate = Array.isArray(checkpointMetadata.memoryCandidates)
+        ? checkpointMetadata.memoryCandidates[row.candidate_index]
+        : null;
+      if (!rawCandidate) {
+        continue;
+      }
+      const candidate = normalizeCandidate(rawCandidate);
+      update.run(json(candidateJsonForIndex(rawCandidate, candidate), {}), row.id);
+    }
+    this.db
+      .prepare(`
+        INSERT INTO schema_meta (key, value)
+        VALUES ('memory_candidate_json_backfill_completed_at', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+      `)
+      .run(nowIso());
+  }
+
   backfillPreferenceOccurrencesOnce() {
     const completed = this.db
       .prepare("SELECT value FROM schema_meta WHERE key = 'preference_occurrences_backfill_completed_at'")
@@ -1520,9 +1624,9 @@ export class ContextForgeStore {
         id, checkpoint_id, session_id, conversation_id, scope_type, scope_key,
         candidate_index, candidate_key, candidate_content, candidate_reason,
         category, tags_json, importance, candidate_type, confidence, stability,
-        sensitivity, promotion_recommendation, source_event_ids_json, status, created_at
+        sensitivity, promotion_recommendation, source_event_ids_json, candidate_json, status, created_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
       ON CONFLICT(checkpoint_id, candidate_index) DO NOTHING
     `);
 
@@ -1549,6 +1653,7 @@ export class ContextForgeStore {
         candidate.sensitivity,
         candidate.promotionRecommendation,
         json(candidate.sourceEventIds, []),
+        json(candidateJsonForIndex(rawCandidate, candidate), {}),
         checkpoint.createdAt,
       );
       if (inserted.changes > 0 && isPreferenceCandidate(candidate)) {

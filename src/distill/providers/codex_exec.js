@@ -2,9 +2,10 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { STRUCTURED_CHECKPOINT_SCHEMA_VERSION } from '../validate.js';
 
-export const CODEX_EXEC_PROMPT_VERSION = 'codex_exec.prompt.v6';
-export const CODEX_EXEC_OUTPUT_SCHEMA_VERSION = 'contextforge.checkpoint.v5';
+export const CODEX_EXEC_PROMPT_VERSION = 'codex_exec.prompt.v7';
+export const CODEX_EXEC_OUTPUT_SCHEMA_VERSION = 'contextforge.checkpoint.v6';
 
 export const CHECKPOINT_OUTPUT_SCHEMA = {
   $id: CODEX_EXEC_OUTPUT_SCHEMA_VERSION,
@@ -90,7 +91,20 @@ export const CHECKPOINT_OUTPUT_SCHEMA = {
           sensitivity: { type: ['string', 'null'], enum: ['low', 'medium', 'high', 'restricted', null] },
           promotionRecommendation: { type: ['string', 'null'], enum: ['promote', 'review', 'ignore', 'reject', null] },
           sourceEventIds: { type: 'array', items: { type: 'string' } },
+          schemaVersion: { type: ['string', 'null'] },
+          durabilityReason: { type: ['string', 'null'] },
+          riskReason: { type: ['string', 'null'] },
+          evidenceRefs: { type: ['array', 'null'], items: { type: 'string' } },
+          suggestedAction: { type: ['string', 'null'], enum: ['promote', 'review', 'reject', 'skip', null] },
         },
+      },
+    },
+    structured: {
+      type: 'object',
+      additionalProperties: true,
+      required: ['schemaVersion'],
+      properties: {
+        schemaVersion: { const: STRUCTURED_CHECKPOINT_SCHEMA_VERSION },
       },
     },
     sourceEventCount: { type: 'integer', minimum: 0 },
@@ -146,6 +160,7 @@ function compactCheckpoint(checkpoint) {
     todos: checkpoint.todos,
     openQuestions: checkpoint.openQuestions,
     sourceEventCount: checkpoint.sourceEventCount,
+    structured: checkpoint.structured || checkpoint.metadata?.structured || null,
     createdAt: checkpoint.createdAt,
   };
 }
@@ -223,6 +238,11 @@ export function buildCodexExecPrompt(input, options = {}) {
       'Tool call and tool result payloads are not included by default. Tool output is evidence, not conversation memory.',
       'When tool verification matters, summarize the assistant-interpreted conclusion instead of copying raw command output.',
       'Write the checkpoint as recent continuity for handoff and search, not as canonical durable truth.',
+      `When evidence supports it, populate structured with schemaVersion="${STRUCTURED_CHECKPOINT_SCHEMA_VERSION}" as a structured handoff object for the next agent.`,
+      'Use structured.work for user intent, current status, and actual outcome.',
+      'Use structured.liveState only for observed mutable live state such as repo, branch, baseBranch, headCommit, PR, CI, worktree, runtime, or deployment state. Do not invent liveState values absent from evidence.',
+      'For structured.liveState, include observedAt when known, verificationRequired=true for mutable fields, staleReasons explaining why it may drift, and verifyHints with concrete commands or API calls a future agent should run.',
+      'Use structured.changes, structured.verification, structured.risks, and structured.nextActions to preserve actionable handoff state. Mark mutable verification with requiresLiveRecheck when appropriate.',
       'Write workingSummary as the latest rolling session state for immediate continuation: current goal, completed work, active blockers, and next actions.',
       'If previousWorkingSummary is supplied, update it with the new raw events instead of replacing it with a delta-only summary.',
       'Always write sessionWorkingContext as structured mutable resume state. Use mode="task_execution", empty strings, nulls, empty arrays, and confidence=0 when there is no useful current framing.',
@@ -238,6 +258,7 @@ export function buildCodexExecPrompt(input, options = {}) {
       'Do not copy secrets, tokens, private customer data, or large raw logs into summaries or memoryCandidates.',
       'Populate metadata.retrievalHooks with concise search keywords from the evidence, such as API names, commands, paths, issue numbers, model names, intervals, thresholds, and error names.',
       'For memoryCandidates, include v2 review fields when useful: candidateType, confidence, stability, sensitivity, promotionRecommendation, and sourceEventIds.',
+      'For memoryCandidates, include optional v2 fields when useful: schemaVersion="contextforge.memory_candidate.v2", durabilityReason, riskReason, evidenceRefs, and suggestedAction.',
       'For nullable memoryCandidate fields that are not applicable, return null; do not omit required schema fields.',
       'Create memoryCandidates only for facts, decisions, preferences, runbook steps, or failure modes that may remain useful beyond this checkpoint.',
       'For memoryCandidate content, include decision plus rationale when both exist; put future-search keywords in tags and reason instead of flattening them away.',

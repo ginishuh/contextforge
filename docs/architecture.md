@@ -212,6 +212,8 @@ Provider outputs should include:
 - `decisions`
 - `todos`
 - `openQuestions`
+- optional `structured` handoff state with
+  `schemaVersion: "contextforge.structured_checkpoint.v1"`
 - `memoryCandidates`
 - `sourceEventCount`
 - `provider`

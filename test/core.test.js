@@ -12,7 +12,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import Database from 'better-sqlite3';
 import { createCodexSdkPythonAutoPromoteAuditor } from '../src/audit/codex_sdk_python.js';
 import { createContextForge } from '../src/core.js';
-import { validateDistillOutput } from '../src/distill/validate.js';
+import { STRUCTURED_CHECKPOINT_SCHEMA_VERSION, validateDistillOutput } from '../src/distill/validate.js';
 import { createOpenAiEmbeddingProvider } from '../src/embeddings/index.js';
 import { createInterruptibleSleep, shouldSkipRecentFailedAutoDistill } from '../src/ingest/common.js';
 import { watchClaudeCodeSessions } from '../src/ingest/claude_code.js';
@@ -2897,6 +2897,75 @@ test('embedding dimension changes require an explicit forced rebuild', async () 
   assert.equal(rebuilt.dimensions, 2);
 });
 
+test('checkpoint embedding text flattens selected structured handoff fields', async () => {
+  const dataDir = await makeTempDir();
+  const store = new ContextForgeStore({ dataDir });
+  try {
+    const checkpoint = store.insertCheckpoint({
+      scopeType: 'repo',
+      scopeKey: 'repo-structured-embedding',
+      sessionId: 'structured-embedding-session',
+      summaryShort: 'Structured embedding checkpoint.',
+      summaryText: 'Structured embedding detail.',
+      decisions: [],
+      todos: [],
+      openQuestions: [],
+      provider: 'test',
+      metadata: {
+        structured: {
+          schemaVersion: STRUCTURED_CHECKPOINT_SCHEMA_VERSION,
+          work: {
+            intent: 'Index structured checkpoint handoff fields.',
+            status: 'verified',
+            outcome: 'Embedding text includes selected structured facts.',
+          },
+          liveState: {
+            repo: 'github.com/ginishuh/contextforge',
+            branch: 'feature/structured-checkpoints',
+            headCommit: 'abc1234',
+            prNumber: 119,
+            ciStatus: 'pass',
+          },
+          changes: [
+            {
+              type: 'storage',
+              name: 'candidate_json',
+              description: 'Preserve raw memory candidate fields.',
+            },
+          ],
+          verification: [
+            {
+              command: 'npm test',
+              result: 'pass',
+              details: 'structured checkpoint tests pass',
+            },
+          ],
+          risks: [
+            {
+              risk: 'Live state may be stale.',
+              mitigation: 'Recheck GitHub before acting.',
+            },
+          ],
+          nextActions: [
+            {
+              action: 'Open a PR.',
+              priority: 'medium',
+            },
+          ],
+        },
+      },
+    });
+    const text = store.embeddingTextForCheckpoint(checkpoint);
+    assert.match(text, /feature\/structured-checkpoints/);
+    assert.match(text, /PR #119/);
+    assert.match(text, /candidate_json/);
+    assert.match(text, /npm test pass/);
+    assert.doesNotMatch(text, /schemaVersion/);
+  } finally {
+    store.close();
+  }
+});
+
 test('OpenAI embeddings omit dimensions for legacy embedding models', async () => {
   let requestBody = null;
   const provider = createOpenAiEmbeddingProvider(
@@ -3327,6 +3396,28 @@ test('bootstrapContext includes latest checkpoints independently from search res
         todos: ['Recent todo.'],
         openQuestions: [],
         memoryCandidates: [],
+        structured: {
+          schemaVersion: STRUCTURED_CHECKPOINT_SCHEMA_VERSION,
+          work: {
+            intent: 'Preserve latest handoff independently from search ranking.',
+            status: 'verified',
+            outcome: 'Latest checkpoint should appear in handoff.latestHandoff.',
+          },
+          liveState: {
+            repo: 'github.com/example/mcp-repo',
+            branch: 'feature/handoff',
+            headCommit: 'abc1234',
+            ciStatus: 'pass',
+            observedAt: '2026-06-03T00:00:00Z',
+            verificationRequired: true,
+            staleReasons: ['branch, commit, and CI are mutable live state'],
+            verifyHints: ['git status --short --branch', 'gh pr view 123 --json statusCheckRollup'],
+          },
+          changes: [],
+          verification: [],
+          risks: [],
+          nextActions: [],
+        },
         sourceEventCount: input.rawEvents.length,
         metadata: { synthetic: true },
       }),
@@ -3361,6 +3452,15 @@ test('bootstrapContext includes latest checkpoints independently from search res
   assert.equal(bootstrap.results.some((item) => item.type === 'memory' && item.key === 'durable-bootstrap-hit'), true);
   assert.equal(bootstrap.handoff.latestCheckpointLimit, 1);
   assert.deepEqual(bootstrap.handoff.relatedScopeKeys, []);
+  assert.equal(bootstrap.handoff.latestHandoff.id, bootstrap.handoff.latestCheckpoints[0].id);
+  assert.equal(bootstrap.handoff.latestHandoff.structured.schemaVersion, STRUCTURED_CHECKPOINT_SCHEMA_VERSION);
+  assert.equal(bootstrap.handoff.latestHandoff.structured.liveState.branch, 'feature/handoff');
+  assert.equal(bootstrap.handoff.latestHandoff.structuredWarnings[0].code, 'live_state_may_be_stale');
+  assert.ok(bootstrap.handoff.latestHandoff.structuredWarnings[0].fields.includes('liveState.branch'));
+  assert.deepEqual(bootstrap.handoff.latestHandoff.structuredWarnings[0].verifyHints, [
+    'git status --short --branch',
+    'gh pr view 123 --json statusCheckRollup',
+  ]);
   assert.equal(bootstrap.handoff.latestCheckpoints.length, 1);
   assert.equal(bootstrap.handoff.latestCheckpoints[0].trust, 'credible_recent_handoff');
   assert.equal(bootstrap.handoff.latestCheckpoints[0].scope.scopeKey, 'repo-handoff');
@@ -3374,6 +3474,7 @@ test('bootstrapContext includes latest checkpoints independently from search res
     latestCheckpointLimit: 0,
   });
   assert.deepEqual(disabled.handoff.latestCheckpoints, []);
+  assert.equal(disabled.handoff.latestHandoff, null);
 });
 
 test('bootstrapContext can include latest checkpoints from related repo scopes', async () => {
@@ -4250,6 +4351,45 @@ test('distill output validation includes received types', () => {
       }),
     /decisions.*received string/,
   );
+  const legacy = validateDistillOutput({
+    summaryShort: 'Legacy checkpoint.',
+    summaryText: 'Legacy output has no structured payload.',
+    decisions: [],
+    todos: [],
+    openQuestions: [],
+    memoryCandidates: [],
+  });
+  assert.equal(legacy.structured, null);
+  const structured = validateDistillOutput({
+    summaryShort: 'Structured checkpoint.',
+    summaryText: 'Structured output has handoff state.',
+    decisions: [],
+    todos: [],
+    openQuestions: [],
+    memoryCandidates: [],
+    structured: {
+      schemaVersion: STRUCTURED_CHECKPOINT_SCHEMA_VERSION,
+      work: {
+        status: 'verified',
+      },
+    },
+  });
+  assert.equal(structured.structured.schemaVersion, STRUCTURED_CHECKPOINT_SCHEMA_VERSION);
+  assert.throws(
+    () =>
+      validateDistillOutput({
+        summaryShort: 'Invalid structured checkpoint.',
+        summaryText: 'Structured output has the wrong schema version.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [],
+        structured: {
+          schemaVersion: 'contextforge.structured_checkpoint.v999',
+        },
+      }),
+    /structured\.schemaVersion/,
+  );
 });
 
 test('distillCheckpoint records provider failures without deleting raw evidence', async () => {
@@ -4329,20 +4469,58 @@ test('codex_exec provider distills synthetic raw events through a runner', async
           openQuestions: [],
           memoryCandidates: [
             {
+              schemaVersion: 'contextforge.memory_candidate.v2',
               key: 'provider',
               content: 'codex_exec is available.',
               reason: 'Synthetic provider output.',
               category: 'note',
               tags: [],
-              importance: 0,
+              importance: 1,
               candidateType: null,
-              confidence: null,
-              stability: null,
+              confidence: 0.9,
+              stability: 0.9,
               sensitivity: null,
-              promotionRecommendation: null,
+              promotionRecommendation: 'promote',
               sourceEventIds: [],
+              durabilityReason: 'Provider contract details can guide future distill debugging.',
+              riskReason: 'This is synthetic test evidence, not an operational incident.',
+              evidenceRefs: ['test:codex_exec provider distills synthetic raw events through a runner'],
+              suggestedAction: 'promote',
             },
           ],
+          structured: {
+            schemaVersion: STRUCTURED_CHECKPOINT_SCHEMA_VERSION,
+            work: {
+              intent: 'Test the codex_exec provider path.',
+              status: 'verified',
+              outcome: 'Synthetic distill completed.',
+            },
+            liveState: {
+              repo: 'github.com/ginishuh/contextforge',
+              branch: 'feature/structured-checkpoints',
+              headCommit: 'synthetic',
+              observedAt: '2026-06-03T00:00:00Z',
+              verificationRequired: true,
+              staleReasons: ['branch and headCommit are mutable live state'],
+              verifyHints: ['git status --short --branch', 'git rev-parse HEAD'],
+            },
+            changes: [
+              {
+                type: 'provider',
+                name: 'codex_exec',
+                description: 'Synthetic provider schema accepted structured output.',
+              },
+            ],
+            verification: [
+              {
+                type: 'smoke',
+                result: 'pass',
+                details: 'Synthetic runner returned valid checkpoint JSON.',
+              },
+            ],
+            risks: [],
+            nextActions: [],
+          },
           sourceEventCount: 1,
           metadata: {
             providerNotes: 'synthetic provider output',
@@ -4379,24 +4557,60 @@ test('codex_exec provider distills synthetic raw events through a runner', async
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.model, 'gpt-test');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.reasoningEffort, 'low');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.timeoutMs, 1234);
-  assert.equal(checkpoint.metadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v6');
-  assert.equal(checkpoint.metadata.providerMetadata.codexExec.outputSchemaVersion, 'contextforge.checkpoint.v5');
+  assert.equal(checkpoint.metadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v7');
+  assert.equal(checkpoint.metadata.providerMetadata.codexExec.outputSchemaVersion, 'contextforge.checkpoint.v6');
+  assert.equal(checkpoint.structured.schemaVersion, STRUCTURED_CHECKPOINT_SCHEMA_VERSION);
+  assert.equal(checkpoint.metadata.structured.schemaVersion, STRUCTURED_CHECKPOINT_SCHEMA_VERSION);
+  assert.equal(checkpoint.metadata.providerMetadata.structured, undefined);
   assert.match(invocation.prompt, /Return exactly one JSON object/);
+  const promptPayload = JSON.parse(invocation.prompt.slice(invocation.prompt.indexOf('{')));
+  assert.equal(promptPayload.requestedOutputSchema.structured.schemaVersion, STRUCTURED_CHECKPOINT_SCHEMA_VERSION);
+  assert.match(invocation.prompt, /structured\.liveState/);
   assert.deepEqual(invocation.args.slice(0, 2), ['exec', '--skip-git-repo-check']);
   assert.ok(invocation.args.includes('--output-schema'));
   assert.ok(invocation.args.includes('--output-last-message'));
   assert.ok(invocation.args.includes('-c'));
   assert.ok(invocation.args.includes('model_reasoning_effort="low"'));
   assert.equal(invocation.timeoutMs, 1234);
-  assert.deepEqual(schema.required, Object.keys(schema.properties));
+  assert.equal(schema.required.includes('structured'), false);
+  assert.ok(schema.properties.structured);
+  assert.equal(schema.properties.structured.properties.schemaVersion.const, STRUCTURED_CHECKPOINT_SCHEMA_VERSION);
   const candidateSchema = schema.properties.memoryCandidates.items;
-  assert.deepEqual(candidateSchema.required, Object.keys(candidateSchema.properties));
+  assert.ok(candidateSchema.properties.durabilityReason);
+  assert.ok(candidateSchema.properties.riskReason);
+  assert.deepEqual(candidateSchema.properties.evidenceRefs.type, ['array', 'null']);
+  assert.ok(candidateSchema.properties.suggestedAction);
   assert.ok(schema.properties.sessionWorkingContext);
   assert.deepEqual(
     schema.properties.sessionWorkingContext.required,
     Object.keys(schema.properties.sessionWorkingContext.properties),
   );
   assert.deepEqual(schema.properties.metadata.required, ['providerNotes', 'retrievalHooks']);
+  const indexedCandidate = app.listMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'repo-codex',
+    checkpointId: checkpoint.id,
+  })[0];
+  assert.equal(indexedCandidate.candidate.schemaVersion, 'contextforge.memory_candidate.v2');
+  assert.equal(indexedCandidate.candidate.durabilityReason, 'Provider contract details can guide future distill debugging.');
+  assert.equal(indexedCandidate.candidate.riskReason, 'This is synthetic test evidence, not an operational incident.');
+  assert.deepEqual(indexedCandidate.candidate.evidenceRefs, [
+    'test:codex_exec provider distills synthetic raw events through a runner',
+  ]);
+  assert.equal(indexedCandidate.candidate.suggestedAction, 'promote');
+  const suggestions = await app.suggestMemoryPromotions({
+    scope: 'repo',
+    scopeKey: 'repo-codex',
+    checkpointId: checkpoint.id,
+    trigger: 'manual_closeout',
+  });
+  assert.equal(suggestions.proposals[0].whyDurable, 'Provider contract details can guide future distill debugging.');
+  assert.equal(suggestions.proposals[0].riskReason, 'This is synthetic test evidence, not an operational incident.');
+  assert.equal(suggestions.proposals[0].recommendedAction, 'ask_user');
+  assert.equal(suggestions.proposals[0].providerSuggestedAction, 'promote');
+  assert.deepEqual(suggestions.proposals[0].evidence.evidenceRefs, [
+    'test:codex_exec provider distills synthetic raw events through a runner',
+  ]);
 
   const runs = app.listDistillRuns({
     scope: 'repo',
@@ -4404,9 +4618,9 @@ test('codex_exec provider distills synthetic raw events through a runner', async
     sessionId: 'codex-session',
   });
   assert.equal(runs[0].status, 'succeeded');
-  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v6');
-  assert.equal(runs[0].inputMetadata.providerMetadata.outputSchemaVersion, 'contextforge.checkpoint.v5');
-  assert.equal(runs[0].outputMetadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v6');
+  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v7');
+  assert.equal(runs[0].inputMetadata.providerMetadata.outputSchemaVersion, 'contextforge.checkpoint.v6');
+  assert.equal(runs[0].outputMetadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v7');
 });
 
 test('codex_exec records JSON brace fallback recovery metadata', async () => {
@@ -4570,6 +4784,100 @@ test('runtime settings are DB-backed, redacted, and hot-apply to session status'
   assert.equal(status.thresholds.minIntervalMs, 1);
   assert.equal(status.thresholds.charThreshold, 1);
   assert.equal(status.shouldDistill, true);
+});
+
+test('codex_exec prompt preserves previous structured checkpoint handoff', async () => {
+  const dataDir = await makeTempDir();
+  const invocations = [];
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'codex_exec',
+      CONTEXTFORGE_CODEX_EXEC_COMMAND: 'codex-fake',
+    },
+    cwd: process.cwd(),
+    codexExecRunner: async (args) => {
+      invocations.push(args);
+      const pass = invocations.length;
+      return {
+        stdout: JSON.stringify({
+          summaryShort: `Structured checkpoint pass ${pass}.`,
+          summaryText: `Structured checkpoint detail pass ${pass}.`,
+          workingSummary: `Working summary pass ${pass}.`,
+          sessionWorkingContext: {
+            mode: 'task_execution',
+            currentTask: 'Preserve previous structured checkpoint.',
+            currentUserIntent: 'Verify structured handoff continuity.',
+            targetSubject: null,
+            sourceSubject: null,
+            lastUserCorrection: null,
+            openQuestion: null,
+            nonGoals: [],
+            avoidMisreadings: [],
+            confidence: 0.9,
+          },
+          decisions: [],
+          todos: [],
+          openQuestions: [],
+          memoryCandidates: [],
+          structured: {
+            schemaVersion: STRUCTURED_CHECKPOINT_SCHEMA_VERSION,
+            work: {
+              intent: `Structured handoff pass ${pass}.`,
+              status: pass === 1 ? 'in_progress' : 'verified',
+              outcome: `Pass ${pass} stored structured handoff.`,
+            },
+            liveState: {
+              branch: `feature/pass-${pass}`,
+              observedAt: '2026-06-03T00:00:00Z',
+              verificationRequired: true,
+              staleReasons: ['branch is mutable'],
+              verifyHints: ['git status --short --branch'],
+            },
+            changes: [],
+            verification: [],
+            risks: [],
+            nextActions: [],
+          },
+          sourceEventCount: 1,
+          provider: 'codex_exec',
+          metadata: {
+            providerNotes: 'synthetic structured continuity',
+            retrievalHooks: ['structured checkpoint continuity'],
+          },
+        }),
+      };
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-structured-previous',
+    sessionId: 'structured-previous-session',
+    role: 'assistant',
+    content: 'First structured checkpoint event.',
+  });
+  const first = await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'repo-structured-previous',
+    sessionId: 'structured-previous-session',
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-structured-previous',
+    sessionId: 'structured-previous-session',
+    role: 'assistant',
+    content: 'Second structured checkpoint event.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'repo-structured-previous',
+    sessionId: 'structured-previous-session',
+  });
+
+  const secondPromptPayload = JSON.parse(invocations[1].prompt.slice(invocations[1].prompt.indexOf('{')));
+  assert.equal(secondPromptPayload.previousCheckpoint.id, first.id);
+  assert.equal(secondPromptPayload.previousCheckpoint.structured.schemaVersion, STRUCTURED_CHECKPOINT_SCHEMA_VERSION);
+  assert.equal(secondPromptPayload.previousCheckpoint.structured.work.status, 'in_progress');
 });
 
 test('openai_compatible provider distills through a fake DeepSeek-style chat completions endpoint', async () => {
@@ -4942,8 +5250,8 @@ test('codex_exec parse failures preserve raw evidence', async () => {
   });
   assert.equal(runs[0].status, 'failed');
   assert.equal(runs[0].outputMetadata.providerFailed, true);
-  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v6');
-  assert.equal(runs[0].outputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v6');
+  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v7');
+  assert.equal(runs[0].outputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v7');
 });
 
 test('bootstrapContext returns semantic retrieval with trust and verification hints', async () => {
@@ -5072,6 +5380,32 @@ test('syncResumeContext returns handoff context without promotion proposals', as
         decisions: ['Use checkpoint handoff for prior intent.'],
         todos: ['Verify CI before acting.'],
         openQuestions: [],
+        structured: {
+          schemaVersion: STRUCTURED_CHECKPOINT_SCHEMA_VERSION,
+          work: {
+            intent: 'Resume usage observability verification.',
+            status: 'in_progress',
+            outcome: 'Next agent should verify CI live.',
+          },
+          liveState: {
+            prNumber: 321,
+            ciStatus: 'unknown',
+            observedAt: '2026-06-03T00:00:00Z',
+            verificationRequired: true,
+            staleReasons: ['PR and CI state can change after checkpoint creation'],
+            verifyHints: ['gh pr view 321 --json statusCheckRollup'],
+          },
+          changes: [],
+          verification: [],
+          risks: [],
+          nextActions: [
+            {
+              action: 'Verify CI before acting.',
+              priority: 'high',
+              requiresLiveVerification: true,
+            },
+          ],
+        },
         sessionWorkingContext: {
           currentTask: 'Continue usage observability closeout verification.',
           currentUserIntent: 'Resume unfinished PR verification without proposing memory promotions.',
@@ -5125,6 +5459,8 @@ test('syncResumeContext returns handoff context without promotion proposals', as
   });
 
   assert.equal(result.kind, 'resume_context');
+  assert.equal(result.handoff.latestHandoff.structured.work.status, 'in_progress');
+  assert.equal(result.handoff.latestHandoff.structuredWarnings[0].code, 'live_state_may_be_stale');
   assert.equal(result.handoff.structuredWorkingContext.type, 'session_working_context');
   assert.equal(result.handoff.structuredWorkingContext.trust, 'mutable_session_state');
   assert.match(result.handoff.structuredWorkingContext.currentTask, /usage observability/);
