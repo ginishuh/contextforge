@@ -18,7 +18,7 @@ import { createOpenAiEmbeddingProvider } from '../src/embeddings/index.js';
 import { createInterruptibleSleep, shouldSkipRecentFailedAutoDistill } from '../src/ingest/common.js';
 import { watchClaudeCodeSessions } from '../src/ingest/claude_code.js';
 import { ingestCodexRolloutFile, watchCodexSessions } from '../src/ingest/codex.js';
-import { ingestAgentRoutedSessions, ingestAgentSessions, listAgentAdapters } from '../src/ingest/agents.js';
+import { ingestAgentRoutedSessions, ingestAgentSessions, listAgentAdapters, watchAgentRoutedSessions } from '../src/ingest/agents.js';
 import { searchMemories } from '../src/retrieval/search.js';
 import { REMOTE_METHODS } from '../src/remote/client.js';
 import { startContextForgeServer } from '../src/server.js';
@@ -1800,6 +1800,81 @@ test('Claude Code router service installer creates an agent-level router unit', 
   assert.doesNotMatch(unit, /--repoPath/);
 });
 
+test('unified agent router service installer creates one auto-detecting router unit', async () => {
+  const homeRoot = await makeTempDir();
+  const home = path.join(homeRoot, 'home with spaces');
+  await fs.mkdir(home, { recursive: true });
+  const registryPath = path.join(home, 'repos.json');
+  const fakeBin = path.join(home, 'bin');
+  const systemctlLog = path.join(home, 'systemctl.log');
+  await fs.mkdir(fakeBin, { recursive: true });
+  await fs.writeFile(
+    registryPath,
+    JSON.stringify({
+      repos: [
+        {
+          name: 'repo-a',
+          repoPath: '/work/repo-a',
+          scopeKey: 'github.com/example/repo-a',
+        },
+        {
+          name: 'repo-b',
+          repoPath: '/work/repo-b',
+          scopeKey: 'github.com/example/repo-b',
+          adapters: ['cursor_cli'],
+        },
+      ],
+    }),
+  );
+  await fs.writeFile(
+    path.join(fakeBin, 'systemctl'),
+    `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> ${JSON.stringify(systemctlLog)}\n`,
+    { mode: 0o755 },
+  );
+
+  const result = await execFileAsync(
+    'bash',
+    [
+      'scripts/install-agent-router-service.sh',
+      '--name',
+      'all-agents',
+      '--repo-registry',
+      registryPath,
+      '--remote-url',
+      'https://memory.example.com',
+      '--token-env-file',
+      path.join(home, 'token.env'),
+      '--distill',
+      'false',
+    ],
+    {
+      env: {
+        ...process.env,
+        HOME: home,
+        PATH: `${fakeBin}:${process.env.PATH}`,
+      },
+    },
+  );
+
+  const unit = await fs.readFile(
+    path.join(home, '.config', 'systemd', 'user', 'contextforge-agent-router-all-agents.service'),
+    'utf8',
+  );
+  assert.match(result.stdout, /Installed unified agent router unit:/);
+  assert.match(result.stdout, /Enabled repos: 2/);
+  assert.match(result.stdout, /Requested adapters: auto-detect installed adapters/);
+  assert.match(unit, /ingestAgentRoutedSessions/);
+  assert.doesNotMatch(unit, /--adapters/);
+  assert.match(unit, /WorkingDirectory="/);
+  assert.match(unit, /--codexSessionsDir/);
+  assert.match(unit, /--claudeCodeProjectsDir/);
+  assert.match(unit, /--opencodeDb/);
+  assert.match(unit, /--grokSessionsDir/);
+  assert.match(unit, /--cursorProjectsDir/);
+  assert.match(unit, /Environment=CONTEXTFORGE_WATCH_STATE_DIR=%h\/\.local\/state\/contextforge\/watch/);
+  assert.match(unit, new RegExp(`--repoRegistry "${registryPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`));
+});
+
 test('CLI reports invalid metadata JSON clearly', async () => {
   const dataDir = await makeTempDir();
   const env = { ...process.env, CONTEXTFORGE_DATA_DIR: dataDir };
@@ -2922,6 +2997,50 @@ test('Cursor CLI routed ingest matches project names without lossy path decoding
   assert.equal(events.length, 2);
 });
 
+test('multi-agent routed ingest auto-detects installed adapters for one-shot scans', async () => {
+  const dataDir = await makeTempDir();
+  const root = await makeTempDir();
+  const repo = await makeTempDir();
+  const codexSessionsDir = path.join(root, 'codex');
+  const rolloutDir = path.join(codexSessionsDir, '2026', '06', '04');
+  await fs.mkdir(rolloutDir, { recursive: true });
+  await writeSyntheticCodexRollout(path.join(rolloutDir, 'rollout-one-shot.jsonl'), 'one-shot-codex', repo);
+  const registryPath = path.join(root, 'repos.json');
+  await fs.writeFile(
+    registryPath,
+    JSON.stringify({
+      repos: [
+        {
+          name: 'one-shot-repo',
+          repoPath: repo,
+          scopeKey: 'github.com/example/one-shot-repo',
+        },
+      ],
+    }),
+  );
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+    },
+    cwd: process.cwd(),
+  });
+
+  const result = await ingestAgentRoutedSessions(app, {
+    codexSessionsDir,
+    claudeCodeProjectsDir: path.join(root, 'missing-claude'),
+    grokSessionsDir: path.join(root, 'missing-grok'),
+    cursorProjectsDir: path.join(root, 'missing-cursor'),
+    opencodeDb: path.join(root, 'missing-opencode', 'opencode.db'),
+    repoRegistry: registryPath,
+    distill: 'never',
+  });
+
+  assert.deepEqual(result.adapters, ['codex']);
+  assert.equal(result.inactiveAdapters.length, 4);
+  assert.equal(result.filesScanned, 1);
+  assert.equal(result.appendedEvents, 2);
+});
+
 test('OpenCode adapter rejects ambiguous --file ingest', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({
@@ -2942,6 +3061,229 @@ test('OpenCode adapter rejects ambiguous --file ingest', async () => {
       }),
     /--file is not supported for opencode/,
   );
+});
+
+test('multi-agent routed watch isolates bad units and continues ingesting good files', async () => {
+  const dataDir = await makeTempDir();
+  const root = await makeTempDir();
+  const repo = await makeTempDir();
+  const watchStateDir = await makeTempDir();
+  const codexSessionsDir = path.join(root, 'codex');
+  const rolloutDir = path.join(codexSessionsDir, '2026', '06', '04');
+  await fs.mkdir(rolloutDir, { recursive: true });
+  await writeSyntheticCodexRollout(path.join(rolloutDir, 'rollout-good.jsonl'), 'isolated-good-codex', repo);
+  await fs.writeFile(
+    path.join(rolloutDir, 'rollout-bad.jsonl'),
+    `${JSON.stringify({
+      timestamp: '2026-04-25T00:00:02.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: 'This file has no session metadata.' }],
+      },
+    })}\n`,
+  );
+  const registryPath = path.join(root, 'repos.json');
+  await fs.writeFile(
+    registryPath,
+    JSON.stringify({
+      repos: [
+        {
+          name: 'watch-repo',
+          repoPath: repo,
+          scopeKey: 'github.com/example/isolated-watch-repo',
+        },
+      ],
+    }),
+  );
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+    },
+    cwd: process.cwd(),
+  });
+
+  const result = await watchAgentRoutedSessions(app, {
+    adapters: 'codex',
+    codexSessionsDir,
+    repoRegistry: registryPath,
+    watchStateDir,
+    distill: 'never',
+    iterations: 1,
+    intervalMs: 1,
+    watchVerbose: true,
+  });
+
+  assert.equal(result.totals.filesScanned, 2);
+  assert.equal(result.totals.appendedEvents, 2);
+  const fileResults = result.results[0].adapterResults[0].fileResults;
+  assert.equal(fileResults.some((fileResult) => fileResult.skippedReason === 'unit_error'), true);
+  const events = app.listRawEvents({
+    scope: 'repo',
+    scopeKey: 'github.com/example/isolated-watch-repo',
+    sessionId: 'codex:isolated-good-codex',
+  });
+  assert.equal(events.length, 2);
+});
+
+test('multi-agent routed watch auto-detects installed adapters and uses incremental state', async () => {
+  const dataDir = await makeTempDir();
+  const root = await makeTempDir();
+  const repo = await makeTempDir();
+  const watchStateDir = await makeTempDir();
+  const codexSessionsDir = path.join(root, 'codex');
+  const missingClaudeCodeProjectsDir = path.join(root, 'missing-claude');
+  const missingGrokSessionsDir = path.join(root, 'missing-grok');
+  const missingCursorProjectsDir = path.join(root, 'missing-cursor');
+  const missingOpenCodeDb = path.join(root, 'missing-opencode', 'opencode.db');
+  const rolloutDir = path.join(codexSessionsDir, '2026', '06', '04');
+  const rolloutFile = path.join(rolloutDir, 'rollout-unified-watch.jsonl');
+  await fs.mkdir(rolloutDir, { recursive: true });
+  await writeSyntheticCodexRollout(rolloutFile, 'unified-watch-codex', repo);
+
+  const registryPath = path.join(root, 'repos.json');
+  await fs.writeFile(
+    registryPath,
+    JSON.stringify({
+      repos: [
+        {
+          name: 'watch-repo',
+          repoPath: repo,
+          scopeKey: 'github.com/example/watch-repo',
+        },
+      ],
+    }),
+  );
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+    },
+    cwd: process.cwd(),
+  });
+
+  const first = await watchAgentRoutedSessions(app, {
+    codexSessionsDir,
+    claudeCodeProjectsDir: missingClaudeCodeProjectsDir,
+    grokSessionsDir: missingGrokSessionsDir,
+    cursorProjectsDir: missingCursorProjectsDir,
+    opencodeDb: missingOpenCodeDb,
+    repoRegistry: registryPath,
+    watchStateDir,
+    distill: 'never',
+    iterations: 1,
+    intervalMs: 1,
+    watchVerbose: true,
+  });
+
+  assert.deepEqual(first.adapters, ['codex']);
+  assert.deepEqual(
+    first.inactiveAdapters.map((adapter) => [adapter.adapter, adapter.reason]).sort(),
+    [
+      ['claude_code', 'missing_root'],
+      ['cursor_cli', 'missing_root'],
+      ['grok', 'missing_root'],
+      ['opencode', 'missing_root'],
+    ],
+  );
+  assert.equal(first.totals.filesScanned, 1);
+  assert.equal(first.totals.appendedEvents, 2);
+  assert.equal(first.results[0].adapterResults[0].stateUpdated, true);
+
+  const second = await watchAgentRoutedSessions(app, {
+    codexSessionsDir,
+    claudeCodeProjectsDir: missingClaudeCodeProjectsDir,
+    grokSessionsDir: missingGrokSessionsDir,
+    cursorProjectsDir: missingCursorProjectsDir,
+    opencodeDb: missingOpenCodeDb,
+    repoRegistry: registryPath,
+    watchStateDir,
+    distill: 'never',
+    iterations: 1,
+    intervalMs: 1,
+    watchVerbose: true,
+  });
+
+  assert.deepEqual(second.adapters, ['codex']);
+  assert.equal(second.totals.filesScanned, 1);
+  assert.equal(second.totals.filesChanged, 0);
+  assert.equal(second.totals.appendedEvents, 0);
+  assert.equal(second.results[0].adapterResults[0].stateLoaded, true);
+
+  await fs.appendFile(rolloutFile, '{"malformed":\n');
+  await appendSyntheticCodexAssistantMessage(rolloutFile, 'Recovered after a malformed complete JSONL line.');
+  const third = await watchAgentRoutedSessions(app, {
+    codexSessionsDir,
+    claudeCodeProjectsDir: missingClaudeCodeProjectsDir,
+    grokSessionsDir: missingGrokSessionsDir,
+    cursorProjectsDir: missingCursorProjectsDir,
+    opencodeDb: missingOpenCodeDb,
+    repoRegistry: registryPath,
+    watchStateDir,
+    distill: 'never',
+    iterations: 1,
+    intervalMs: 1,
+    watchVerbose: true,
+  });
+
+  assert.equal(third.totals.filesChanged, 1);
+  assert.equal(third.totals.appendedEvents, 1);
+  assert.equal(
+    third.results[0].adapterResults[0].fileResults[0].warnings.some(
+      (warning) => warning.type === 'malformed_json_line',
+    ),
+    true,
+  );
+
+  const events = app.listRawEvents({
+    scope: 'repo',
+    scopeKey: 'github.com/example/watch-repo',
+    sessionId: 'codex:unified-watch-codex',
+  });
+  assert.equal(events.length, 3);
+});
+
+test('multi-agent routed watch reports explicitly requested missing adapters without scanning files', async () => {
+  const dataDir = await makeTempDir();
+  const root = await makeTempDir();
+  const repo = await makeTempDir();
+  const missingCursorProjectsDir = path.join(root, 'missing-cursor');
+  const registryPath = path.join(root, 'repos.json');
+  await fs.writeFile(
+    registryPath,
+    JSON.stringify({
+      repos: [
+        {
+          name: 'watch-repo',
+          repoPath: repo,
+          scopeKey: 'github.com/example/watch-repo',
+          adapters: ['cursor_cli'],
+        },
+      ],
+    }),
+  );
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+    },
+    cwd: process.cwd(),
+  });
+
+  const result = await watchAgentRoutedSessions(app, {
+    adapters: 'cursor_cli',
+    cursorProjectsDir: missingCursorProjectsDir,
+    repoRegistry: registryPath,
+    distill: 'never',
+    iterations: 1,
+    intervalMs: 1,
+    watchVerbose: true,
+  });
+
+  assert.deepEqual(result.adapters, ['cursor_cli']);
+  assert.equal(result.inactiveAdapters.length, 0);
+  assert.equal(result.totals.filesScanned, 0);
+  assert.equal(result.results[0].adapterResults[0].skippedAdapter, true);
+  assert.equal(result.results[0].adapterResults[0].skippedReason, 'missing_root');
 });
 
 test('repoPath ingest skips Claude Code transcripts from other working directories', async () => {

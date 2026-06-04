@@ -101,7 +101,7 @@ export function normalizeCodexRolloutRecord(record, context, options = {}) {
   };
 }
 
-function parseCodexRolloutLines(filePath, lines, options = {}, initialContext = {}) {
+export function parseCodexRolloutLines(filePath, lines, options = {}, initialContext = {}) {
   const nativeSessionId =
     initialContext.nativeSessionId || (options.sessionId ? stripCodexSessionPrefix(options.sessionId) : null);
   const sessionId = initialContext.sessionId || (nativeSessionId ? codexSessionId(nativeSessionId) : null);
@@ -120,7 +120,20 @@ function parseCodexRolloutLines(filePath, lines, options = {}, initialContext = 
   for (const line of lines) {
     context.lineNumber += 1;
     if (!line.trim()) continue;
-    const record = JSON.parse(line);
+    let record;
+    try {
+      record = JSON.parse(line);
+    } catch (error) {
+      if (!options.recoverMalformedJsonl) {
+        throw error;
+      }
+      warnings.push({
+        type: 'malformed_json_line',
+        lineNumber: context.lineNumber,
+        message: error.message,
+      });
+      continue;
+    }
     const event = normalizeCodexRolloutRecord(record, context, options);
     if (event) {
       events.push(event);
