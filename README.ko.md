@@ -40,6 +40,9 @@ live source > durable memory > checkpoint handoff > memory_candidate
   `evidenceRefs`, `suggestedAction`을 보존한다.
 - 자동승격 감사는 distill 모델과 분리된다. `codex_exec` 또는
   `codex_sdk_python` 감사 provider를 사용할 수 있다.
+- agent adapter registry가 Codex, Claude Code, OpenCode, Grok, Cursor CLI
+  5종 built-in adapter를 제공한다. 새 에이전트는 registry에 추가하는
+  방식으로 확장한다.
 
 ## 권장 구조
 
@@ -47,7 +50,7 @@ live source > durable memory > checkpoint handoff > memory_candidate
 권장한다.
 
 ```text
-Codex / Claude Code / OpenClaw
+Codex / Claude Code / OpenCode / Grok / Cursor CLI
           |
       MCP tools / CLI
           |
@@ -59,6 +62,50 @@ Codex / Claude Code / OpenClaw
 ```
 
 단일 머신에서만 쓸 때는 `project-local` 또는 `local` storage로 충분하다.
+
+## Multi-Agent Ingest
+
+현재 built-in adapter는 5종이다.
+
+```text
+codex, claude_code, opencode, grok, cursor_cli
+```
+
+확인:
+
+```bash
+node src/cli.js listAgentAdapters
+```
+
+여러 에이전트 session store를 한 번에 repo registry로 라우팅할 수 있다.
+
+```bash
+node src/cli.js ingestAgentRoutedSessions \
+  --adapters codex,claude_code,opencode,grok,cursor_cli \
+  --codexSessionsDir ~/.codex/sessions \
+  --claudeCodeProjectsDir ~/.claude/projects \
+  --opencodeDb ~/.local/share/opencode/opencode.db \
+  --grokSessionsDir ~/.grok/sessions \
+  --cursorProjectsDir ~/.cursor/projects \
+  --repoRegistry ~/.config/contextforge/repos.json \
+  --sinceMinutes 1440 \
+  --distill auto
+```
+
+핵심 규칙:
+
+- 구별은 `sourceAgent`, `sourceAdapter`, `nativeSessionId`, prefixed
+  `sessionId`로 한다.
+- 참고는 repo `scopeKey` 기준으로 한다. 같은 repo scope의 durable memory와
+  checkpoint handoff는 에이전트 간 공유된다.
+- `rawTail`, working context, closeout/audit source는 exact `sessionId` 기준으로
+  유지한다. 이 부분은 cross-agent로 섞지 않는다.
+- memory candidate와 감사 UI도 같은 source provenance를 보여준다. 후보를
+  승격하기 전에 어느 agent가 만든 후보인지 확인할 수 있다.
+
+`ingestAgentRoutedSessions --watch`는 registry 기반 supervisor loop로 쓸 수
+있다. 다만 1차 구현은 idempotent 재스캔 방식이고, Codex/Claude 전용 watcher의
+incremental byte cursor 공통화는 별도 후속 작업이다.
 
 ## 빠른 시작
 
@@ -269,6 +316,9 @@ node src/cli.js bootstrapContext \
 
 - `handoff.latestHandoff`: 최신 checkpoint handoff. 검색 결과와 분리되어
   deterministic하게 제공된다.
+- `handoff.latestByAgent`: 같은 repo scope에서 agent별 최신 checkpoint.
+  Codex, Claude Code, OpenCode, Grok, Cursor CLI가 섞여 작업할 때 각 원천의
+  최신 handoff를 구분해 볼 수 있다.
 - `handoff.latestCheckpoints`: 최근 checkpoint 목록.
 - `results`: durable memory, checkpoint, memory candidate 검색 결과.
 - `workingSummary`: sessionId를 알 때 가져오는 현재 세션 resume state.
@@ -368,9 +418,10 @@ ContextForge MCP는 repo/shared/local scope를 명시적으로 다룬다.
 3. `suggest_memory_promotions` 또는 `list_memory_candidates`로 후보를 검토한다.
 4. stable하고 비밀이 아닌 사실만 `promote_memory_candidate`로 승격한다.
 
-`bootstrap_context`는 세션을 만들지 않는다. Codex/Claude adapter가 ingest한
-세션을 닫을 때는 새 `cf_...` 세션을 만들지 말고 기존 `codex:<id>` 또는
-`claude_code:<id>`를 사용해야 한다.
+`bootstrap_context`는 세션을 만들지 않는다. adapter가 ingest한 세션을 닫을
+때는 새 `cf_...` 세션을 만들지 말고 기존 `codex:<id>`,
+`claude_code:<id>`, `opencode:<id>`, `grok:<id>`, `cursor_cli:<id>` 같은
+adapter-prefixed session id를 사용해야 한다.
 
 ## Embeddings
 

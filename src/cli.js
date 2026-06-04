@@ -14,6 +14,12 @@ import {
   watchCodexRoutedSessions,
   watchCodexSessions,
 } from './ingest/codex.js';
+import {
+  ingestAgentRoutedSessions,
+  ingestAgentSessions,
+  listAgentAdapters,
+  watchAgentRoutedSessions,
+} from './ingest/agents.js';
 import { startContextForgeServer } from './server.js';
 
 function parseArgs(argv) {
@@ -127,8 +133,14 @@ function toCoreOptions(options) {
     ttlDays: options.ttlDays == null ? undefined : Number(options.ttlDays),
     file: options.file,
     repoRegistry: options.repoRegistry || options.registry || options.repoRegistryFile,
+    adapters: options.adapters || options.adapter,
     sessionsDir: options.sessionsDir,
+    codexSessionsDir: options.codexSessionsDir,
+    grokSessionsDir: options.grokSessionsDir,
     projectsDir: options.projectsDir,
+    claudeCodeProjectsDir: options.claudeCodeProjectsDir,
+    cursorProjectsDir: options.cursorProjectsDir,
+    opencodeDb: options.opencodeDb || options.db,
     distill: options.distill,
     maxContentChars: options.maxContentChars == null ? undefined : Number(options.maxContentChars),
     sinceMinutes: options.sinceMinutes == null ? undefined : Number(options.sinceMinutes),
@@ -281,6 +293,17 @@ async function main() {
             },
           })
         : ingestClaudeCodeRoutedSessions(app, coreOptions),
+    listAgentAdapters: () => listAgentAdapters(),
+    ingestAgentSessions: (app, coreOptions) => ingestAgentSessions(app, coreOptions),
+    ingestAgentRoutedSessions: (app, coreOptions) =>
+      coreOptions.watch
+        ? watchAgentRoutedSessions(app, {
+            ...coreOptions,
+            onResult: (result) => {
+              console.log(JSON.stringify(result));
+            },
+          })
+        : ingestAgentRoutedSessions(app, coreOptions),
   };
 
   if (!command || command === 'help' || command === '--help') {

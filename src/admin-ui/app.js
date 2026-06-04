@@ -590,13 +590,15 @@ $('#loadCandidates').addEventListener('click', async (event) => {
 function candidateItem(candidate, index) {
   const action = auditedActionLabel(candidate.recommendedAction);
   const decision = auditDecisionLabel(candidate.audit);
+  const sourceAgent = candidate.evidence?.sourceAgent || candidate.evidence?.sourceProvenance?.sourceAgent || '';
+  const sourceText = sourceAgent ? ` · ${sourceAgent}` : '';
   const risks = Array.isArray(candidate.audit?.riskCodes) && candidate.audit.riskCodes.length
     ? ` · 위험 ${candidate.audit.riskCodes.join(', ')}`
     : '';
   return `<article class="item">
     <header><span class="item-title"><input type="checkbox" data-candidate-select="${index}" aria-label="후보 선택" /><strong>${escapeHtml(candidate.key)}</strong></span><span class="muted">${escapeHtml(action)} · ${escapeHtml(decision)}</span></header>
     <p>${escapeHtml(candidate.content.slice(0, 220))}</p>
-    <p class="muted">GPT 감사 후보 · ${escapeHtml(candidate.category || 'note')} · ${escapeHtml(candidate.auditReason || candidate.whyDurable || '')}${escapeHtml(risks)}</p>
+    <p class="muted">GPT 감사 후보${escapeHtml(sourceText)} · ${escapeHtml(candidate.category || 'note')} · ${escapeHtml(candidate.auditReason || candidate.whyDurable || '')}${escapeHtml(risks)}</p>
     <div class="actions">
       <button data-candidate="${index}">상세</button>
       <button data-promote="${index}" ${candidate.recommendedAction === 'promote' ? '' : 'disabled'}>승격</button>

@@ -18,6 +18,7 @@ import { createOpenAiEmbeddingProvider } from '../src/embeddings/index.js';
 import { createInterruptibleSleep, shouldSkipRecentFailedAutoDistill } from '../src/ingest/common.js';
 import { watchClaudeCodeSessions } from '../src/ingest/claude_code.js';
 import { ingestCodexRolloutFile, watchCodexSessions } from '../src/ingest/codex.js';
+import { ingestAgentRoutedSessions, ingestAgentSessions, listAgentAdapters } from '../src/ingest/agents.js';
 import { searchMemories } from '../src/retrieval/search.js';
 import { REMOTE_METHODS } from '../src/remote/client.js';
 import { startContextForgeServer } from '../src/server.js';
@@ -173,6 +174,142 @@ async function writeSyntheticClaudeCodeTranscript(filePath, sessionId = 'claude-
     },
   ];
   await fs.writeFile(filePath, `${records.map((record) => JSON.stringify(record)).join('\n')}\n`);
+}
+
+async function writeSyntheticGrokChatHistory(
+  sessionsDir,
+  sessionId = 'grok-session',
+  cwd = path.dirname(sessionsDir),
+) {
+  const sessionDir = path.join(sessionsDir, encodeURIComponent(cwd), sessionId);
+  const file = path.join(sessionDir, 'chat_history.jsonl');
+  const records = [
+    {
+      type: 'system',
+      content: 'System prompts should not be captured as raw dialogue.',
+    },
+    {
+      type: 'user',
+      content: [{ type: 'text', text: 'Continue the ContextForge Grok ingest work.' }],
+    },
+    {
+      type: 'reasoning',
+      summary: ['Reasoning should not be captured as raw dialogue.'],
+    },
+    {
+      type: 'assistant',
+      content: 'I added Grok chat history ingestion.',
+      model_id: 'grok-test',
+    },
+  ];
+  await fs.mkdir(sessionDir, { recursive: true });
+  await fs.writeFile(file, `${records.map((record) => JSON.stringify(record)).join('\n')}\n`);
+  return file;
+}
+
+async function writeSyntheticCursorTranscript(
+  projectsDir,
+  sessionId = 'cursor-session',
+  projectName = 'home-ubuntu',
+) {
+  const sessionDir = path.join(projectsDir, projectName, 'agent-transcripts', sessionId);
+  const file = path.join(sessionDir, `${sessionId}.jsonl`);
+  const records = [
+    {
+      role: 'user',
+      message: {
+        content: [{ type: 'text', text: 'Continue the ContextForge Cursor CLI ingest work.' }],
+      },
+    },
+    {
+      role: 'assistant',
+      message: {
+        content: [{ type: 'text', text: 'I added Cursor CLI transcript ingestion.' }],
+      },
+    },
+  ];
+  await fs.mkdir(sessionDir, { recursive: true });
+  await fs.writeFile(file, `${records.map((record) => JSON.stringify(record)).join('\n')}\n`);
+  return file;
+}
+
+async function writeSyntheticOpenCodeDb(dbPath, sessionId = 'opencode-session', cwd = path.dirname(dbPath)) {
+  await fs.mkdir(path.dirname(dbPath), { recursive: true });
+  const db = new Database(dbPath);
+  try {
+    db.exec(`
+      create table session (
+        id text primary key,
+        directory text not null,
+        title text not null,
+        agent text,
+        model text,
+        time_created integer not null,
+        time_updated integer not null
+      );
+      create table message (
+        id text primary key,
+        session_id text not null,
+        time_created integer not null,
+        time_updated integer not null,
+        data text not null
+      );
+      create table part (
+        id text primary key,
+        message_id text not null,
+        session_id text not null,
+        time_created integer not null,
+        time_updated integer not null,
+        data text not null
+      );
+    `);
+    db.prepare(
+      'insert into session (id, directory, title, agent, model, time_created, time_updated) values (?, ?, ?, ?, ?, ?, ?)',
+    ).run(
+      sessionId,
+      cwd,
+      'Synthetic OpenCode ingest test',
+      'build',
+      JSON.stringify({ id: 'test-model', providerID: 'test-provider' }),
+      1,
+      4,
+    );
+    const messages = [
+      {
+        id: 'opencode-user-1',
+        role: 'user',
+        content: 'Continue the ContextForge OpenCode ingest work.',
+        time: 2,
+      },
+      {
+        id: 'opencode-assistant-1',
+        role: 'assistant',
+        content: 'I added OpenCode SQLite ingestion.',
+        time: 3,
+      },
+    ];
+    for (const message of messages) {
+      db.prepare('insert into message (id, session_id, time_created, time_updated, data) values (?, ?, ?, ?, ?)').run(
+        message.id,
+        sessionId,
+        message.time,
+        message.time,
+        JSON.stringify({ role: message.role, path: { cwd, root: cwd }, agent: 'build', modelID: 'test-model' }),
+      );
+      db.prepare(
+        'insert into part (id, message_id, session_id, time_created, time_updated, data) values (?, ?, ?, ?, ?, ?)',
+      ).run(
+        `${message.id}-part`,
+        message.id,
+        sessionId,
+        message.time,
+        message.time,
+        JSON.stringify({ type: 'text', text: message.content }),
+      );
+    }
+  } finally {
+    db.close();
+  }
 }
 
 async function appendSyntheticCodexAssistantMessage(filePath, text) {
@@ -2555,6 +2692,255 @@ test('CLI routes Claude Code global transcripts through a repo registry', async 
       sessionId: 'claude_code:claude-frontend',
     }).length,
     0,
+  );
+});
+
+test('agent adapter registry exposes the built-in multi-agent ingest set', () => {
+  assert.deepEqual(
+    listAgentAdapters()
+      .map((adapter) => adapter.id)
+      .sort(),
+    ['claude_code', 'codex', 'cursor_cli', 'grok', 'opencode'],
+  );
+});
+
+test('multi-agent routed ingest shares repo scope while preserving source provenance', async () => {
+  const dataDir = await makeTempDir();
+  const root = await makeTempDir();
+  const repo = await makeTempDir();
+  const codexSessionsDir = path.join(root, 'codex');
+  const claudeCodeProjectsDir = path.join(root, 'claude');
+  const grokSessionsDir = path.join(root, 'grok');
+  const cursorProjectsDir = path.join(root, 'cursor');
+  const opencodeDb = path.join(root, 'opencode', 'opencode.db');
+
+  await fs.mkdir(path.join(codexSessionsDir, '2026', '06', '04'), { recursive: true });
+  await writeSyntheticCodexRollout(
+    path.join(codexSessionsDir, '2026', '06', '04', 'rollout-codex.jsonl'),
+    'registry-codex',
+    repo,
+  );
+  await fs.mkdir(path.join(claudeCodeProjectsDir, 'project-a'), { recursive: true });
+  await writeSyntheticClaudeCodeTranscript(
+    path.join(claudeCodeProjectsDir, 'project-a', 'claude.jsonl'),
+    'registry-claude',
+    repo,
+  );
+  await writeSyntheticGrokChatHistory(grokSessionsDir, 'registry-grok', repo);
+  await writeSyntheticCursorTranscript(cursorProjectsDir, 'registry-cursor');
+  await writeSyntheticOpenCodeDb(opencodeDb, 'registry-opencode', repo);
+
+  const registryPath = path.join(root, 'repos.json');
+  await fs.writeFile(
+    registryPath,
+    JSON.stringify({
+      repos: [
+        {
+          name: 'shared-repo',
+          repoPath: repo,
+          scopeKey: 'github.com/example/shared-repo',
+        },
+      ],
+    }),
+  );
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'candidate_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      candidate_provider: async (input) => ({
+        provider: 'candidate_provider',
+        summaryShort: `Candidate checkpoint for ${input.session.sessionId}.`,
+        summaryText: `Multi-agent candidate checkpoint for ${input.session.sessionId}.`,
+        workingSummary: `Working summary for ${input.session.sessionId}.`,
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: `multi_agent.${input.session.sessionId.replace(/[^a-z0-9]+/gi, '_')}`,
+            content: 'ContextForge multi-agent ingest keeps origin provenance while sharing repo-scoped handoff.',
+            reason: 'This is a stable cross-agent ingest contract.',
+            category: 'architecture',
+            tags: ['multi-agent', 'ingest'],
+            importance: 1,
+            candidateType: 'architecture_decision',
+            confidence: 0.9,
+            stability: 0.9,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+        ],
+        sourceEventCount: input.rawEvents.length,
+        metadata: {},
+      }),
+    },
+  });
+
+  const result = await ingestAgentRoutedSessions(app, {
+    adapters: 'codex,claude_code,grok,cursor_cli,opencode',
+    codexSessionsDir,
+    claudeCodeProjectsDir,
+    grokSessionsDir,
+    cursorProjectsDir,
+    opencodeDb,
+    repoRegistry: registryPath,
+    cwd: repo,
+    distill: 'always',
+  });
+
+  assert.equal(result.source, 'agent_sessions_router');
+  assert.deepEqual(result.adapters, ['codex', 'claude_code', 'grok', 'cursor_cli', 'opencode']);
+  assert.equal(result.filesScanned, 5);
+  assert.equal(result.routedFiles, 5);
+  assert.equal(result.appendedEvents, 10);
+  assert.equal(result.checkpointsCreated, 5);
+  assert.deepEqual(
+    result.adapterResults.map((adapterResult) => [adapterResult.adapter, adapterResult.routedFiles]).sort(),
+    [
+      ['claude_code', 1],
+      ['codex', 1],
+      ['cursor_cli', 1],
+      ['grok', 1],
+      ['opencode', 1],
+    ],
+  );
+
+  for (const [sessionId, sourceAgent] of [
+    ['codex:registry-codex', 'codex'],
+    ['claude_code:registry-claude', 'claude_code'],
+    ['grok:registry-grok', 'grok'],
+    ['cursor_cli:registry-cursor', 'cursor_cli'],
+    ['opencode:registry-opencode', 'opencode'],
+  ]) {
+    const events = app.listRawEvents({
+      scope: 'repo',
+      scopeKey: 'github.com/example/shared-repo',
+      sessionId,
+    });
+    assert.equal(events.length, 2, sessionId);
+    assert.ok(events.every((event) => event.metadata.sourceAgent === sourceAgent), sessionId);
+    assert.ok(events.every((event) => event.metadata.nativeSessionId), sessionId);
+  }
+
+  const opencodeCandidates = app.listMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'github.com/example/shared-repo',
+    sessionId: 'opencode:registry-opencode',
+    status: 'pending',
+  });
+  assert.equal(opencodeCandidates.length, 1);
+  assert.equal(opencodeCandidates[0].source.sourceAgent, 'opencode');
+  assert.equal(opencodeCandidates[0].source.sourceProvenance.sourceAdapter, 'opencode_sqlite');
+
+  const suggestions = await app.suggestMemoryPromotions({
+    scope: 'repo',
+    scopeKey: 'github.com/example/shared-repo',
+    sessionId: 'opencode:registry-opencode',
+    trigger: 'manual_closeout',
+  });
+  assert.equal(suggestions.proposals.length, 1);
+  assert.equal(suggestions.proposals[0].evidence.sourceAgent, 'opencode');
+  assert.equal(suggestions.proposals[0].evidence.sourceProvenance.sourceRuntime, 'opencode_cli');
+
+  const bootstrap = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'github.com/example/shared-repo',
+    query: 'multi agent handoff',
+    latestCheckpointLimit: 1,
+  });
+  assert.deepEqual(Object.keys(bootstrap.handoff.latestByAgent).sort(), [
+    'claude_code',
+    'codex',
+    'cursor_cli',
+    'grok',
+    'opencode',
+  ]);
+  assert.equal(bootstrap.handoff.latestByAgent.codex.sourceProvenance.sourceAgent, 'codex');
+  assert.equal(bootstrap.handoff.latestByAgent.opencode.sourceProvenance.sourceAdapter, 'opencode_sqlite');
+  assert.equal(bootstrap.handoff.latestCheckpoints.length, 1);
+  const resume = await app.syncResumeContext({
+    scope: 'repo',
+    scopeKey: 'github.com/example/shared-repo',
+    sessionId: 'opencode:registry-opencode',
+    query: 'multi agent handoff',
+  });
+  assert.equal(resume.handoff.memoryCandidates.items[0].sourceAgent, 'opencode');
+  assert.equal(resume.handoff.memoryCandidates.items[0].sourceProvenance.sourceAdapter, 'opencode_sqlite');
+});
+
+test('Cursor CLI routed ingest matches project names without lossy path decoding', async () => {
+  const dataDir = await makeTempDir();
+  const root = await makeTempDir();
+  const repo = path.join(root, 'repo-with-hyphen');
+  await fs.mkdir(repo, { recursive: true });
+  const cursorProjectsDir = path.join(root, 'cursor');
+  const cursorProjectName = repo
+    .split(path.sep)
+    .filter(Boolean)
+    .join('-');
+  await writeSyntheticCursorTranscript(cursorProjectsDir, 'cursor-hyphen-session', cursorProjectName);
+  const registryPath = path.join(root, 'repos.json');
+  await fs.writeFile(
+    registryPath,
+    JSON.stringify({
+      repos: [
+        {
+          name: 'hyphen-repo',
+          repoPath: repo,
+          scopeKey: 'github.com/example/repo-with-hyphen',
+          adapters: ['cursor_cli'],
+        },
+      ],
+    }),
+  );
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+    },
+    cwd: process.cwd(),
+  });
+
+  const result = await ingestAgentRoutedSessions(app, {
+    adapters: 'cursor_cli',
+    cursorProjectsDir,
+    repoRegistry: registryPath,
+    distill: 'never',
+  });
+
+  assert.equal(result.routedFiles, 1);
+  assert.equal(result.skippedFiles, 0);
+  assert.equal(result.appendedEvents, 2);
+  assert.equal(result.adapterResults[0].fileResults[0].matchedRepo.scopeKey, 'github.com/example/repo-with-hyphen');
+  const events = app.listRawEvents({
+    scope: 'repo',
+    scopeKey: 'github.com/example/repo-with-hyphen',
+    sessionId: 'cursor_cli:cursor-hyphen-session',
+  });
+  assert.equal(events.length, 2);
+});
+
+test('OpenCode adapter rejects ambiguous --file ingest', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+    },
+    cwd: process.cwd(),
+  });
+
+  await assert.rejects(
+    () =>
+      ingestAgentSessions(app, {
+        adapters: 'opencode',
+        file: '/tmp/not-a-session-file',
+        scope: 'repo',
+        scopeKey: 'github.com/example/opencode-file',
+        distill: 'never',
+      }),
+    /--file is not supported for opencode/,
   );
 });
 
