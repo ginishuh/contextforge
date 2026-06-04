@@ -859,6 +859,51 @@ The older repo-specific watcher remains supported for simple single-repo
 setups, but one router per agent adapter is the recommended operating shape for
 suite-style workspaces and other multi-repo environments.
 
+ContextForge also exposes an extensible multi-agent adapter registry. The
+built-in adapter ids are `codex`, `claude_code`, `opencode`, `grok`, and
+`cursor_cli`; future adapters should register the same normalized contract
+instead of adding another copy of the router. Use `listAgentAdapters` to inspect
+the available set:
+
+```bash
+node src/cli.js listAgentAdapters
+```
+
+For a bounded multi-agent routed scan, use `ingestAgentRoutedSessions`. Each
+adapter keeps its own source provenance and session id prefix while writing
+matched records into the same repo `scopeKey`.
+
+```bash
+CONTEXTFORGE_STORAGE_MODE=remote \
+CONTEXTFORGE_REMOTE_URL=https://memory.example.com \
+CONTEXTFORGE_REMOTE_TOKEN=change-me \
+node src/cli.js ingestAgentRoutedSessions \
+  --adapters codex,claude_code,opencode,grok,cursor_cli \
+  --codexSessionsDir ~/.codex/sessions \
+  --claudeCodeProjectsDir ~/.claude/projects \
+  --opencodeDb ~/.local/share/opencode/opencode.db \
+  --grokSessionsDir ~/.grok/sessions \
+  --cursorProjectsDir ~/.cursor/projects \
+  --repoRegistry ~/.config/contextforge/repos.json \
+  --sinceMinutes 1440 \
+  --distill auto
+```
+
+`--watch` is supported for the multi-agent command as an idempotent supervisor
+loop. The existing per-agent Codex and Claude Code watchers remain the
+incremental byte-cursor production path; the multi-agent watch loop is the
+compatibility surface for registry-driven supervision until the shared
+incremental runner is fully generalized.
+
+Cross-agent visibility is intentional: durable repo memory and checkpoint
+handoff are read by `scopeKey`, not by the originating agent. Origin is still
+preserved with `sourceAgent`, `sourceRuntime`, `sourceAdapter`,
+`nativeSessionId`, and a prefixed `sessionId` such as `codex:<id>` or
+`opencode:<id>`. Raw tails, working context, and closeout/audit review stay
+exact-session scoped to prevent cross-agent evidence pollution.
+Memory candidate and audit surfaces carry the same source provenance so users
+can see which agent produced a candidate before deciding whether to promote it.
+
 For local TUI use, the same command can stay resident and poll for new rollout
 events:
 
@@ -1093,6 +1138,9 @@ only when last-mile transcript continuity is needed.
 
 The bootstrap response keeps these channels separate:
 
+- `handoff.latestByAgent`: latest visible checkpoint per `sourceAgent`, useful
+  when Codex, Claude Code, OpenCode, Grok, and Cursor CLI are all contributing
+  to the same repo scope.
 - `handoff.latestCheckpoints`: latest recent handoff checkpoints loaded
   independently of query ranking; read these before durable memory for current
   work status, recent decisions, open todos, branch/PR/CI flow, and next

@@ -168,6 +168,8 @@ function hydrateMemoryCandidate(row) {
   if (!row) return null;
   const candidateJson = parseJson(row.candidate_json, {});
   const tags = parseJson(row.tags_json, []);
+  const checkpointMetadata = parseJson(row.checkpoint_metadata_json, {});
+  const sourceProvenance = checkpointMetadata.sourceProvenance || null;
   return {
     type: 'memory_candidate',
     id: row.id,
@@ -198,6 +200,8 @@ function hydrateMemoryCandidate(row) {
       distillRunId: row.distill_run_id,
       sourceEventCount: row.source_event_count,
       checkpointCreatedAt: row.checkpoint_created_at,
+      sourceAgent: sourceProvenance?.sourceAgent || null,
+      sourceProvenance,
     },
     reviewedAt: row.reviewed_at,
     reviewReason: row.review_reason,
@@ -1065,6 +1069,7 @@ export class ContextForgeStore {
           checkpoints.provider,
           checkpoints.distill_run_id,
           checkpoints.source_event_count,
+          checkpoints.metadata_json AS checkpoint_metadata_json,
           checkpoints.created_at AS checkpoint_created_at,
           embedding_index.content_hash AS embedding_content_hash
         FROM memory_candidate_index
@@ -1493,6 +1498,7 @@ export class ContextForgeStore {
           checkpoints.provider,
           checkpoints.distill_run_id,
           checkpoints.source_event_count,
+          checkpoints.metadata_json AS checkpoint_metadata_json,
           checkpoints.created_at AS checkpoint_created_at,
           embedding_vec.distance AS vector_distance,
           embedding_index.model AS embedding_model,
@@ -1601,6 +1607,7 @@ export class ContextForgeStore {
       .prepare(`
         SELECT
           memory_candidate_index.*,
+          checkpoints.metadata_json AS checkpoint_metadata_json,
           checkpoints.created_at AS checkpoint_created_at
         FROM memory_candidate_index
         JOIN checkpoints ON checkpoints.id = memory_candidate_index.checkpoint_id
@@ -2419,6 +2426,7 @@ export class ContextForgeStore {
           checkpoints.provider,
           checkpoints.distill_run_id,
           checkpoints.source_event_count,
+          checkpoints.metadata_json AS checkpoint_metadata_json,
           checkpoints.created_at AS checkpoint_created_at
         FROM memory_candidate_index
         JOIN checkpoints ON checkpoints.id = memory_candidate_index.checkpoint_id
@@ -2724,6 +2732,7 @@ export class ContextForgeStore {
           checkpoints.provider,
           checkpoints.distill_run_id,
           checkpoints.source_event_count,
+          checkpoints.metadata_json AS checkpoint_metadata_json,
           checkpoints.created_at AS checkpoint_created_at
         FROM memory_candidate_index
         JOIN checkpoints ON checkpoints.id = memory_candidate_index.checkpoint_id
@@ -2743,6 +2752,7 @@ export class ContextForgeStore {
           checkpoints.provider,
           checkpoints.distill_run_id,
           checkpoints.source_event_count,
+          checkpoints.metadata_json AS checkpoint_metadata_json,
           checkpoints.created_at AS checkpoint_created_at
         FROM memory_candidate_index
         JOIN checkpoints ON checkpoints.id = memory_candidate_index.checkpoint_id

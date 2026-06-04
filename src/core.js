@@ -431,6 +431,7 @@ function bootstrapResultSummary(result) {
     };
   }
   if (result.candidate) {
+    const sourceProvenance = result.candidate.source?.sourceProvenance || null;
     return {
       key: result.candidate.candidate.key,
       category: result.candidate.candidate.category,
@@ -438,6 +439,8 @@ function bootstrapResultSummary(result) {
       candidateId: result.candidate.id,
       status: result.candidate.status,
       checkpointId: result.candidate.checkpointId,
+      sourceAgent: sourceProvenance?.sourceAgent || result.candidate.source?.sourceAgent || null,
+      sourceProvenance,
     };
   }
   return {
@@ -562,6 +565,8 @@ function structuredLiveStateWarnings(structured) {
 
 function checkpointHandoffCompact(checkpoint, scope) {
   const sourceEventWindow = checkpoint.metadata?.sourceEventWindow || null;
+  const sourceProvenance = checkpoint.metadata?.sourceProvenance || null;
+  const sourceAgent = sourceProvenance?.sourceAgent || null;
   const structured = structuredForCheckpoint(checkpoint);
   const structuredWarnings = structuredLiveStateWarnings(structured);
   return {
@@ -587,6 +592,8 @@ function checkpointHandoffCompact(checkpoint, scope) {
     openQuestions: checkpoint.openQuestions || [],
     sourceEventCount: checkpoint.sourceEventCount,
     provider: checkpoint.provider,
+    sourceAgent,
+    sourceProvenance,
     structured,
     ...(structuredWarnings.length ? { structuredWarnings } : {}),
     ...(sourceEventWindow
@@ -600,6 +607,20 @@ function checkpointHandoffCompact(checkpoint, scope) {
         }
       : {}),
   };
+}
+
+function latestHandoffByAgent(checkpoints) {
+  const byAgent = {};
+  for (const checkpoint of checkpoints) {
+    // listRecentCheckpoints returns newest first; keep the first checkpoint
+    // seen for each source agent.
+    const agent = checkpoint.sourceAgent || checkpoint.sourceProvenance?.sourceAgent || null;
+    if (!agent || byAgent[agent]) {
+      continue;
+    }
+    byAgent[agent] = checkpoint;
+  }
+  return byAgent;
 }
 
 function normalizeRelatedScopeKeys(value) {
@@ -634,6 +655,8 @@ function bootstrapResult(result, group) {
     ...(summary.candidateId ? { candidateId: summary.candidateId } : {}),
     ...(summary.status ? { status: summary.status } : {}),
     ...(summary.checkpointId ? { checkpointId: summary.checkpointId } : {}),
+    ...(summary.sourceAgent ? { sourceAgent: summary.sourceAgent } : {}),
+    ...(summary.sourceProvenance ? { sourceProvenance: summary.sourceProvenance } : {}),
   };
 }
 
@@ -851,12 +874,15 @@ function compactBootstrapCandidate(result) {
     content: truncateText(result.content, 240),
     status: result.status || null,
     checkpointId: result.checkpointId || null,
+    sourceAgent: result.sourceAgent || null,
+    sourceProvenance: result.sourceProvenance || null,
     trust: 'review_material',
     useHint: 'Useful context and review material, not durable truth or a promotion proposal.',
   };
 }
 
 function compactIndexedCandidate(indexedCandidate) {
+  const sourceProvenance = indexedCandidate.source?.sourceProvenance || null;
   return {
     candidateId: indexedCandidate.id,
     key: indexedCandidate.candidate?.key || null,
@@ -864,6 +890,8 @@ function compactIndexedCandidate(indexedCandidate) {
     content: truncateText(indexedCandidate.candidate?.content, 240),
     status: indexedCandidate.status || null,
     checkpointId: indexedCandidate.checkpointId || null,
+    sourceAgent: sourceProvenance?.sourceAgent || indexedCandidate.source?.sourceAgent || null,
+    sourceProvenance,
     trust: 'review_material',
     useHint: 'Useful context and review material, not durable truth or a promotion proposal.',
   };
@@ -949,6 +977,7 @@ function checkpointBasisResult(checkpoint) {
 }
 
 function indexedCandidateBasisResult(indexedCandidate) {
+  const sourceProvenance = indexedCandidate.source?.sourceProvenance || null;
   return {
     type: 'memory_candidate',
     key: indexedCandidate.candidate?.key || null,
@@ -972,6 +1001,8 @@ function indexedCandidateBasisResult(indexedCandidate) {
     candidateId: indexedCandidate.id,
     checkpointId: indexedCandidate.checkpointId,
     status: indexedCandidate.status,
+    sourceAgent: sourceProvenance?.sourceAgent || indexedCandidate.source?.sourceAgent || null,
+    sourceProvenance,
   };
 }
 
@@ -1007,6 +1038,7 @@ function scorePromotionCandidate(indexedCandidate, warnings, skipWarningCodes = 
 
 function promotionProposal(indexedCandidate, warnings, rank) {
   const candidate = indexedCandidate.candidate || {};
+  const sourceProvenance = indexedCandidate.source?.sourceProvenance || null;
   const proposal = {
     rank,
     candidateId: indexedCandidate.id,
@@ -1022,6 +1054,8 @@ function promotionProposal(indexedCandidate, warnings, rank) {
       sourceEventIds: candidate.sourceEventIds || [],
       checkpointId: indexedCandidate.checkpointId,
       sessionId: indexedCandidate.sessionId,
+      sourceAgent: sourceProvenance?.sourceAgent || indexedCandidate.source?.sourceAgent || null,
+      sourceProvenance,
       ...(Array.isArray(candidate.evidenceRefs) && candidate.evidenceRefs.length
         ? { evidenceRefs: candidate.evidenceRefs }
         : {}),
@@ -2162,19 +2196,26 @@ export function createContextForge(options = {}) {
             scopeKey,
           })),
         ];
-        const latestCheckpoints =
-          latestCheckpointLimit > 0
-            ? handoffScopes.flatMap((handoffScope) =>
+        // Fetch extra recent checkpoints so latestByAgent can surface multiple
+        // active adapters even when one agent produced several recent handoffs.
+        const handoffFetchLimit = latestCheckpointLimit > 0 ? Math.max(latestCheckpointLimit, 10) : 0;
+        const fetchedLatestCheckpoints =
+          handoffFetchLimit > 0
+            ? handoffScopes.map((handoffScope) =>
                 store
                   .listRecentCheckpoints({
                     ...handoffScope,
                     level: 0,
-                    limit: latestCheckpointLimit,
+                    limit: handoffFetchLimit,
                   })
                   .map((checkpoint) => checkpointHandoffCompact(checkpoint, handoffScope)),
               )
             : [];
+        const latestCheckpoints = fetchedLatestCheckpoints.flatMap((checkpoints) =>
+          checkpoints.slice(0, latestCheckpointLimit),
+        );
         const latestHandoff = latestCheckpoints[0] || null;
+        const latestByAgent = latestHandoffByAgent(fetchedLatestCheckpoints.flat());
         const workingSummary = sessionId
           ? bootstrapWorkingSummary(store.getWorkingSummary({ ...scope, sessionId }))
           : null;
@@ -2194,6 +2235,7 @@ export function createContextForge(options = {}) {
           sharedLimit: includeShared ? sharedLimit : null,
           handoff: {
             latestHandoff,
+            latestByAgent,
             latestCheckpoints,
             latestCheckpointLimit,
             relatedScopeKeys,
