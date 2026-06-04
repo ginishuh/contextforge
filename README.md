@@ -800,14 +800,12 @@ Example repo registry:
     {
       "name": "suite",
       "repoPath": "/home/ginis/wastelite-suite",
-      "scopeKey": "github.com/ginishuh-dev/wastelite-suite",
-      "adapters": ["codex", "claude_code", "opencode", "grok", "cursor_cli"]
+      "scopeKey": "github.com/ginishuh-dev/wastelite-suite"
     },
     {
       "name": "frontend",
       "repoPath": "/home/ginis/wastelite-suite/wastelite_frontend",
-      "scopeKey": "github.com/ginishuh-dev/wastelite_frontend",
-      "adapters": ["codex", "claude_code", "cursor_cli"]
+      "scopeKey": "github.com/ginishuh-dev/wastelite_frontend"
     }
   ]
 }
@@ -815,6 +813,9 @@ Example repo registry:
 
 The `adapters` field is optional. Omit it when all installed adapters may route
 to a repo; include it only to narrow which agents can write that repo scope.
+When a session `cwd` is outside the registered `repoPath`, for example a
+temporary PR review checkout, the router falls back to the checkout's Git
+`origin` remote and matches it against the registry `scopeKey`.
 
 Run the unified agent router:
 
@@ -831,8 +832,9 @@ node src/cli.js ingestAgentRoutedSessions \
 ```
 
 Nested repo paths are matched by most-specific path first. Unknown `cwd` values
-are skipped by default; the router does not silently write unmatched sessions to
-`shared` or `local` memory. Each routed file result logs the matched repo name,
+that cannot be matched by path or Git remote are skipped by default; the router
+does not silently write unmatched sessions to `shared` or `local` memory. Each
+routed file result logs the matched repo name,
 repo path, and `scopeKey`, or a skipped reason such as `unmatched_repo_cwd`.
 
 Install the unified agent router as a systemd user service:

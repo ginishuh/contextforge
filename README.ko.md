@@ -96,6 +96,9 @@ node src/cli.js ingestAgentRoutedSessions \
 `adapters` 필드는 선택 사항이며, 특정 repo가 특정 agent 기록만 받게 좁히고 싶을
 때만 쓴다. 새 agent runtime을 나중에 설치했다면 service를 재시작해서 active set에
 들어오게 하면 된다.
+세션 `cwd`가 등록된 `repoPath` 밖에 있더라도, 예를 들어 PR 리뷰용 임시 checkout인
+경우 router는 해당 checkout의 Git `origin` remote를 읽어 registry `scopeKey`와
+비교한다. path와 Git remote 둘 다 맞지 않는 세션만 unmatched로 건너뛴다.
 
 systemd user service로는 통합 router 하나를 설치하는 것이 기본 권장 형태다.
 

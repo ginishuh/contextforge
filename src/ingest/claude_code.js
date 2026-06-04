@@ -11,7 +11,7 @@ import {
   ingestParsedSession,
   loadRepoRegistry,
   loadWatchState,
-  matchRepoForCwd,
+  matchRepoForCwdOrGitRemote,
   readIncrementalJsonl,
   saveWatchState,
   shouldSkipOutsideRepo,
@@ -269,7 +269,7 @@ export async function ingestClaudeCodeRoutedSessions(app, options = {}) {
 
   for (const file of files) {
     const parsed = await parseClaudeCodeFile(file, options);
-    const matchedRepo = matchRepoForCwd(parsed.cwd, repos);
+    const matchedRepo = await matchRepoForCwdOrGitRemote(parsed.cwd, repos, options);
     if (!matchedRepo) {
       results.push({
         source: 'claude_code_jsonl',
@@ -521,7 +521,7 @@ async function processIncrementalRoutedClaudeCodeFile(app, file, options, repos,
           lineNumber: currentEntry.lineNumber || 0,
         },
   );
-  const matchedRepo = matchRepoForCwd(parsed.cwd, repos);
+  const matchedRepo = await matchRepoForCwdOrGitRemote(parsed.cwd, repos, options);
   let result;
   if (!matchedRepo) {
     result = {

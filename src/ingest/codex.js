@@ -11,7 +11,7 @@ import {
   ingestParsedSession,
   loadRepoRegistry,
   loadWatchState,
-  matchRepoForCwd,
+  matchRepoForCwdOrGitRemote,
   readIncrementalJsonl,
   saveWatchState,
   shouldSkipOutsideRepo,
@@ -270,7 +270,7 @@ export async function ingestCodexRoutedSessions(app, options = {}) {
 
   for (const file of files) {
     const parsed = await parseCodexRolloutFile(file, options);
-    const matchedRepo = matchRepoForCwd(parsed.cwd, repos);
+    const matchedRepo = await matchRepoForCwdOrGitRemote(parsed.cwd, repos, options);
     if (!matchedRepo) {
       results.push({
         source: 'codex_rollout_jsonl',
@@ -529,7 +529,7 @@ async function processIncrementalRoutedCodexFile(app, file, options, repos, stat
           lineNumber: currentEntry.lineNumber || 0,
         },
   );
-  const matchedRepo = matchRepoForCwd(parsed.cwd, repos);
+  const matchedRepo = await matchRepoForCwdOrGitRemote(parsed.cwd, repos, options);
   let result;
   if (!matchedRepo) {
     result = {

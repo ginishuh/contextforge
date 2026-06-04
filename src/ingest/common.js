@@ -1,7 +1,11 @@
 import fs from 'node:fs/promises';
+import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 
 export function isPathWithin(parentPath, childPath) {
   const parent = path.resolve(parentPath);
@@ -63,6 +67,70 @@ export function matchRepoForCwd(cwd, repos) {
     return null;
   }
   const matches = repos.filter((repo) => isPathWithin(repo.repoPath, cwd));
+  matches.sort((a, b) => b.repoPath.length - a.repoPath.length || a.name.localeCompare(b.name));
+  return matches[0] || null;
+}
+
+export function normalizeRepoIdentity(value) {
+  if (!value) {
+    return null;
+  }
+  let text = String(value).trim();
+  if (!text) {
+    return null;
+  }
+
+  try {
+    const url = new URL(text);
+    text = `${url.hostname}${url.pathname}`;
+  } catch {
+    const scpLike = text.match(/^(?:[^@\s]+@)?([^:\s]+):(.+)$/);
+    if (scpLike) {
+      text = `${scpLike[1]}/${scpLike[2]}`;
+    } else {
+      text = text.replace(/^(?:https?:\/\/|git:\/\/)([^/]+)\//i, '$1/');
+      text = text.replace(/^ssh:\/\/(?:[^@/]+@)?([^/]+)\//i, '$1/');
+    }
+  }
+
+  text = text.replace(/^\/+/, '').replace(/\/+$/, '');
+  text = text.replace(/\.git$/i, '');
+  const parts = text.split('/').filter(Boolean);
+  if (parts.length < 3 || !parts[0].includes('.')) {
+    return null;
+  }
+  return parts.slice(0, 3).join('/').toLowerCase();
+}
+
+export async function gitRemoteRepoIdentity(cwd, options = {}) {
+  if (!cwd) {
+    return null;
+  }
+  try {
+    const { stdout } = await execFileAsync(
+      options.gitBin || 'git',
+      ['-C', cwd, 'remote', 'get-url', options.remoteName || 'origin'],
+      {
+        timeout: Number(options.gitRemoteTimeoutMs || 1500),
+        maxBuffer: 64 * 1024,
+      },
+    );
+    return normalizeRepoIdentity(stdout);
+  } catch {
+    return null;
+  }
+}
+
+export async function matchRepoForCwdOrGitRemote(cwd, repos, options = {}) {
+  const pathMatch = matchRepoForCwd(cwd, repos);
+  if (pathMatch) {
+    return pathMatch;
+  }
+  const remoteIdentity = await gitRemoteRepoIdentity(cwd, options);
+  if (!remoteIdentity) {
+    return null;
+  }
+  const matches = repos.filter((repo) => normalizeRepoIdentity(repo.scopeKey) === remoteIdentity);
   matches.sort((a, b) => b.repoPath.length - a.repoPath.length || a.name.localeCompare(b.name));
   return matches[0] || null;
 }

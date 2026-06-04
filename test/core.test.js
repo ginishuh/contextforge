@@ -54,8 +54,20 @@ test('interruptible ingest sleep wakes when stopped', async () => {
 
 async function makeGitRepo(remoteUrl = 'git@github.com:example/contextforge.git') {
   const cwd = await makeTempDir();
-  await fs.mkdir(path.join(cwd, '.git'), { recursive: true });
-  await fs.writeFile(path.join(cwd, '.git', 'config'), `[remote "origin"]\n\turl = ${remoteUrl}\n`);
+  await fs.mkdir(path.join(cwd, '.git', 'objects'), { recursive: true });
+  await fs.mkdir(path.join(cwd, '.git', 'refs', 'heads'), { recursive: true });
+  await fs.writeFile(path.join(cwd, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  await fs.writeFile(
+    path.join(cwd, '.git', 'config'),
+    `[core]
+\trepositoryformatversion = 0
+\tfilemode = true
+\tbare = false
+\tlogallrefupdates = true
+[remote "origin"]
+\turl = ${remoteUrl}
+`,
+  );
   return cwd;
 }
 
@@ -2944,6 +2956,57 @@ test('multi-agent routed ingest shares repo scope while preserving source proven
   });
   assert.equal(resume.handoff.memoryCandidates.items[0].sourceAgent, 'opencode');
   assert.equal(resume.handoff.memoryCandidates.items[0].sourceProvenance.sourceAdapter, 'opencode_sqlite');
+});
+
+test('multi-agent routed ingest matches temporary checkouts by git remote scopeKey', async () => {
+  const dataDir = await makeTempDir();
+  const root = await makeTempDir();
+  const canonicalRepo = await makeTempDir();
+  const reviewCheckout = await makeGitRepo('git@github.com:example/shared-repo.git');
+  const opencodeDb = path.join(root, 'opencode', 'opencode.db');
+  await writeSyntheticOpenCodeDb(opencodeDb, 'opencode-review-checkout', reviewCheckout);
+
+  const registryPath = path.join(root, 'repos.json');
+  await fs.writeFile(
+    registryPath,
+    JSON.stringify({
+      repos: [
+        {
+          name: 'shared-repo',
+          repoPath: canonicalRepo,
+          scopeKey: 'github.com/example/shared-repo',
+        },
+      ],
+    }),
+  );
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+    },
+    cwd: process.cwd(),
+  });
+
+  const result = await ingestAgentRoutedSessions(app, {
+    adapters: 'opencode',
+    opencodeDb,
+    repoRegistry: registryPath,
+    distill: 'never',
+  });
+
+  assert.equal(result.adapters[0], 'opencode');
+  assert.equal(result.routedFiles, 1);
+  assert.equal(result.skippedFiles, 0);
+  assert.equal(result.appendedEvents, 2);
+  assert.equal(result.adapterResults[0].fileResults[0].matchedRepo.scopeKey, 'github.com/example/shared-repo');
+  assert.equal(result.adapterResults[0].fileResults[0].cwd, undefined);
+  assert.equal(
+    app.listRawEvents({
+      scope: 'repo',
+      scopeKey: 'github.com/example/shared-repo',
+      sessionId: 'opencode:opencode-review-checkout',
+    }).length,
+    2,
+  );
 });
 
 test('Cursor CLI routed ingest matches project names without lossy path decoding', async () => {

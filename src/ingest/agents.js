@@ -13,6 +13,7 @@ import {
   loadRepoRegistry,
   loadWatchState,
   matchRepoForCwd,
+  matchRepoForCwdOrGitRemote,
   readIncrementalJsonl,
   saveWatchState,
   shouldSkipOutsideRepo,
@@ -782,7 +783,9 @@ function partialLineWarning(chunk) {
 }
 
 async function ingestParsedRoutedForAdapter(app, adapter, unit, parsed, options, repos) {
-  const matchedRepo = adapter.matchRepo ? adapter.matchRepo(unit, parsed, repos) : matchRepoForCwd(parsed.cwd, repos);
+  const matchedRepo = adapter.matchRepo
+    ? adapter.matchRepo(unit, parsed, repos)
+    : await matchRepoForCwdOrGitRemote(parsed.cwd, repos, options);
   if (!matchedRepo) {
     return {
       source: adapter.source,
