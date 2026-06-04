@@ -786,11 +786,11 @@ pick it up when complete. When `--repoPath` is set, files whose recorded TUI
 cwd is outside that repo path are skipped so a global sessions directory can be
 watched safely by a repo-specific service.
 
-For machines that use several repositories, prefer one ingest router per agent
-adapter over one watcher per repository. A `codex` router scans the global
-Codex sessions tree once; a `claude_code` router does the same for Claude
-Code's transcript store. Each router matches file metadata such as `cwd`
-against a repo registry and writes to the matched repo's canonical `scopeKey`.
+For machines that use several repositories, prefer one unified ingest router
+over one watcher per repository or per agent. The multi-agent router
+auto-detects installed adapter stores on the machine, skips missing runtimes,
+matches file metadata such as `cwd` against a repo registry, and writes to the
+matched repo's canonical `scopeKey`.
 
 Example repo registry:
 
@@ -800,27 +800,30 @@ Example repo registry:
     {
       "name": "suite",
       "repoPath": "/home/ginis/wastelite-suite",
-      "scopeKey": "github.com/ginishuh-dev/wastelite-suite",
-      "adapters": ["codex"]
+      "scopeKey": "github.com/ginishuh-dev/wastelite-suite"
     },
     {
       "name": "frontend",
       "repoPath": "/home/ginis/wastelite-suite/wastelite_frontend",
-      "scopeKey": "github.com/ginishuh-dev/wastelite_frontend",
-      "adapters": ["codex"]
+      "scopeKey": "github.com/ginishuh-dev/wastelite_frontend"
     }
   ]
 }
 ```
 
-Run the `codex` agent router once:
+The `adapters` field is optional. Omit it when all installed adapters may route
+to a repo; include it only to narrow which agents can write that repo scope.
+When a session `cwd` is outside the registered `repoPath`, for example a
+temporary PR review checkout, the router falls back to the checkout's Git
+`origin` remote and matches it against the registry `scopeKey`.
+
+Run the unified agent router:
 
 ```bash
 CONTEXTFORGE_STORAGE_MODE=remote \
 CONTEXTFORGE_REMOTE_URL=https://memory.example.com \
 CONTEXTFORGE_REMOTE_TOKEN=change-me \
-node src/cli.js ingestCodexRoutedSessions \
-  --sessionsDir ~/.codex/sessions \
+node src/cli.js ingestAgentRoutedSessions \
   --repoRegistry ~/.config/contextforge/repos.json \
   --sinceMinutes 1440 \
   --distill auto \
@@ -829,35 +832,26 @@ node src/cli.js ingestCodexRoutedSessions \
 ```
 
 Nested repo paths are matched by most-specific path first. Unknown `cwd` values
-are skipped by default; the router does not silently write unmatched sessions to
-`shared` or `local` memory. Each routed file result logs the matched repo name,
+that cannot be matched by path or Git remote are skipped by default; the router
+does not silently write unmatched sessions to `shared` or `local` memory. Each
+routed file result logs the matched repo name,
 repo path, and `scopeKey`, or a skipped reason such as `unmatched_repo_cwd`.
 
-Install the `codex` agent router as a systemd user service:
+Install the unified agent router as a systemd user service:
 
 ```bash
 CONTEXTFORGE_REMOTE_URL=https://memory.example.com \
-scripts/install-codex-router-service.sh \
-  --name codex \
-  --repo-registry ~/.config/contextforge/repos.json \
-  --token-env-file ~/.config/contextforge/server.env \
-  --distill auto
-```
-
-Install the `claude_code` agent router as a systemd user service:
-
-```bash
-CONTEXTFORGE_REMOTE_URL=https://memory.example.com \
-scripts/install-claude-code-router-service.sh \
-  --name claude-code \
+scripts/install-agent-router-service.sh \
+  --name all-agents \
   --repo-registry ~/.config/contextforge/repos.json \
   --token-env-file ~/.config/contextforge/server.env \
   --distill auto
 ```
 
 The older repo-specific watcher remains supported for simple single-repo
-setups, but one router per agent adapter is the recommended operating shape for
-suite-style workspaces and other multi-repo environments.
+setups, and the older per-agent router installers remain available for
+compatibility. For suite-style workspaces and mixed agent environments, the
+unified router is the recommended operating shape.
 
 ContextForge also exposes an extensible multi-agent adapter registry. The
 built-in adapter ids are `codex`, `claude_code`, `opencode`, `grok`, and
@@ -889,11 +883,15 @@ node src/cli.js ingestAgentRoutedSessions \
   --distill auto
 ```
 
-`--watch` is supported for the multi-agent command as an idempotent supervisor
-loop. The existing per-agent Codex and Claude Code watchers remain the
-incremental byte-cursor production path; the multi-agent watch loop is the
-compatibility surface for registry-driven supervision until the shared
-incremental runner is fully generalized.
+`--watch` is supported for the multi-agent command as the default unified
+router. When `--adapters` is omitted, the watcher auto-detects installed
+adapters at startup by checking each adapter root or database and skips missing
+runtimes instead of walking non-existent trees. Restart the service after
+installing a new agent runtime so it can join the active set. Explicit
+`--adapters` keeps the requested adapter in the result and reports
+`missing_root` when its store is absent. JSONL-backed adapters use the shared
+incremental byte cursor; OpenCode uses its SQLite store only when the configured
+DB exists.
 
 Cross-agent visibility is intentional: durable repo memory and checkpoint
 handoff are read by `scopeKey`, not by the originating agent. Origin is still

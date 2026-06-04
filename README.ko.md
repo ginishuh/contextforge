@@ -81,7 +81,6 @@ node src/cli.js listAgentAdapters
 
 ```bash
 node src/cli.js ingestAgentRoutedSessions \
-  --adapters codex,claude_code,opencode,grok,cursor_cli \
   --codexSessionsDir ~/.codex/sessions \
   --claudeCodeProjectsDir ~/.claude/projects \
   --opencodeDb ~/.local/share/opencode/opencode.db \
@@ -89,6 +88,26 @@ node src/cli.js ingestAgentRoutedSessions \
   --cursorProjectsDir ~/.cursor/projects \
   --repoRegistry ~/.config/contextforge/repos.json \
   --sinceMinutes 1440 \
+  --distill auto
+```
+
+`--adapters`를 생략하면 현재 머신에 실제로 있는 adapter store만 자동 감지한다.
+환경마다 설치되지 않은 agent 경로를 따로 비활성화할 필요는 없다. repo registry의
+`adapters` 필드는 선택 사항이며, 특정 repo가 특정 agent 기록만 받게 좁히고 싶을
+때만 쓴다. 새 agent runtime을 나중에 설치했다면 service를 재시작해서 active set에
+들어오게 하면 된다.
+세션 `cwd`가 등록된 `repoPath` 밖에 있더라도, 예를 들어 PR 리뷰용 임시 checkout인
+경우 router는 해당 checkout의 Git `origin` remote를 읽어 registry `scopeKey`와
+비교한다. path와 Git remote 둘 다 맞지 않는 세션만 unmatched로 건너뛴다.
+
+systemd user service로는 통합 router 하나를 설치하는 것이 기본 권장 형태다.
+
+```bash
+CONTEXTFORGE_REMOTE_URL=https://memory.example.com \
+scripts/install-agent-router-service.sh \
+  --name all-agents \
+  --repo-registry ~/.config/contextforge/repos.json \
+  --token-env-file ~/.config/contextforge/server.env \
   --distill auto
 ```
 
@@ -103,9 +122,12 @@ node src/cli.js ingestAgentRoutedSessions \
 - memory candidate와 감사 UI도 같은 source provenance를 보여준다. 후보를
   승격하기 전에 어느 agent가 만든 후보인지 확인할 수 있다.
 
-`ingestAgentRoutedSessions --watch`는 registry 기반 supervisor loop로 쓸 수
-있다. 다만 1차 구현은 idempotent 재스캔 방식이고, Codex/Claude 전용 watcher의
-incremental byte cursor 공통화는 별도 후속 작업이다.
+`ingestAgentRoutedSessions --watch`는 기본 단일 router watcher로 쓸 수 있다.
+`--adapters`를 생략하면 각 adapter의 root directory 또는 DB 존재 여부를 보고
+설치된 것만 자동 활성화한다. 없는 런타임은 non-existent tree를 계속 걷지 않고
+`inactiveAdapters`에 남긴다. `--adapters cursor_cli`처럼 명시한 adapter가 없으면
+스캔하지 않고 결과에 `missing_root`로 표시한다. JSONL 기반 adapter는 공통
+incremental byte cursor를 쓰고, OpenCode는 설정된 SQLite DB가 있을 때만 읽는다.
 
 ## 빠른 시작
 

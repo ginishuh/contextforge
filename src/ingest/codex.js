@@ -11,7 +11,7 @@ import {
   ingestParsedSession,
   loadRepoRegistry,
   loadWatchState,
-  matchRepoForCwd,
+  matchRepoForCwdOrGitRemote,
   readIncrementalJsonl,
   saveWatchState,
   shouldSkipOutsideRepo,
@@ -26,6 +26,16 @@ const CODEX_AGENT_PROVENANCE = {
   sourceRuntime: 'codex_tui',
   sourceAdapter: 'codex_rollout_jsonl',
 };
+
+function incrementalCodexInitialContext(currentEntry = {}, chunk) {
+  return {
+    nativeSessionId: currentEntry.nativeSessionId,
+    sessionId: currentEntry.sessionId,
+    conversationId: currentEntry.conversationId,
+    cwd: currentEntry.cwd,
+    lineNumber: chunk.reset ? 0 : currentEntry.lineNumber || 0,
+  };
+}
 
 function stripCodexSessionPrefix(sessionId) {
   const text = String(sessionId || '');
@@ -101,7 +111,7 @@ export function normalizeCodexRolloutRecord(record, context, options = {}) {
   };
 }
 
-function parseCodexRolloutLines(filePath, lines, options = {}, initialContext = {}) {
+export function parseCodexRolloutLines(filePath, lines, options = {}, initialContext = {}) {
   const nativeSessionId =
     initialContext.nativeSessionId || (options.sessionId ? stripCodexSessionPrefix(options.sessionId) : null);
   const sessionId = initialContext.sessionId || (nativeSessionId ? codexSessionId(nativeSessionId) : null);
@@ -120,7 +130,20 @@ function parseCodexRolloutLines(filePath, lines, options = {}, initialContext = 
   for (const line of lines) {
     context.lineNumber += 1;
     if (!line.trim()) continue;
-    const record = JSON.parse(line);
+    let record;
+    try {
+      record = JSON.parse(line);
+    } catch (error) {
+      if (!options.recoverMalformedJsonl) {
+        throw error;
+      }
+      warnings.push({
+        type: 'malformed_json_line',
+        lineNumber: context.lineNumber,
+        message: error.message,
+      });
+      continue;
+    }
     const event = normalizeCodexRolloutRecord(record, context, options);
     if (event) {
       events.push(event);
@@ -257,7 +280,7 @@ export async function ingestCodexRoutedSessions(app, options = {}) {
 
   for (const file of files) {
     const parsed = await parseCodexRolloutFile(file, options);
-    const matchedRepo = matchRepoForCwd(parsed.cwd, repos);
+    const matchedRepo = await matchRepoForCwdOrGitRemote(parsed.cwd, repos, options);
     if (!matchedRepo) {
       results.push({
         source: 'codex_rollout_jsonl',
@@ -365,16 +388,8 @@ async function processIncrementalCodexFile(app, file, options, state) {
   const parsed = parseCodexRolloutLines(
     file,
     chunk.lines,
-    options,
-    chunk.reset
-      ? { lineNumber: 0 }
-      : {
-          nativeSessionId: currentEntry.nativeSessionId,
-          sessionId: currentEntry.sessionId,
-          conversationId: currentEntry.conversationId,
-          cwd: currentEntry.cwd,
-          lineNumber: currentEntry.lineNumber || 0,
-        },
+    { ...options, recoverMalformedJsonl: true },
+    incrementalCodexInitialContext(currentEntry, chunk),
   );
 
   if (!parsed.sessionId) {
@@ -505,18 +520,10 @@ async function processIncrementalRoutedCodexFile(app, file, options, repos, stat
   const parsed = parseCodexRolloutLines(
     file,
     chunk.lines,
-    options,
-    chunk.reset
-      ? { lineNumber: 0 }
-      : {
-          nativeSessionId: currentEntry.nativeSessionId,
-          sessionId: currentEntry.sessionId,
-          conversationId: currentEntry.conversationId,
-          cwd: currentEntry.cwd,
-          lineNumber: currentEntry.lineNumber || 0,
-        },
+    { ...options, recoverMalformedJsonl: true },
+    incrementalCodexInitialContext(currentEntry, chunk),
   );
-  const matchedRepo = matchRepoForCwd(parsed.cwd, repos);
+  const matchedRepo = await matchRepoForCwdOrGitRemote(parsed.cwd, repos, options);
   let result;
   if (!matchedRepo) {
     result = {
