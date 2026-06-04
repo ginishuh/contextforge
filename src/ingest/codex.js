@@ -27,6 +27,16 @@ const CODEX_AGENT_PROVENANCE = {
   sourceAdapter: 'codex_rollout_jsonl',
 };
 
+function incrementalCodexInitialContext(currentEntry = {}, chunk) {
+  return {
+    nativeSessionId: currentEntry.nativeSessionId,
+    sessionId: currentEntry.sessionId,
+    conversationId: currentEntry.conversationId,
+    cwd: currentEntry.cwd,
+    lineNumber: chunk.reset ? 0 : currentEntry.lineNumber || 0,
+  };
+}
+
 function stripCodexSessionPrefix(sessionId) {
   const text = String(sessionId || '');
   return text.startsWith('codex:') ? text.slice('codex:'.length) : text;
@@ -378,16 +388,8 @@ async function processIncrementalCodexFile(app, file, options, state) {
   const parsed = parseCodexRolloutLines(
     file,
     chunk.lines,
-    options,
-    chunk.reset
-      ? { lineNumber: 0 }
-      : {
-          nativeSessionId: currentEntry.nativeSessionId,
-          sessionId: currentEntry.sessionId,
-          conversationId: currentEntry.conversationId,
-          cwd: currentEntry.cwd,
-          lineNumber: currentEntry.lineNumber || 0,
-        },
+    { ...options, recoverMalformedJsonl: true },
+    incrementalCodexInitialContext(currentEntry, chunk),
   );
 
   if (!parsed.sessionId) {
@@ -518,16 +520,8 @@ async function processIncrementalRoutedCodexFile(app, file, options, repos, stat
   const parsed = parseCodexRolloutLines(
     file,
     chunk.lines,
-    options,
-    chunk.reset
-      ? { lineNumber: 0 }
-      : {
-          nativeSessionId: currentEntry.nativeSessionId,
-          sessionId: currentEntry.sessionId,
-          conversationId: currentEntry.conversationId,
-          cwd: currentEntry.cwd,
-          lineNumber: currentEntry.lineNumber || 0,
-        },
+    { ...options, recoverMalformedJsonl: true },
+    incrementalCodexInitialContext(currentEntry, chunk),
   );
   const matchedRepo = await matchRepoForCwdOrGitRemote(parsed.cwd, repos, options);
   let result;

@@ -2417,6 +2417,32 @@ test('Codex incremental watch keeps trailing partial JSON uncommitted until comp
   });
   assert.equal(events.length, 3);
   assert.equal(events.at(-1).content, 'partial append');
+
+  await fs.appendFile(file, '{"malformed":\n');
+  await appendSyntheticCodexAssistantMessage(file, 'Recovered after a malformed complete JSONL line.');
+  const third = await watchCodexSessions(app, {
+    sessionsDir,
+    scope: 'repo',
+    scopeKey: 'codex-partial-repo',
+    distill: 'never',
+    iterations: 1,
+    intervalMs: 1,
+    watchStateDir,
+    watchVerbose: true,
+  });
+  assert.equal(third.totals.appendedEvents, 1);
+  assert.equal(
+    third.results[0].fileResults[0].warnings.some((warning) => warning.type === 'malformed_json_line'),
+    true,
+  );
+
+  const recoveredEvents = app.listRawEvents({
+    scope: 'repo',
+    scopeKey: 'codex-partial-repo',
+    sessionId: 'codex:codex-partial-session',
+  });
+  assert.equal(recoveredEvents.length, 4);
+  assert.equal(recoveredEvents.at(-1).content, 'Recovered after a malformed complete JSONL line.');
 });
 
 test('CLI Codex sessions scan is not capped by search limit defaults', async () => {

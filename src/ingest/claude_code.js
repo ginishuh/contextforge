@@ -27,6 +27,16 @@ const CLAUDE_CODE_PROVENANCE = {
   sourceAdapter: 'claude_code_jsonl',
 };
 
+function incrementalClaudeCodeInitialContext(currentEntry = {}, chunk) {
+  return {
+    nativeSessionId: currentEntry.nativeSessionId,
+    sessionId: currentEntry.sessionId,
+    conversationId: currentEntry.conversationId,
+    cwd: currentEntry.cwd,
+    lineNumber: chunk.reset ? 0 : currentEntry.lineNumber || 0,
+  };
+}
+
 function stripClaudeCodeSessionPrefix(sessionId) {
   const text = String(sessionId || '');
   return text.startsWith('claude_code:') ? text.slice('claude_code:'.length) : text;
@@ -375,16 +385,8 @@ async function processIncrementalClaudeCodeFile(app, file, options, state) {
   const parsed = parseClaudeCodeLines(
     file,
     chunk.lines,
-    options,
-    chunk.reset
-      ? { lineNumber: 0 }
-      : {
-          nativeSessionId: currentEntry.nativeSessionId,
-          sessionId: currentEntry.sessionId,
-          conversationId: currentEntry.conversationId,
-          cwd: currentEntry.cwd,
-          lineNumber: currentEntry.lineNumber || 0,
-        },
+    { ...options, recoverMalformedJsonl: true },
+    incrementalClaudeCodeInitialContext(currentEntry, chunk),
   );
   if (!parsed.sessionId) {
     throw new Error('Claude Code session id could not be determined.');
@@ -510,16 +512,8 @@ async function processIncrementalRoutedClaudeCodeFile(app, file, options, repos,
   const parsed = parseClaudeCodeLines(
     file,
     chunk.lines,
-    options,
-    chunk.reset
-      ? { lineNumber: 0 }
-      : {
-          nativeSessionId: currentEntry.nativeSessionId,
-          sessionId: currentEntry.sessionId,
-          conversationId: currentEntry.conversationId,
-          cwd: currentEntry.cwd,
-          lineNumber: currentEntry.lineNumber || 0,
-        },
+    { ...options, recoverMalformedJsonl: true },
+    incrementalClaudeCodeInitialContext(currentEntry, chunk),
   );
   const matchedRepo = await matchRepoForCwdOrGitRemote(parsed.cwd, repos, options);
   let result;
