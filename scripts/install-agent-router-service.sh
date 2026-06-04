@@ -20,6 +20,7 @@ systemd_quote() {
   local value="$1"
   value="${value//\\/\\\\}"
   value="${value//\"/\\\"}"
+  value="${value//\$/\$\$}"
   printf '"%s"' "$value"
 }
 
@@ -123,7 +124,7 @@ After=network-online.target
 Type=simple
 WorkingDirectory=$(systemd_quote "$repo_root")
 Environment=CONTEXTFORGE_STORAGE_MODE=remote
-Environment=CONTEXTFORGE_REMOTE_URL=${remote_url}
+Environment=$(systemd_quote "CONTEXTFORGE_REMOTE_URL=$remote_url")
 Environment=CONTEXTFORGE_WATCH_STATE_DIR=%h/.local/state/contextforge/watch
 EnvironmentFile=-$(systemd_quote "$token_env_file")
 ExecStart=$(systemd_quote "$node_bin") $(systemd_quote "$cli_path") ingestAgentRoutedSessions${adapter_args} --codexSessionsDir $(systemd_quote "$codex_sessions_dir") --claudeCodeProjectsDir $(systemd_quote "$claude_code_projects_dir") --opencodeDb $(systemd_quote "$opencode_db") --grokSessionsDir $(systemd_quote "$grok_sessions_dir") --cursorProjectsDir $(systemd_quote "$cursor_projects_dir") --repoRegistry $(systemd_quote "$repo_registry") --sinceMinutes $(systemd_quote "$since_minutes") --distill $(systemd_quote "$distill") --watch --intervalMs $(systemd_quote "$interval_ms")

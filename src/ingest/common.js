@@ -99,7 +99,7 @@ export function normalizeRepoIdentity(value) {
   if (parts.length < 3 || !parts[0].includes('.')) {
     return null;
   }
-  return parts.slice(0, 3).join('/').toLowerCase();
+  return parts.join('/').toLowerCase();
 }
 
 export async function gitRemoteRepoIdentity(cwd, options = {}) {

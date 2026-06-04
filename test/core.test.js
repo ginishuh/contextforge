@@ -15,7 +15,7 @@ import { canonicalizeScope, parseScopeAliases } from '../src/config/index.js';
 import { createContextForge } from '../src/core.js';
 import { STRUCTURED_CHECKPOINT_SCHEMA_VERSION, validateDistillOutput } from '../src/distill/validate.js';
 import { createOpenAiEmbeddingProvider } from '../src/embeddings/index.js';
-import { createInterruptibleSleep, shouldSkipRecentFailedAutoDistill } from '../src/ingest/common.js';
+import { createInterruptibleSleep, normalizeRepoIdentity, shouldSkipRecentFailedAutoDistill } from '../src/ingest/common.js';
 import { watchClaudeCodeSessions } from '../src/ingest/claude_code.js';
 import { ingestCodexRolloutFile, watchCodexSessions } from '../src/ingest/codex.js';
 import { ingestAgentRoutedSessions, ingestAgentSessions, listAgentAdapters, watchAgentRoutedSessions } from '../src/ingest/agents.js';
@@ -566,6 +566,18 @@ test('repo scope key defaults to normalized GitHub origin remote', async () => {
   });
   assert.equal(memory.scopeType, 'repo');
   assert.equal(memory.scopeKey, 'github.com/example/contextforge');
+});
+
+test('repo identity normalization preserves nested namespace paths', () => {
+  assert.equal(normalizeRepoIdentity('git@github.com:Example/ContextForge.git'), 'github.com/example/contextforge');
+  assert.equal(
+    normalizeRepoIdentity('https://gitlab.com/group/subgroup/repo-a.git'),
+    'gitlab.com/group/subgroup/repo-a',
+  );
+  assert.equal(
+    normalizeRepoIdentity('git@gitlab.com:group/subgroup/repo-b.git'),
+    'gitlab.com/group/subgroup/repo-b',
+  );
 });
 
 test('repo scope key falls back to a deterministic path key outside git', async () => {
@@ -1853,9 +1865,11 @@ test('unified agent router service installer creates one auto-detecting router u
       '--repo-registry',
       registryPath,
       '--remote-url',
-      'https://memory.example.com',
+      'https://memory.example.com/api?token=abc$def',
       '--token-env-file',
       path.join(home, 'token.env'),
+      '--codex-sessions-dir',
+      path.join(home, 'codex $sessions'),
       '--distill',
       'false',
     ],
@@ -1878,7 +1892,9 @@ test('unified agent router service installer creates one auto-detecting router u
   assert.match(unit, /ingestAgentRoutedSessions/);
   assert.doesNotMatch(unit, /--adapters/);
   assert.match(unit, /WorkingDirectory="/);
+  assert.match(unit, /Environment="CONTEXTFORGE_REMOTE_URL=https:\/\/memory\.example\.com\/api\?token=abc\$\$def"/);
   assert.match(unit, /--codexSessionsDir/);
+  assert.match(unit, new RegExp(`--codexSessionsDir "${path.join(home, 'codex $$sessions').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`));
   assert.match(unit, /--claudeCodeProjectsDir/);
   assert.match(unit, /--opencodeDb/);
   assert.match(unit, /--grokSessionsDir/);
@@ -2884,6 +2900,10 @@ test('multi-agent routed ingest shares repo scope while preserving source proven
   assert.equal(result.routedFiles, 5);
   assert.equal(result.appendedEvents, 10);
   assert.equal(result.checkpointsCreated, 5);
+  const opencodeResult = result.adapterResults.find((adapterResult) => adapterResult.adapter === 'opencode');
+  assert.equal(opencodeResult.stateLoaded, false);
+  assert.equal(opencodeResult.stateUpdated, false);
+  assert.equal(opencodeResult.corruptStateFile, null);
   assert.deepEqual(
     result.adapterResults.map((adapterResult) => [adapterResult.adapter, adapterResult.routedFiles]).sort(),
     [
@@ -3004,6 +3024,115 @@ test('multi-agent routed ingest matches temporary checkouts by git remote scopeK
       scope: 'repo',
       scopeKey: 'github.com/example/shared-repo',
       sessionId: 'opencode:opencode-review-checkout',
+    }).length,
+    2,
+  );
+});
+
+test('multi-agent routed ingest keeps nested namespace git remotes distinct', async () => {
+  const dataDir = await makeTempDir();
+  const root = await makeTempDir();
+  const repoA = await makeTempDir();
+  const repoB = await makeTempDir();
+  const reviewCheckout = await makeGitRepo('git@gitlab.com:group/subgroup/repo-b.git');
+  const opencodeDb = path.join(root, 'opencode', 'opencode.db');
+  await writeSyntheticOpenCodeDb(opencodeDb, 'opencode-nested-namespace', reviewCheckout);
+
+  const registryPath = path.join(root, 'repos.json');
+  await fs.writeFile(
+    registryPath,
+    JSON.stringify({
+      repos: [
+        {
+          name: 'repo-a',
+          repoPath: repoA,
+          scopeKey: 'gitlab.com/group/subgroup/repo-a',
+        },
+        {
+          name: 'repo-b',
+          repoPath: repoB,
+          scopeKey: 'gitlab.com/group/subgroup/repo-b',
+        },
+      ],
+    }),
+  );
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+    },
+    cwd: process.cwd(),
+  });
+
+  const result = await ingestAgentRoutedSessions(app, {
+    adapters: 'opencode',
+    opencodeDb,
+    repoRegistry: registryPath,
+    distill: 'never',
+  });
+
+  assert.equal(result.routedFiles, 1);
+  assert.equal(result.adapterResults[0].fileResults[0].matchedRepo.scopeKey, 'gitlab.com/group/subgroup/repo-b');
+  assert.equal(
+    app.listRawEvents({
+      scope: 'repo',
+      scopeKey: 'gitlab.com/group/subgroup/repo-a',
+      sessionId: 'opencode:opencode-nested-namespace',
+    }).length,
+    0,
+  );
+  assert.equal(
+    app.listRawEvents({
+      scope: 'repo',
+      scopeKey: 'gitlab.com/group/subgroup/repo-b',
+      sessionId: 'opencode:opencode-nested-namespace',
+    }).length,
+    2,
+  );
+});
+
+test('Cursor CLI routed ingest matches temporary checkouts by git remote scopeKey', async () => {
+  const dataDir = await makeTempDir();
+  const root = await makeTempDir();
+  const canonicalRepo = await makeTempDir();
+  const reviewCheckout = await makeGitRepo('https://github.com/example/cursor-repo.git');
+  const cursorProjectsDir = path.join(root, 'cursor');
+  await writeSyntheticCursorTranscript(cursorProjectsDir, 'cursor-review-checkout', 'unmatched-review-project');
+
+  const registryPath = path.join(root, 'repos.json');
+  await fs.writeFile(
+    registryPath,
+    JSON.stringify({
+      repos: [
+        {
+          name: 'cursor-repo',
+          repoPath: canonicalRepo,
+          scopeKey: 'github.com/example/cursor-repo',
+        },
+      ],
+    }),
+  );
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+    },
+    cwd: process.cwd(),
+  });
+
+  const result = await ingestAgentRoutedSessions(app, {
+    adapters: 'cursor_cli',
+    cursorProjectsDir,
+    repoRegistry: registryPath,
+    cwd: reviewCheckout,
+    distill: 'never',
+  });
+
+  assert.equal(result.routedFiles, 1);
+  assert.equal(result.adapterResults[0].fileResults[0].matchedRepo.scopeKey, 'github.com/example/cursor-repo');
+  assert.equal(
+    app.listRawEvents({
+      scope: 'repo',
+      scopeKey: 'github.com/example/cursor-repo',
+      sessionId: 'cursor_cli:cursor-review-checkout',
     }).length,
     2,
   );

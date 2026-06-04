@@ -205,18 +205,20 @@ function cursorProjectNameForRepoPath(repoPath) {
     .join('-');
 }
 
-function matchCursorRepo(unit, parsed, repos) {
+async function matchCursorRepo(unit, parsed, repos, options = {}) {
   const matched = matchRepoForCwd(parsed.cwd, repos);
   if (matched) {
     return matched;
   }
   const projectName = unit.cursorProjectName || (unit.file ? cursorProjectNameFromTranscript(unit.file) : null);
-  if (!projectName) {
-    return null;
+  if (projectName) {
+    const matches = repos.filter((repo) => cursorProjectNameForRepoPath(repo.repoPath) === projectName);
+    matches.sort((a, b) => b.repoPath.length - a.repoPath.length || a.name.localeCompare(b.name));
+    if (matches[0]) {
+      return matches[0];
+    }
   }
-  const matches = repos.filter((repo) => cursorProjectNameForRepoPath(repo.repoPath) === projectName);
-  matches.sort((a, b) => b.repoPath.length - a.repoPath.length || a.name.localeCompare(b.name));
-  return matches[0] || null;
+  return matchRepoForCwdOrGitRemote(parsed.cwd, repos, options);
 }
 
 function normalizeCursorRecord(record, context, options = {}) {
@@ -761,6 +763,9 @@ async function ingestRoutedAdapter(app, adapter, options = {}) {
     checkpointsCreated: results.filter((result) => result.checkpoint).length,
     routedFiles: results.filter((result) => result.matchedRepo).length,
     skippedFiles: results.filter((result) => result.skipped).length,
+    stateLoaded: false,
+    stateUpdated: false,
+    corruptStateFile: null,
     fileResults: results,
   };
 }
@@ -784,7 +789,7 @@ function partialLineWarning(chunk) {
 
 async function ingestParsedRoutedForAdapter(app, adapter, unit, parsed, options, repos) {
   const matchedRepo = adapter.matchRepo
-    ? adapter.matchRepo(unit, parsed, repos)
+    ? await adapter.matchRepo(unit, parsed, repos, options)
     : await matchRepoForCwdOrGitRemote(parsed.cwd, repos, options);
   if (!matchedRepo) {
     return {
