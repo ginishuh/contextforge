@@ -6171,6 +6171,232 @@ test('auditMemoryCandidates returns audited read-only recommendations', async ()
   assert.equal(pendingCandidates[0].candidate.key, 'audited-readonly-runbook');
 });
 
+test('auditMemoryCandidates audits review candidates and skips noisy events before runner', async () => {
+  const dataDir = await makeTempDir();
+  const auditInvocations = [];
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'audit_review_selection_provider',
+      CONTEXTFORGE_AUTO_PROMOTE_AUDIT_MIN_BATCH_CANDIDATES: '99',
+    },
+    cwd: process.cwd(),
+    autoPromoteAuditor: async ({ candidate }) => {
+      auditInvocations.push(candidate.candidate.key);
+      return {
+        approved: false,
+        decision: 'needs_review',
+        reason: `Reviewed ${candidate.candidate.key}.`,
+        riskCodes: [],
+        metadata: {
+          provider: 'codex_sdk_python',
+          model: 'gpt-5.5',
+        },
+      };
+    },
+    distillProviders: {
+      audit_review_selection_provider: async () => ({
+        summaryShort: 'Audit review selection checkpoint.',
+        summaryText: 'Closeout produced review and noisy candidates.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'review-worthy-policy',
+            content: 'Agents must verify mutable live state before using structured checkpoint liveState values.',
+            category: 'policy',
+            candidateType: 'policy',
+            confidence: 0.82,
+            stability: 0.82,
+            sensitivity: 'low',
+            promotionRecommendation: 'review',
+          },
+          {
+            key: 'review-worthy-api-contract',
+            content: 'GET /healthz must return 200 for the server health contract.',
+            category: 'api_contract',
+            candidateType: 'api_contract',
+            confidence: 0.83,
+            stability: 0.83,
+            sensitivity: 'low',
+            promotionRecommendation: 'review',
+          },
+          {
+            key: 'review-worthy-ci-policy',
+            content: 'CI must run lint and tests on every PR before merge.',
+            category: 'policy',
+            candidateType: 'policy',
+            confidence: 0.84,
+            stability: 0.84,
+            sensitivity: 'low',
+            promotionRecommendation: 'review',
+          },
+          {
+            key: 'review-worthy-draft-policy',
+            content: 'Open work as a draft PR until checks are ready for review.',
+            category: 'policy',
+            candidateType: 'policy',
+            confidence: 0.81,
+            stability: 0.81,
+            sensitivity: 'low',
+            promotionRecommendation: 'review',
+          },
+          {
+            key: 'pr-status-noise',
+            content: 'PR #126 passed npm test 142/142 and CI was green.',
+            category: 'project_status',
+            candidateType: 'fact',
+            confidence: 0.98,
+            stability: 0.9,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+          {
+            key: 'local-runtime-noise',
+            content: 'Restart `/home/ubuntu/contextforge` with systemctl on this host.',
+            category: 'runbook',
+            candidateType: 'runbook',
+            confidence: 0.97,
+            stability: 0.91,
+            sensitivity: 'low',
+            promotionRecommendation: 'review',
+          },
+        ],
+      }),
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'audit-review-selection-repo',
+    sessionId: 'audit-review-selection-session',
+    role: 'assistant',
+    content: 'Review candidates should be filtered before audit.',
+  });
+  const checkpoint = await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'audit-review-selection-repo',
+    sessionId: 'audit-review-selection-session',
+  });
+
+  const result = await app.auditMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'audit-review-selection-repo',
+    checkpointId: checkpoint.id,
+    trigger: 'manual_closeout',
+    limit: 5,
+  });
+
+  assert.deepEqual(auditInvocations.sort(), [
+    'review-worthy-api-contract',
+    'review-worthy-ci-policy',
+    'review-worthy-draft-policy',
+    'review-worthy-policy',
+  ]);
+  assert.equal(result.policy.audit.executed, true);
+  assert.deepEqual(
+    result.proposals.map((proposal) => proposal.key).sort(),
+    [
+      'review-worthy-api-contract',
+      'review-worthy-ci-policy',
+      'review-worthy-draft-policy',
+      'review-worthy-policy',
+    ],
+  );
+  assert.ok(result.skipped.some((item) => item.reason.includes('auto_transient_category')));
+  assert.ok(result.skipped.some((item) => item.reason.includes('auto_one_off_event')));
+  assert.ok(result.skipped.some((item) => item.reason.includes('auto_environment_specific')));
+  assert.equal(
+    app.getMemory({ scope: 'repo', scopeKey: 'audit-review-selection-repo', key: 'review-worthy-policy' }),
+    null,
+  );
+});
+
+test('auditMemoryCandidates honors narrowed allowedCategories', async () => {
+  const dataDir = await makeTempDir();
+  const auditInvocations = [];
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'audit_allowed_categories_provider',
+    },
+    cwd: process.cwd(),
+    autoPromoteAuditor: async ({ candidate }) => {
+      auditInvocations.push(candidate.candidate.key);
+      return {
+        approved: false,
+        decision: 'needs_review',
+        reason: `Reviewed ${candidate.candidate.key}.`,
+        riskCodes: [],
+        metadata: {
+          provider: 'codex_sdk_python',
+          model: 'gpt-5.5',
+        },
+      };
+    },
+    distillProviders: {
+      audit_allowed_categories_provider: async () => ({
+        summaryShort: 'Audit allowed categories checkpoint.',
+        summaryText: 'Closeout produced candidates in different durable categories.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'allowed-runbook',
+            content: 'Use scoped bootstrap before editing ContextForge runtime code.',
+            category: 'runbook',
+            candidateType: 'runbook',
+            confidence: 0.9,
+            stability: 0.9,
+            sensitivity: 'low',
+            promotionRecommendation: 'review',
+          },
+          {
+            key: 'blocked-policy',
+            content: 'Agents must verify mutable live state before using checkpoint liveState.',
+            category: 'policy',
+            candidateType: 'policy',
+            confidence: 0.9,
+            stability: 0.9,
+            sensitivity: 'low',
+            promotionRecommendation: 'review',
+          },
+        ],
+      }),
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'audit-allowed-categories-repo',
+    sessionId: 'audit-allowed-categories-session',
+    role: 'assistant',
+    content: 'Allowed categories should narrow audit candidate selection.',
+  });
+  const checkpoint = await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'audit-allowed-categories-repo',
+    sessionId: 'audit-allowed-categories-session',
+  });
+
+  const result = await app.auditMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'audit-allowed-categories-repo',
+    checkpointId: checkpoint.id,
+    trigger: 'manual_closeout',
+    allowedCategories: ['runbook'],
+    limit: 5,
+  });
+
+  assert.deepEqual(auditInvocations, ['allowed-runbook']);
+  assert.deepEqual(result.policy.allowedCategories, ['runbook']);
+  assert.deepEqual(
+    result.proposals.map((proposal) => proposal.key),
+    ['allowed-runbook'],
+  );
+  assert.ok(result.skipped.some((item) => item.reason.includes('audit_disallowed_category')));
+});
+
 test('distillCheckpoint automatically audits session candidate batches', async () => {
   const dataDir = await makeTempDir();
   const auditInvocations = [];
@@ -6267,6 +6493,82 @@ test('distillCheckpoint automatically audits session candidate batches', async (
   assert.equal(storedAudit.proposals.length, 2);
   assert.equal(storedAudit.proposals[0].audit.metadata.model, 'gpt-5.5');
   assert.equal(auditInvocations.length, 2);
+});
+
+test('distillCheckpoint automatically audits review-worthy non-promote candidate batches', async () => {
+  const dataDir = await makeTempDir();
+  const auditInvocations = [];
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'review_batch_audit_provider',
+      CONTEXTFORGE_AUTO_PROMOTE_AUDIT_MIN_BATCH_CANDIDATES: '2',
+      CONTEXTFORGE_AUTO_PROMOTE_AUDIT_BATCH_LIMIT: '2',
+    },
+    cwd: process.cwd(),
+    autoPromoteAuditor: async ({ candidate }) => {
+      auditInvocations.push(candidate.candidate.key);
+      return {
+        approved: false,
+        decision: 'needs_review',
+        reason: `Audited review candidate ${candidate.candidate.key}.`,
+        riskCodes: [],
+        metadata: {
+          provider: 'codex_sdk_python',
+          model: 'gpt-5.5',
+        },
+      };
+    },
+    distillProviders: {
+      review_batch_audit_provider: async () => ({
+        summaryShort: 'Review batch audit checkpoint.',
+        summaryText: 'The checkpoint produced review-worthy candidates for batched audit.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'review-batch-policy',
+            content: 'Agents must verify mutable live state before relying on checkpoint liveState values.',
+            category: 'policy',
+            candidateType: 'policy',
+            confidence: 0.82,
+            stability: 0.82,
+            sensitivity: 'low',
+            promotionRecommendation: 'review',
+          },
+          {
+            key: 'review-batch-architecture',
+            content: 'Structured checkpoint handoff should be exposed separately from ordinary search results.',
+            category: 'architecture',
+            candidateType: 'decision',
+            confidence: 0.81,
+            stability: 0.8,
+            sensitivity: 'low',
+            promotionRecommendation: 'review',
+          },
+        ],
+      }),
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'review-batch-audit-repo',
+    sessionId: 'review-batch-audit-session',
+    role: 'assistant',
+    content: 'Create enough review candidates for batch audit.',
+  });
+
+  const checkpoint = await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'review-batch-audit-repo',
+    sessionId: 'review-batch-audit-session',
+  });
+
+  assert.equal(checkpoint.candidateAudit.executed, true);
+  assert.equal(checkpoint.candidateAudit.reason, 'batch_threshold');
+  assert.equal(checkpoint.candidateAudit.audited, 2);
+  assert.deepEqual(auditInvocations.sort(), ['review-batch-architecture', 'review-batch-policy']);
 });
 
 test('distillCheckpoint audits new candidates even when audited pending candidates fill the first window', async () => {
@@ -6746,6 +7048,107 @@ test('autoPromoteMemoryCandidates promotes only strict safe candidates when enab
   );
   assert.ok(safeApiMemoryResult, 'expected safe-api-contract memory result');
   assert.equal(safeApiMemoryResult.retrieval.vectorModel, 'test-embedding');
+});
+
+test('autoPromoteMemoryCandidates rejects one-off and environment-specific candidates before audit', async () => {
+  const dataDir = await makeTempDir();
+  let auditCount = 0;
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'auto_strict_durability_provider',
+      CONTEXTFORGE_AUTO_PROMOTE_ENABLED: 'true',
+    },
+    cwd: process.cwd(),
+    autoPromoteAuditor: async () => {
+      auditCount += 1;
+      return {
+        approved: true,
+        decision: 'approve',
+        reason: 'The test auditor would approve if local policy allowed it.',
+        riskCodes: [],
+        metadata: {
+          provider: 'codex_exec',
+          model: 'gpt-5.5',
+        },
+      };
+    },
+    distillProviders: {
+      auto_strict_durability_provider: async () => ({
+        summaryShort: 'Strict durability checkpoint.',
+        summaryText: 'Closeout produced candidates with mixed durability.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'repo-common-api-contract',
+            content: 'The API contract requires idempotent delete retries.',
+            category: 'api-contract',
+            candidateType: 'api-contract',
+            confidence: 0.96,
+            stability: 0.96,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+          {
+            key: 'pr-ci-snapshot',
+            content: 'PR #126 passed npm test 142/142 and CI was green.',
+            category: 'project_state',
+            candidateType: 'fact',
+            confidence: 0.98,
+            stability: 0.9,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+          {
+            key: 'local-service-restart',
+            content: 'Restart `/home/ubuntu/contextforge` service with systemctl after this local deployment.',
+            category: 'runbook',
+            candidateType: 'runbook',
+            confidence: 0.97,
+            stability: 0.91,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+        ],
+      }),
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'auto-strict-durability-repo',
+    sessionId: 'auto-strict-durability-session',
+    role: 'assistant',
+    content: 'Mixed strict durability candidates.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'auto-strict-durability-repo',
+    sessionId: 'auto-strict-durability-session',
+  });
+
+  const result = await app.autoPromoteMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'auto-strict-durability-repo',
+    sessionId: 'auto-strict-durability-session',
+    trigger: 'manual_closeout',
+    dryRun: false,
+  });
+
+  assert.deepEqual(
+    result.promoted.map((item) => item.key),
+    ['repo-common-api-contract'],
+  );
+  assert.equal(auditCount, 1);
+  assert.equal(app.getMemory({ scope: 'repo', scopeKey: 'auto-strict-durability-repo', key: 'pr-ci-snapshot' }), null);
+  assert.equal(
+    app.getMemory({ scope: 'repo', scopeKey: 'auto-strict-durability-repo', key: 'local-service-restart' }),
+    null,
+  );
+  assert.ok(result.skipped.some((item) => item.candidateId && item.reason.includes('auto_transient_category')));
+  assert.ok(result.skipped.some((item) => item.candidateId && item.reason.includes('auto_one_off_event')));
+  assert.ok(result.skipped.some((item) => item.candidateId && item.reason.includes('auto_environment_specific')));
 });
 
 test('autoPromoteMemoryCandidates skips candidates rejected by the audit runner', async () => {

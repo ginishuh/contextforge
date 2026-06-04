@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { parseCodexExecJson, runCodexExecCommand } from '../distill/providers/codex_exec.js';
 
-export const AUTO_PROMOTE_AUDIT_PROMPT_VERSION = 'auto_promote_audit.codex_exec.v2';
+export const AUTO_PROMOTE_AUDIT_PROMPT_VERSION = 'auto_promote_audit.codex_exec.v3';
 export const AUTO_PROMOTE_AUDIT_SCHEMA_VERSION = 'contextforge.auto_promote_audit.v1';
 
 export const AUDIT_OUTPUT_SCHEMA = {
@@ -42,7 +42,9 @@ export function buildAuditPrompt(input, metadata) {
     task: 'Audit whether one ContextForge memory candidate is safe for automatic durable-memory promotion.',
     rules: [
       'Return exactly one JSON object and no surrounding text.',
-      'Approve only if the candidate is stable, specific, useful beyond the current session, and directly supported by the checkpoint/candidate evidence.',
+      'Approve only if the candidate is a repository-wide development rule, API/architecture contract, recurring failure mode, or runbook step that future agents must remember to work correctly.',
+      'Reject one-off project events such as PR status, CI/test pass snapshots, review comments posted, branch cleanup, version bumps, release notes, or temporary smoke-test details.',
+      'Reject facts tied to one machine, one deployment environment, one local path, one port, one service restart, or other environment-specific runtime state.',
       'Reject if it contains secrets, personal data, credentials, broad guesses, temporary state, user preferences, or unsupported claims.',
       'Use needs_review when the candidate might be useful but needs a human edit, narrower wording, or live verification.',
       'Do not approve merely because promotionRecommendation is promote or confidence is high.',
