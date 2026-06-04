@@ -1891,7 +1891,8 @@ test('unified agent router service installer creates one auto-detecting router u
   assert.match(result.stdout, /Requested adapters: auto-detect installed adapters/);
   assert.match(unit, /ingestAgentRoutedSessions/);
   assert.doesNotMatch(unit, /--adapters/);
-  assert.match(unit, /WorkingDirectory="/);
+  assert.match(unit, new RegExp(`WorkingDirectory=${process.cwd().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  assert.match(unit, new RegExp(`EnvironmentFile=-${path.join(home, 'token.env').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
   assert.match(unit, /Environment="CONTEXTFORGE_REMOTE_URL=https:\/\/memory\.example\.com\/api\?token=abc\$\$def"/);
   assert.match(unit, /--codexSessionsDir/);
   assert.match(unit, new RegExp(`--codexSessionsDir "${path.join(home, 'codex $$sessions').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`));
