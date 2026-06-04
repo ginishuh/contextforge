@@ -780,6 +780,9 @@ const AUTO_PROMOTE_SKIP_WARNING_CODES = new Set([
   'auto_low_confidence',
   'auto_low_stability',
   'auto_disallowed_category',
+  'auto_environment_specific',
+  'auto_one_off_event',
+  'auto_transient_category',
   'preference_auto_excluded',
 ]);
 
@@ -792,7 +795,40 @@ const DURABLE_PROPOSAL_CATEGORIES = new Set([
   'environment',
 ]);
 
-const SAFE_AUTO_PROMOTE_CATEGORIES = new Set(['runbook', 'failure-mode', 'api-contract', 'environment', 'decision']);
+const AUDIT_CANDIDATE_CATEGORIES = new Set([
+  'agent_guidance',
+  'agent-guidance',
+  'api-contract',
+  'api_contract',
+  'architecture',
+  'decision',
+  'failure-mode',
+  'failure_mode',
+  'policy',
+  'runbook',
+]);
+const SAFE_AUTO_PROMOTE_CATEGORIES = new Set(['runbook', 'failure-mode', 'api-contract', 'decision']);
+const AUTO_TRANSIENT_CATEGORIES = new Set([
+  'bugfix',
+  'documentation',
+  'project-release',
+  'project_release',
+  'project-state',
+  'project_state',
+  'project-status',
+  'project_status',
+  'runtime-config',
+  'runtime_config',
+  'state',
+  'task-note',
+  'task_note',
+  'test-contract',
+  'test_contract',
+]);
+const AUTO_ENVIRONMENT_SPECIFIC_PATTERN =
+  /\b(?:localhost|127\.0\.0\.1|0\.0\.0\.0|systemctl|journalctl|port\s+\d{2,5}|pid\s+\d+)\b|\/home\/|\/tmp\/|\.service\b/i;
+const AUTO_ONE_OFF_EVENT_PATTERN =
+  /\b(?:pr\s*#\d+|pull request\s*#\d+|issue\s*#\d+|ci\s+(?:green|passed|success|failure|failed)|(?:green|passed|successful|failed)\s+ci|merge state|review comment|commented|npm test\s+\d+\/\d+|git diff --check|smoke test|smoke port|branch cleanup|release\s+\d|version bump)\b/i;
 const CHECKPOINT_SOURCES = new Set(['distill', 'daily_consolidation', 'weekly_consolidation', 'topic_batch', 'manual']);
 const RECONCILE_UPDATE_CONFIDENCE = {
   durableMemory: 0.7,
@@ -1076,6 +1112,18 @@ function normalizeAllowedCategories(value, defaultCategories = SAFE_AUTO_PROMOTE
 function autoPromotionWarnings(store, scope, indexedCandidate, policy) {
   const candidate = indexedCandidate.candidate || {};
   const warnings = [...promotionCandidateWarnings(store, scope, indexedCandidate)];
+  const category = normalizeToken(candidate.category);
+  const searchableText = [
+    candidate.key,
+    candidate.content,
+    candidate.reason,
+    candidate.durabilityReason,
+    candidate.riskReason,
+    ...(Array.isArray(candidate.tags) ? candidate.tags : []),
+    ...(Array.isArray(candidate.evidenceRefs) ? candidate.evidenceRefs : []),
+  ]
+    .filter(Boolean)
+    .join('\n');
   if (Number(candidate.confidence || 0) < policy.minConfidence) {
     warnings.push({
       code: 'auto_low_confidence',
@@ -1092,7 +1140,27 @@ function autoPromotionWarnings(store, scope, indexedCandidate, policy) {
       minStability: policy.minStability,
     });
   }
-  const category = normalizeToken(candidate.category);
+  if (AUTO_TRANSIENT_CATEGORIES.has(category)) {
+    warnings.push({
+      code: 'auto_transient_category',
+      message: `Candidate category "${candidate.category}" describes a transient event or implementation note, not a repository-wide durable development rule.`,
+      category: candidate.category || null,
+    });
+  }
+  if (AUTO_ONE_OFF_EVENT_PATTERN.test(searchableText)) {
+    warnings.push({
+      code: 'auto_one_off_event',
+      message:
+        'Candidate appears to describe a one-off PR, CI, review, release, branch, or smoke-test event rather than a durable repository-wide development rule.',
+    });
+  }
+  if (AUTO_ENVIRONMENT_SPECIFIC_PATTERN.test(searchableText)) {
+    warnings.push({
+      code: 'auto_environment_specific',
+      message:
+        'Candidate appears tied to a specific machine, local path, port, service, or deployment environment and is not safe for automatic durable promotion.',
+    });
+  }
   if (!policy.allowedCategories.has(category)) {
     warnings.push({
       code: category === 'preference' ? 'preference_auto_excluded' : 'auto_disallowed_category',
@@ -1105,6 +1173,53 @@ function autoPromotionWarnings(store, scope, indexedCandidate, policy) {
   }
   return warnings;
 }
+
+function auditCandidateWarnings(store, scope, indexedCandidate, policy) {
+  const candidate = indexedCandidate.candidate || {};
+  const warnings = autoPromotionWarnings(store, scope, indexedCandidate, {
+    minConfidence: policy.minConfidence,
+    minStability: policy.minStability,
+    allowedCategories: policy.allowedCategories,
+  }).filter(
+    (warning) =>
+      !['auto_disallowed_category', 'auto_low_confidence', 'auto_low_stability'].includes(warning.code),
+  );
+  const category = normalizeToken(candidate.category);
+  if (!policy.allowedCategories.has(category)) {
+    warnings.push({
+      code: 'audit_disallowed_category',
+      message: `Candidate category "${candidate.category}" is not a repository-wide development rule, contract, policy, architecture decision, failure mode, or runbook.`,
+      category: candidate.category || null,
+    });
+  }
+  if (Number(candidate.confidence || 0) < policy.minConfidence) {
+    warnings.push({
+      code: 'audit_low_confidence',
+      message: `Candidate confidence must be at least ${policy.minConfidence} to spend audit budget.`,
+      confidence: candidate.confidence ?? null,
+      minConfidence: policy.minConfidence,
+    });
+  }
+  if (Number(candidate.stability || 0) < policy.minStability) {
+    warnings.push({
+      code: 'audit_low_stability',
+      message: `Candidate stability must be at least ${policy.minStability} to spend audit budget.`,
+      stability: candidate.stability ?? null,
+      minStability: policy.minStability,
+    });
+  }
+  return warnings;
+}
+
+const AUDIT_CANDIDATE_SKIP_WARNING_CODES = new Set([
+  ...AUTO_SKIP_WARNING_CODES,
+  'audit_disallowed_category',
+  'audit_low_confidence',
+  'audit_low_stability',
+  'auto_environment_specific',
+  'auto_one_off_event',
+  'auto_transient_category',
+]);
 
 function autoPromotionWouldPromote(indexedCandidate, warnings, rank) {
   const proposal = promotionProposal(indexedCandidate, warnings, rank);
@@ -2859,15 +2974,15 @@ export function createContextForge(options = {}) {
               },
             ]
           : [];
-      const minConfidence = Number(options.minConfidence ?? 0.85);
-      const minStability = Number(options.minStability ?? 0.85);
+      const minConfidence = Number(options.minConfidence ?? 0.7);
+      const minStability = Number(options.minStability ?? 0.7);
       if (!Number.isFinite(minConfidence) || minConfidence < 0 || minConfidence > 1) {
         throw new Error('minConfidence must be between 0 and 1.');
       }
       if (!Number.isFinite(minStability) || minStability < 0 || minStability > 1) {
         throw new Error('minStability must be between 0 and 1.');
       }
-      const categoryPolicy = normalizeAllowedCategories(options.allowedCategories);
+      const categoryPolicy = normalizeAllowedCategories(options.allowedCategories, AUDIT_CANDIDATE_CATEGORIES);
       const allowedCategories = categoryPolicy.allowedCategories;
       if (categoryPolicy.strippedPreference) {
         requestWarnings.push({
@@ -2875,8 +2990,8 @@ export function createContextForge(options = {}) {
           message: 'Preference candidates cannot be audited for automatic-style promotion until occurrence/merge tracking exists.',
         });
       }
-      const scanLimit = positiveNumber(options.scanLimit == null ? 10 : Number(options.scanLimit), 'scanLimit');
-      const promotionRecommendation = options.promotionRecommendation || 'promote';
+      const scanLimit = positiveNumber(options.scanLimit == null ? 50 : Number(options.scanLimit), 'scanLimit');
+      const promotionRecommendation = options.promotionRecommendation || null;
       if (!options.sessionId && !options.checkpointId) {
         return {
           kind: 'memory_candidate_audit_suggestions',
@@ -2965,7 +3080,6 @@ export function createContextForge(options = {}) {
           };
         }
 
-        const policy = { minConfidence, minStability, allowedCategories };
         const allCandidates = store.listMemoryCandidates({
           ...scope,
           sessionId: options.sessionId || null,
@@ -3014,9 +3128,14 @@ export function createContextForge(options = {}) {
             ],
           };
         }
+        const candidateAuditPolicy = {
+          minConfidence,
+          minStability,
+          allowedCategories,
+        };
         const assessed = candidates.map((candidate) => {
-          const warnings = autoPromotionWarnings(store, scope, candidate, policy);
-          const score = scorePromotionCandidate(candidate, warnings, AUTO_PROMOTE_SKIP_WARNING_CODES);
+          const warnings = auditCandidateWarnings(store, scope, candidate, candidateAuditPolicy);
+          const score = scorePromotionCandidate(candidate, warnings, AUDIT_CANDIDATE_SKIP_WARNING_CODES);
           return { candidate, warnings, score };
         });
         const selected = assessed
@@ -4238,7 +4357,6 @@ export function createContextForge(options = {}) {
               ...scope,
               sessionId: options.sessionId,
               status: 'pending',
-              promotionRecommendation: 'promote',
               sort: 'recommendation',
               limit: scanLimit,
             })
@@ -4275,13 +4393,13 @@ export function createContextForge(options = {}) {
             };
           } else {
             const policy = {
-              minConfidence: 0.85,
-              minStability: 0.85,
-              allowedCategories: SAFE_AUTO_PROMOTE_CATEGORIES,
+              minConfidence: 0.7,
+              minStability: 0.7,
+              allowedCategories: AUDIT_CANDIDATE_CATEGORIES,
             };
             const assessed = unauditedPending.map((candidate) => {
-              const warnings = autoPromotionWarnings(store, scope, candidate, policy);
-              const score = scorePromotionCandidate(candidate, warnings, AUTO_PROMOTE_SKIP_WARNING_CODES);
+              const warnings = auditCandidateWarnings(store, scope, candidate, policy);
+              const score = scorePromotionCandidate(candidate, warnings, AUDIT_CANDIDATE_SKIP_WARNING_CODES);
               return { candidate, warnings, score };
             });
             const selected = assessed
@@ -4322,11 +4440,24 @@ export function createContextForge(options = {}) {
               });
               auditedCount += 1;
               if (config.autoPromote.enabled && auditor && audit.approved === true) {
-                const reason =
-                  'Auto-promoted after automatic batched candidate audit approved this strict safe candidate.';
-                const memory = autoPromoteIndexedCandidate(store, scope, auditedCandidate, item.warnings, reason, audit);
-                enqueueEmbeddingSources(store, [store.embeddingSourceForMemory(memory)]);
-                promotedCount += 1;
+                const autoPolicy = {
+                  minConfidence: 0.85,
+                  minStability: 0.85,
+                  allowedCategories: SAFE_AUTO_PROMOTE_CATEGORIES,
+                };
+                const autoWarnings = autoPromotionWarnings(store, scope, auditedCandidate, autoPolicy);
+                const autoScore = scorePromotionCandidate(
+                  auditedCandidate,
+                  autoWarnings,
+                  AUTO_PROMOTE_SKIP_WARNING_CODES,
+                );
+                if (autoScore > 0) {
+                  const reason =
+                    'Auto-promoted after automatic batched candidate audit approved this strict safe candidate.';
+                  const memory = autoPromoteIndexedCandidate(store, scope, auditedCandidate, autoWarnings, reason, audit);
+                  enqueueEmbeddingSources(store, [store.embeddingSourceForMemory(memory)]);
+                  promotedCount += 1;
+                }
               }
             }
             candidateAudit = {
