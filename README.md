@@ -19,7 +19,10 @@ ContextForge is a sidecar memory runtime. It complements existing agent memory
 systems by providing canonical project/repo memory, evidence retention, and
 LLM-backed distillation.
 
-Current 0.5.0 builds add structured checkpoint handoff payloads, deterministic
+Current 0.5.1 builds add periodic checkpoint consolidation for richer
+bootstrap context, `handoff.latestConsolidation`, `memoryLifecycle` visibility,
+and refreshed packaged `contextforge-memory` skill guidance. They also include
+the 0.5.0 structured checkpoint handoff payloads, deterministic
 `handoff.latestHandoff` bootstrap state, preserved memory-candidate review
 fields, a server-hosted operator UI, DB-backed runtime settings,
 OpenAI-compatible distillation for DeepSeek-style Chat Completions APIs,
@@ -27,6 +30,19 @@ separate auto-promotion audit runners including the experimental
 `codex_sdk_python` audit provider, remote-first MCP workflows, correction
 reconciliation, hybrid retrieval, and an embedding job queue so vector indexing
 can recover independently from memory or checkpoint writes.
+
+## What's New In 0.5.1
+
+- Checkpoints can be consolidated by thread or repo time window so bootstrap can
+  include period context without loading raw evidence by default.
+- `bootstrapContext` exposes `handoff.latestConsolidation.thread`,
+  `handoff.latestConsolidation.repo`, and `memoryLifecycle` alongside ordinary
+  latest handoff checkpoints.
+- CLI, remote client, and MCP surfaces now include `listDueConsolidations` /
+  `processConsolidations` and `list_due_consolidations` /
+  `process_consolidations`.
+- The packaged `contextforge-memory` skill documents checkpoint consolidation,
+  memory lifecycle checks, candidate audit flow, and scope migration guidance.
 
 ## What's New In 0.5.0
 
