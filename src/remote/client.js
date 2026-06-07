@@ -14,6 +14,8 @@ const REMOTE_METHODS = [
   'sessionStatus',
   'listDueDistillSessions',
   'processDueDistills',
+  'listDueConsolidations',
+  'processConsolidations',
   'remember',
   'promoteMemory',
   'promoteMemoryCandidate',

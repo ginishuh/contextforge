@@ -1111,12 +1111,15 @@ acting. Memory candidates can include optional review fields such as
 fields are preserved in the candidate index for suggestion and audit surfaces.
 
 `bootstrapContext` includes recent checkpoint handoff separately from ordinary
-query results. By default it returns the latest level-0 checkpoint for the
-requested scope in `handoff.latestCheckpoints`, even when that checkpoint does
-not win semantic search ranking. Set `--latestCheckpointLimit 0` to disable
+query results. By default it returns the latest ordinary session checkpoint for
+the requested scope in `handoff.latestCheckpoints`, even when that checkpoint
+does not win semantic search ranking. Set `--latestCheckpointLimit 0` to disable
 this lane, or a value up to `3` to preload more recent checkpoints per scope.
-For multi-repo work, pass comma-separated repo `--relatedScopeKeys` so a subrepo
-can also receive the suite/root repo's latest handoff.
+It also exposes `handoff.latestConsolidation.thread` and
+`handoff.latestConsolidation.repo` when periodic checkpoint consolidation exists,
+so agents can see a richer period summary without loading raw evidence by
+default. For multi-repo work, pass comma-separated repo `--relatedScopeKeys` so a
+subrepo can also receive the suite/root repo's latest handoff.
 
 When a caller knows the session id, `bootstrapContext` can also return the
 working summary and a recent raw tail alongside ordinary retrieval results:
@@ -1146,6 +1149,12 @@ The bootstrap response keeps these channels separate:
 - `handoff.latestHandoff`: the first latest checkpoint in deterministic handoff
   order, including structured handoff payload and live-state stale warnings when
   available.
+- `handoff.latestConsolidation`: latest thread and repo time-window
+  consolidation checkpoints, when available; use these for period context, not
+  as durable memory.
+- `memoryLifecycle`: review/promotion visibility for the scope, including
+  latest candidate/promoted timestamps, pending candidate counts, and recent
+  candidate/promotion counts.
 - `results`: durable memories, checkpoints, and memory candidates from search.
 - `workingSummary`: latest rolling handoff state for the requested session.
 - `rawTail`: newest raw events for last-mile continuity.
@@ -1298,6 +1307,32 @@ node src/cli.js processDueDistills --dryRun true --limit 5
 oldest-first batch, defaults to `--limit 5`, and respects the same normal
 distillation thresholds plus the default idle window.
 
+Inspect or create scope/time-window checkpoint consolidation:
+
+```bash
+node src/cli.js listDueConsolidations \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --target repo \
+  --windowKind daily \
+  --day 2026-06-07
+
+node src/cli.js processConsolidations \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --target repo \
+  --windowKind daily \
+  --day 2026-06-07 \
+  --dryRun true
+```
+
+Consolidation recompresses existing session checkpoints for one thread or repo
+time window. `windowKind: "daily"` uses UTC day boundaries; `windowKind:
+"custom"` requires explicit `coversFrom` and `coversTo`. Consolidation reads
+ordinary `source: "distill"` checkpoints as input, does not reread raw events,
+does not promote durable memory by itself, and should be dry-run before
+unattended scheduling.
+
 CLI output is JSON so adapters and scripts can consume it directly.
 
 Promote a reviewed checkpoint candidate into durable memory:
@@ -1423,6 +1458,8 @@ The MCP server exposes a narrow tool surface over the same core API:
 - `distill_usage`
 - `list_due_distill_sessions`
 - `process_due_distills`
+- `list_due_consolidations`
+- `process_consolidations`
 - `suggest_memory_promotions`
 - `audit_memory_candidates`
 - `auto_promote_memory_candidates`
@@ -1523,10 +1560,13 @@ issue/PR follow-up, or cross-agent handoff, agents should call
 `bootstrap_context` or `bootstrapContext` early. The bootstrap response includes
 `handoff.latestCheckpoints` independently of search ranking, then reviews
 repo-scoped `memory`, `checkpoint`, and `memory_candidate` hits as context
-candidates, optionally includes up to three shared-scope hits, then reminds the
-agent to verify current branch, issue/PR, CI, migration, and runtime state
-against live sources before acting. Agents should read latest checkpoints before
-durable memory for fast-moving work status; durable memory remains the stable
+candidates, optionally includes up to three shared-scope hits, exposes
+`handoff.latestConsolidation` for thread/repo period context when available,
+and reports `memoryLifecycle` so agents can notice stale or missing
+candidate/promotion flow. It then reminds the agent to verify current branch,
+issue/PR, CI, migration, and runtime state against live sources before acting.
+Agents should read latest checkpoints and consolidation before durable memory
+for fast-moving work status; durable memory remains the stable
 policy/contract/runbook layer.
 
 When resuming a known session, pass `sessionId` to `bootstrap_context` or
