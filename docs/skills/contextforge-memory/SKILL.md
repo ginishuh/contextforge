@@ -37,6 +37,32 @@ Always set scope intentionally:
 - `shared`: cross-repo/user-wide conventions. Include only when it may matter.
 - `local`: machine-specific context; opt in only when appropriate.
 
+For renamed or transferred repositories, treat the new repository identity as
+the canonical `scopeKey`. ContextForge may be configured with
+`CONTEXTFORGE_SCOPE_ALIASES` so future reads and writes using an old repo key
+canonicalize to the new key. Before assuming data is missing, check `db_info`
+for loaded `scopeAliases`.
+
+When scope aliases are enabled, old-scope rows that have not been migrated may
+be hidden from normal scoped reads because read/write calls canonicalize to the
+new key. Use `migrate_scope` for explicit migration rather than trying to read
+both old and new scopes as a union.
+
+`migrate_scope` rules:
+
+- Run it as a dry-run first. `dryRun` defaults to `true`.
+- Pass `fromScope`/`fromScopeKey` as the raw stored old scope. The `from` scope
+  is not alias-canonicalized, so it can find rows written before the alias was
+  configured.
+- Pass `toScope`/`toScopeKey` as the intended canonical target. The `to` scope
+  is alias-canonicalized.
+- Inspect `conflicts`, `blocked`, and `blockedReason` before running with
+  `dryRun: false`.
+- `hasRows: false` or `empty: true` means there is nothing to migrate.
+- `totalRows` counts logical rows to move. `derivedRows.memory_fts` and
+  `rebuilt.memory_fts` describe the derived FTS index, not additional durable
+  memory rows.
+
 Before relying on results, check connection metadata and storage authority from `bootstrap_context` or `db_info`:
 
 - `connection.summary`: quickest human-readable access/process summary.
@@ -229,3 +255,8 @@ Embeddings are the supported quality path for retrieval. If `db_info` or `bootst
 3. Use `rebuild_embeddings` only for intentional backfill or dimension changes.
 
 Use `prune_raw_events` only according to retention policy; durable memory and checkpoints are preserved separately.
+
+After a scope migration, remember that `memory_fts` is rebuilt from `memories`
+and embedding vectors remain keyed by immutable source ids. If retrieval looks
+stale after a migration, inspect `db_info` and embedding job state before
+rebuilding embeddings.
