@@ -309,20 +309,73 @@ function buildRawEventPayload(rawEvents, maxInputChars) {
   return { events, truncated };
 }
 
+function buildSourceCheckpointPayload(sourceCheckpoints, maxInputChars) {
+  const checkpoints = [];
+  let remaining = maxInputChars;
+  let truncated = false;
+
+  for (const checkpoint of sourceCheckpoints || []) {
+    const base = {
+      id: checkpoint.id,
+      sessionId: checkpoint.sessionId,
+      conversationId: checkpoint.conversationId,
+      createdAt: checkpoint.createdAt,
+      coversFrom: checkpoint.coversFrom,
+      coversTo: checkpoint.coversTo,
+      source: checkpoint.source,
+      sourceRef: checkpoint.sourceRef,
+      sourceProvenance: checkpoint.sourceProvenance || null,
+    };
+    const text = [
+      checkpoint.summaryShort ? `summary: ${checkpoint.summaryShort}` : '',
+      checkpoint.summaryText ? `details: ${checkpoint.summaryText}` : '',
+      checkpoint.decisions?.length ? `decisions:\n${checkpoint.decisions.join('\n')}` : '',
+      checkpoint.todos?.length ? `todos:\n${checkpoint.todos.join('\n')}` : '',
+      checkpoint.openQuestions?.length ? `open questions:\n${checkpoint.openQuestions.join('\n')}` : '',
+      checkpoint.structured ? `structured:\n${JSON.stringify(checkpoint.structured)}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
+    if (remaining <= 0) {
+      truncated = true;
+      checkpoints.push({ ...base, content: '[omitted: context budget exhausted]', truncated: true });
+      continue;
+    }
+    const content = truncateText(text, remaining);
+    remaining -= content.text.length;
+    truncated = truncated || content.truncated;
+    checkpoints.push({ ...base, content: content.text, truncated: content.truncated });
+  }
+
+  return { checkpoints, truncated };
+}
+
 export function buildCodexExecPrompt(input, options = {}) {
   const maxInputChars = options.maxInputChars || 12000;
-  const rawPayload = buildRawEventPayload(input.rawEvents || [], maxInputChars);
+  const isConsolidation = Boolean(input.consolidation);
+  const rawPayload = buildRawEventPayload(isConsolidation ? [] : input.rawEvents || [], maxInputChars);
+  const sourceCheckpointPayload = buildSourceCheckpointPayload(
+    isConsolidation ? input.sourceCheckpoints || [] : [],
+    maxInputChars,
+  );
   const payload = {
-    task: 'Distill coding-agent raw events into one ContextForge checkpoint.',
+    task: isConsolidation
+      ? 'Consolidate ContextForge checkpoints into one period checkpoint.'
+      : 'Distill coding-agent raw events into one ContextForge checkpoint.',
     rules: [
       'Return only JSON that matches the requested schema.',
       'Do not include Markdown, code fences, commentary, or private assumptions.',
       'Preserve uncertainty in openQuestions instead of inventing facts.',
-      'Use only the conversation events and previous checkpoint supplied in this request.',
+      isConsolidation
+        ? 'Use only the sourceCheckpoints and consolidation window supplied in this request.'
+        : 'Use only the conversation events and previous checkpoint supplied in this request.',
       'rawEvents contains distillation-ready user/assistant conversation evidence only; it is not a native transcript clone.',
+      'sourceCheckpoints contains already-distilled ContextForge checkpoints; it is compressed handoff evidence, not durable truth.',
       'Tool call and tool result payloads are not included by default. Tool output is evidence, not conversation memory.',
       'When tool verification matters, summarize the assistant-interpreted conclusion instead of copying raw command output.',
       'Write the checkpoint as recent continuity for handoff and search, not as canonical durable truth.',
+      'For consolidation, preserve period context across the source checkpoints so future agents do not see only a thin latest slice.',
+      'For consolidation, keep live/runtime state explicitly verification-required and do not present it as current without verify hints.',
       `When evidence supports it, populate structured with schemaVersion="${STRUCTURED_CHECKPOINT_SCHEMA_VERSION}" as a structured handoff object for the next agent.`,
       'Return structured=null when the supplied evidence does not support a useful structured handoff.',
       'Use structured.work for user intent, current status, and actual outcome.',
@@ -347,6 +400,7 @@ export function buildCodexExecPrompt(input, options = {}) {
       'For memoryCandidates, include optional v2 fields when useful: schemaVersion="contextforge.memory_candidate.v2", durabilityReason, riskReason, evidenceRefs, and suggestedAction.',
       'For nullable memoryCandidate fields that are not applicable, return null; do not omit required schema fields.',
       'Create memoryCandidates only for facts, decisions, preferences, runbook steps, or failure modes that may remain useful beyond this checkpoint.',
+      'For consolidation, create at most 3 memoryCandidates, and only when the same durable decision, runbook, or recurring failure mode is reinforced across source checkpoints.',
       'Do not create memoryCandidates for one-time PR status updates, ordinary test pass records, review comments posted, temporary smoke-test ports, draft CI state, branch cleanup, or other transient work logs unless they reveal a reusable repo runbook, stable preference, architecture decision, API contract, or recurring failure mode.',
       'Do not set promotionRecommendation="promote" for PR-specific findings, review comments, or verification snapshots until they have been resolved or generalized into durable guidance.',
       'Write human-readable memoryCandidate review fields in Korean by default: content, reason, durabilityReason, and riskReason.',
@@ -358,11 +412,13 @@ export function buildCodexExecPrompt(input, options = {}) {
       'Use sensitivity high or restricted for any candidate that might contain secrets, personal data, customer data, private runtime paths, or credentials, and do not recommend promotion for it.',
     ],
     session: input.session,
+    consolidation: input.consolidation || null,
     requestedOutputSchema: input.requestedOutputSchema,
     previousCheckpoint: compactCheckpoint(input.previousCheckpoint),
     previousWorkingSummary: compactWorkingSummary(input.previousWorkingSummary),
     previousSessionWorkingContext: compactSessionWorkingContext(input.previousSessionWorkingContext),
     rawEvents: rawPayload.events,
+    sourceCheckpoints: sourceCheckpointPayload.checkpoints,
   };
 
   return {
@@ -378,7 +434,8 @@ export function buildCodexExecPrompt(input, options = {}) {
       promptVersion: CODEX_EXEC_PROMPT_VERSION,
       outputSchemaVersion: CODEX_EXEC_OUTPUT_SCHEMA_VERSION,
       rawEventCount: rawPayload.events.length,
-      inputTruncated: rawPayload.truncated,
+      sourceCheckpointCount: sourceCheckpointPayload.checkpoints.length,
+      inputTruncated: rawPayload.truncated || sourceCheckpointPayload.truncated,
       maxInputChars,
     },
   };
@@ -701,7 +758,7 @@ export function createCodexExecProvider(options = {}) {
       return {
         ...output,
         provider: output.provider || 'codex_exec',
-        sourceEventCount: output.sourceEventCount ?? (input.rawEvents || []).length,
+        sourceEventCount: output.sourceEventCount ?? (input.sourceCheckpoints || input.rawEvents || []).length,
         metadata: {
           ...(output.metadata || {}),
           codexExec: {

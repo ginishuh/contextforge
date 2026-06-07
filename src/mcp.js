@@ -268,6 +268,57 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.processDueDistills(args)),
   );
 
+  const consolidationSchema = {
+    ...scopedSchema,
+    sessionId: z.string().optional(),
+    target: z.enum(['thread', 'repo']).optional(),
+    windowKind: z.enum(['daily', 'custom']).optional(),
+    day: z.string().optional(),
+    coversFrom: z.string().optional(),
+    coversTo: z.string().optional(),
+    source: z.enum(['distill', 'daily_consolidation', 'weekly_consolidation', 'topic_batch', 'manual']).optional(),
+    sourceRef: z.string().optional(),
+    provider: z.string().optional(),
+    maxCheckpoints: z.number().int().positive().optional(),
+    minCheckpoints: z.number().int().positive().optional(),
+    maxChars: z.number().int().positive().optional(),
+  };
+
+  server.registerTool(
+    'list_due_consolidations',
+    {
+      title: 'List Due Consolidations',
+      description:
+        'Dry-run checkpoint consolidation for a thread or repo time window. Consolidation recompresses short checkpoint streams by scope and time window so bootstrap_context can include period context without dumping raw evidence.',
+      inputSchema: consolidationSchema,
+      annotations: {
+        title: 'List Due Consolidations',
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.listDueConsolidations(args)),
+  );
+
+  server.registerTool(
+    'process_consolidations',
+    {
+      title: 'Process Consolidations',
+      description:
+        'Create checkpoint consolidation records for a thread or repo time window. Use dryRun=true first; created consolidation checkpoints are handoff context, not durable memory, and rawTail remains opt-in.',
+      inputSchema: {
+        ...consolidationSchema,
+        dryRun: z.boolean().optional(),
+      },
+      annotations: {
+        title: 'Process Consolidations',
+        readOnlyHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.processConsolidations(args)),
+  );
+
   server.registerTool(
     'search',
     {
@@ -528,7 +579,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Distill Checkpoint',
       description:
-        'Distill raw session evidence into a checkpoint with the configured provider. Returns checkpointId and memoryCandidateCount. Candidate audit runs automatically in scoped batches when auditTrigger is supplied or the batch threshold is reached; automatic promotion only writes approved strict-safe audit results when enabled. level defaults to 0 for session distills; higher levels are reserved for later daily/weekly consolidation.',
+        'Distill raw session evidence into a checkpoint with the configured provider. Returns checkpointId and memoryCandidateCount. Candidate audit runs automatically in scoped batches when auditTrigger is supplied or the batch threshold is reached; automatic promotion only writes approved strict-safe audit results when enabled. Periodic checkpoint consolidation is handled by process_consolidations.',
       inputSchema: {
         ...scopedSchema,
         sessionId: z.string(),

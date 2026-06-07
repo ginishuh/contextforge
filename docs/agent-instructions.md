@@ -67,6 +67,10 @@ policy, deployment, credential-location, or cross-repo conventions.
 
 Read `handoff.latestCheckpoints` before durable memory for recent work status,
 recent decisions, open todos, branch/PR/CI flow, and next actions. Treat
+`handoff.latestConsolidation` as optional thread/repo period context when
+bootstrap would otherwise show only a thin latest checkpoint. Inspect
+`memoryLifecycle` for candidate/promotion freshness, pending candidate counts,
+and recent candidate/promotion flow. Treat
 `memory` as reviewed durable state for stable contracts, policies, and
 runbooks; treat `checkpoint` as credible recent handoff state that still needs
 live verification; and treat `memory_candidate` as review material.
@@ -80,7 +84,8 @@ recent decisions, and unfinished work, then verify current git/GitHub/CI/runtime
 state from live sources.
 
 Use the installed `contextforge-memory` skill for session IDs, distillation,
-candidate review, closeout promotion, correction, and embedding maintenance.
+checkpoint consolidation, candidate review, closeout promotion, correction, and
+embedding maintenance.
 
 Use `connection.summary` or `connection.accessMode` from `db_info` or
 `bootstrap_context` when present. `accessMode` is `direct-local`,

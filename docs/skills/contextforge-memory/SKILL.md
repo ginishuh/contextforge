@@ -64,11 +64,17 @@ At the start of non-trivial project work:
    observed mutable state and verify them from live sources before acting.
 4. Read `handoff.latestCheckpoints` next for recent work status, decisions,
    open todos, branch/PR/CI flow, and next actions.
-5. For multi-repo work, pass repo `relatedScopeKeys` for parent/suite/subrepo scopes whose latest handoff may matter. `latestCheckpointLimit` applies per scope.
-6. Set `includeShared: true` only for cross-repo/user-wide policy, credentials location, deployment, or recurring preference questions.
-7. Read the storage block and result trust roles.
-8. Use targeted `search` calls only when more detail is needed.
-9. Use `get_memory` only when you already know the exact durable key.
+5. Read `handoff.latestConsolidation.thread` and
+   `handoff.latestConsolidation.repo` when present. These are time-window
+   checkpoint summaries for period context, not durable memory.
+6. Inspect `memoryLifecycle` for candidate/promotion freshness:
+   `latestCandidateAt`, `latestPromotedAt`, pending counts, and recent
+   candidate/promotion counts.
+7. For multi-repo work, pass repo `relatedScopeKeys` for parent/suite/subrepo scopes whose latest handoff may matter. `latestCheckpointLimit` applies per scope.
+8. Set `includeShared: true` only for cross-repo/user-wide policy, credentials location, deployment, or recurring preference questions.
+9. Read the storage block and result trust roles.
+10. Use targeted `search` calls only when more detail is needed.
+11. Use `get_memory` only when you already know the exact durable key.
 
 `bootstrap_context` does not create a session. It retrieves scoped context.
 
@@ -91,14 +97,16 @@ For "continue", "yesterday", prior issue/PR follow-up, or cross-agent handoff:
 1. Call `bootstrap_context` first; its latest checkpoint handoff is not dependent on semantic search ranking.
 2. Prefer `handoff.latestHandoff` for the immediate resume state, then read
    other `handoff.latestCheckpoints` if more recent context is needed.
-3. If structured handoff includes live-state warnings or verification hints,
+3. Use `handoff.latestConsolidation` for broader thread/repo period context
+   when ordinary latest checkpoints are too thin.
+4. If structured handoff includes live-state warnings or verification hints,
    run those checks before editing files, reporting status, or making git/GitHub
    claims.
-4. Use `sync_resume_context` only when the exact `sessionId` is known and session working state or raw tail is needed.
-5. Treat checkpoints as credible recent handoff notes and prefer them over durable memory for fast-moving work status.
-6. Treat memory candidates as review material only.
-7. Verify live mutable state before editing or reporting final status.
-8. Do not propose memory promotions during start/resume sync.
+5. Use `sync_resume_context` only when the exact `sessionId` is known and session working state or raw tail is needed.
+6. Treat checkpoints as credible recent handoff notes and prefer them over durable memory for fast-moving work status.
+7. Treat memory candidates as review material only.
+8. Verify live mutable state before editing or reporting final status.
+9. Do not propose memory promotions during start/resume sync.
 
 ## Evidence Capture
 
@@ -142,6 +150,22 @@ Checkpoint `structured` output is recent handoff state, not durable truth. It
 can preserve work status, live-state observations, changes, verification,
 risks, and next actions. Do not promote structured live state directly into
 durable memory unless it is stable, reviewed, and no cheaper live source exists.
+
+## Checkpoint Consolidation
+
+Use checkpoint consolidation when a repo or thread has many short checkpoints
+and bootstrap would otherwise expose only a thin latest slice.
+
+- `list_due_consolidations` is the read-only planning call.
+- `process_consolidations` creates a time-window checkpoint summary; use
+  `dryRun: true` first for unattended or scripted flows.
+- Set `target: "thread"` with `sessionId` for one agent thread, or
+  `target: "repo"` for the scoped repo window.
+- Use `windowKind: "daily"` plus `day` for a UTC day window, or
+  `windowKind: "custom"` with explicit `coversFrom` and `coversTo`.
+- Consolidation uses existing `source: "distill"` checkpoints as evidence. It
+  does not read raw evidence, does not create durable memory by itself, and
+  should create at most a few review candidates for reinforced durable facts.
 
 ## Closeout Promotion
 

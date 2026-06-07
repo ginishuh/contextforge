@@ -764,6 +764,16 @@ export class ContextForgeStore {
         ON embedding_jobs(scope_type, scope_key, status);
       CREATE INDEX IF NOT EXISTS idx_memory_update_candidates_scope
         ON memory_update_candidates(scope_type, scope_key, status, created_at);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_checkpoints_consolidation_unique
+        ON checkpoints(
+          scope_type,
+          scope_key,
+          source,
+          source_ref,
+          json_extract(metadata_json, '$.consolidation.target')
+        )
+        WHERE source_ref IS NOT NULL
+          AND json_extract(metadata_json, '$.consolidation.target') IS NOT NULL;
     `);
 
     this.ensureColumn('checkpoints', 'distill_run_id', 'TEXT');
@@ -2217,6 +2227,85 @@ export class ContextForgeStore {
     return rows.map(hydrateCheckpoint);
   }
 
+  listCheckpointsForConsolidation({
+    scopeType,
+    scopeKey,
+    sessionId = null,
+    coversFrom,
+    coversTo,
+    limit = 100,
+    level = 0,
+  }) {
+    const parsedLimit = Number(limit);
+    if (!Number.isInteger(parsedLimit) || parsedLimit <= 0) {
+      return [];
+    }
+    const filters = [
+      'scope_type = ?',
+      'scope_key = ?',
+      'level = ?',
+      "source = 'distill'",
+      'created_at >= ?',
+      'created_at < ?',
+    ];
+    const values = [scopeType, scopeKey, Number(level), coversFrom, coversTo];
+    if (sessionId) {
+      filters.push('session_id = ?');
+      values.push(sessionId);
+    }
+    values.push(parsedLimit);
+    return this.db
+      .prepare(`
+        SELECT * FROM checkpoints
+        WHERE ${filters.join(' AND ')}
+        ORDER BY created_at ASC, id ASC
+        LIMIT ?
+      `)
+      .all(...values)
+      .map(hydrateCheckpoint);
+  }
+
+  findConsolidationCheckpoint({ scopeType, scopeKey, target, source, sourceRef }) {
+    const row = this.db
+      .prepare(`
+        SELECT * FROM checkpoints
+        WHERE scope_type = ?
+          AND scope_key = ?
+          AND source = ?
+          AND source_ref = ?
+          AND json_extract(metadata_json, '$.consolidation.target') = ?
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+      `)
+      .get(scopeType, scopeKey, source, sourceRef, target);
+    return hydrateCheckpoint(row);
+  }
+
+  getLatestConsolidationCheckpoint({ scopeType, scopeKey, target, sessionId = null }) {
+    const filters = [
+      'scope_type = ?',
+      'scope_key = ?',
+      "json_extract(metadata_json, '$.consolidation.target') = ?",
+    ];
+    const values = [scopeType, scopeKey, target];
+    if (target === 'thread') {
+      if (!sessionId) return null;
+      // Thread consolidation is intentionally single-session; sourceSessionIds[0]
+      // is the synthetic checkpoint's source session for the current design.
+      filters.push("json_extract(metadata_json, '$.consolidation.sourceSessionIds[0]') = ?");
+      values.push(sessionId);
+    }
+    const row = this.db
+      .prepare(`
+        SELECT * FROM checkpoints
+        WHERE ${filters.join(' AND ')}
+        ORDER BY covers_to DESC, created_at DESC, id DESC
+        LIMIT 1
+      `)
+      .get(...values);
+    return hydrateCheckpoint(row);
+  }
+
   getWorkingSummary({ scopeType, scopeKey, sessionId }) {
     const row = this.db
       .prepare(`
@@ -2436,6 +2525,77 @@ export class ContextForgeStore {
       `)
       .all(...values)
       .map(hydrateMemoryCandidate);
+  }
+
+  memoryLifecycleSummary({ scopeType, scopeKey, sinceIso }) {
+    const candidateRows = this.db
+      .prepare(`
+        SELECT
+          status,
+          promotion_recommendation,
+          COUNT(*) AS count,
+          MAX(created_at) AS latest_created_at,
+          MAX(reviewed_at) AS latest_reviewed_at
+        FROM memory_candidate_index
+        WHERE scope_type = ? AND scope_key = ?
+        GROUP BY status, promotion_recommendation
+      `)
+      .all(scopeType, scopeKey);
+    const recentCandidates = this.db
+      .prepare(`
+        SELECT COUNT(*) AS count
+        FROM memory_candidate_index
+        WHERE scope_type = ? AND scope_key = ? AND created_at >= ?
+      `)
+      .get(scopeType, scopeKey, sinceIso).count;
+    const recentPromoted = this.db
+      .prepare(`
+        SELECT COUNT(*) AS count
+        FROM memories
+        WHERE scope_type = ? AND scope_key = ? AND created_at >= ?
+      `)
+      .get(scopeType, scopeKey, sinceIso).count;
+    const latestMemory = this.db
+      .prepare(`
+        SELECT MAX(created_at) AS latest_created_at
+        FROM memories
+        WHERE scope_type = ? AND scope_key = ?
+      `)
+      .get(scopeType, scopeKey);
+    const summary = {
+      latestCandidateAt: null,
+      latestCandidateReviewedAt: null,
+      latestPromotedAt: latestMemory?.latest_created_at || null,
+      pendingCandidateCount: 0,
+      pendingReviewCount: 0,
+      candidatesLast7d: Number(recentCandidates || 0),
+      promotedLast7d: Number(recentPromoted || 0),
+      byStatus: {},
+      byRecommendation: {},
+    };
+    for (const row of candidateRows) {
+      const status = row.status || 'unknown';
+      const recommendation = row.promotion_recommendation || 'none';
+      const count = Number(row.count || 0);
+      summary.byStatus[status] = (summary.byStatus[status] || 0) + count;
+      summary.byRecommendation[recommendation] = (summary.byRecommendation[recommendation] || 0) + count;
+      if (status === 'pending') {
+        summary.pendingCandidateCount += count;
+        if (recommendation === 'review') {
+          summary.pendingReviewCount += count;
+        }
+      }
+      if (!summary.latestCandidateAt || (row.latest_created_at && row.latest_created_at > summary.latestCandidateAt)) {
+        summary.latestCandidateAt = row.latest_created_at || summary.latestCandidateAt;
+      }
+      if (
+        !summary.latestCandidateReviewedAt ||
+        (row.latest_reviewed_at && row.latest_reviewed_at > summary.latestCandidateReviewedAt)
+      ) {
+        summary.latestCandidateReviewedAt = row.latest_reviewed_at || summary.latestCandidateReviewedAt;
+      }
+    }
+    return summary;
   }
 
   getPreferenceOccurrence({ scopeType, scopeKey, mergeKey = null, candidateId = null }) {

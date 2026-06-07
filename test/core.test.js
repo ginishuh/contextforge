@@ -4640,6 +4640,315 @@ test('bootstrapContext includes latest checkpoints independently from search res
   assert.equal(disabled.handoff.latestHandoff, null);
 });
 
+test('processConsolidations creates scope-window checkpoints and bootstrap exposes them', async () => {
+  const dataDir = await makeTempDir();
+  const store = new ContextForgeStore({ dataDir });
+  let providerInput = null;
+  const embeddingProvider = {
+    name: 'test-vector',
+    model: 'test-embedding',
+    dimensions: 3,
+    async embed(texts) {
+      return texts.map((text) => (String(text).includes('consolidated') ? [1, 0, 0] : [0, 1, 0]));
+    },
+  };
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'consolidation_provider',
+      CONTEXTFORGE_EMBEDDINGS_PROVIDER: 'openai',
+      CONTEXTFORGE_EMBEDDINGS_DIMENSIONS: '3',
+    },
+    cwd: process.cwd(),
+    store,
+    embeddingProviders: {
+      openai: embeddingProvider,
+    },
+    distillProviders: {
+      consolidation_provider: async (input) => {
+        providerInput = input;
+        return {
+          summaryShort: 'Daily consolidated context.',
+          summaryText: `Daily consolidated context from ${input.sourceCheckpoints.length} source checkpoints.`,
+          decisions: ['Use period consolidation for bootstrap context.'],
+          todos: ['Verify mutable live state before acting.'],
+          openQuestions: [],
+          memoryCandidates: [
+            {
+              key: 'period-consolidation-runbook',
+              content: 'Period consolidation should preserve repeated durable runbook signals.',
+              reason: 'Repeated across source checkpoints.',
+              promotionRecommendation: 'review',
+            },
+          ],
+          sourceEventCount: input.sourceCheckpoints.length,
+          metadata: { synthetic: true, codexExec: { inputTruncated: true } },
+        };
+      },
+    },
+  });
+
+  for (const [sessionId, summaryText] of [
+    ['thread-a', 'First checkpoint mentions bootstrap being too thin.'],
+    ['thread-a', 'Second checkpoint mentions preserving period context.'],
+    ['thread-b', 'Third checkpoint from another session mentions memory candidates.'],
+  ]) {
+    store.insertCheckpoint({
+      scopeType: 'repo',
+      scopeKey: 'repo-consolidation',
+      sessionId,
+      summaryShort: 'Source checkpoint.',
+      summaryText,
+      decisions: [],
+      todos: [],
+      openQuestions: [],
+      sourceEventCount: 1,
+      provider: 'test',
+      source: 'distill',
+      metadata: {
+        sourceProvenance: {
+          sourceAgent: sessionId === 'thread-b' ? 'claude_code' : 'codex',
+        },
+      },
+    });
+  }
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-consolidation',
+    key: 'existing-memory',
+    content: 'Existing durable memory for lifecycle summary.',
+  });
+
+  const due = app.listDueConsolidations({
+    scope: 'repo',
+    scopeKey: 'repo-consolidation',
+    target: 'repo',
+    day: new Date().toISOString(),
+  });
+  assert.equal(due.count, 1);
+  assert.equal(due.items[0].target, 'repo');
+  assert.equal(due.items[0].sourceCheckpointCount, 3);
+  assert.equal(due.memoryLifecycle.latestPromotedAt != null, true);
+
+  const result = await app.processConsolidations({
+    scope: 'repo',
+    scopeKey: 'repo-consolidation',
+    target: 'repo',
+    day: new Date().toISOString(),
+  });
+  assert.equal(result.created, 1);
+  assert.equal(result.checkpoint.source, 'daily_consolidation');
+  assert.equal(result.checkpoint.metadata.consolidation.target, 'repo');
+  assert.equal(result.checkpoint.metadata.consolidation.windowKind, 'daily');
+  assert.equal(result.checkpoint.metadata.consolidation.inputTruncated, true);
+  assert.equal(result.checkpoint.metadata.consolidation.sourceCheckpointIds.length, 3);
+  assert.deepEqual(result.checkpoint.metadata.consolidation.sourceAgents.sort(), ['claude_code', 'codex']);
+  assert.equal(result.memoryCandidateCount, 1);
+  assert.equal(result.embedding.queued, 2);
+  assert.equal(providerInput.consolidation.target, 'repo');
+  assert.equal(providerInput.rawEvents.length, 0);
+  assert.equal(providerInput.sourceCheckpoints.length, 3);
+  assert.throws(
+    () =>
+      store.insertCheckpoint({
+        scopeType: 'repo',
+        scopeKey: 'repo-consolidation',
+        sessionId: 'duplicate-consolidation',
+        summaryShort: 'Duplicate consolidation.',
+        summaryText: 'This should be blocked by the consolidation uniqueness index.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        sourceEventCount: 1,
+        provider: 'test',
+        source: 'daily_consolidation',
+        sourceRef: result.checkpoint.sourceRef,
+        metadata: {
+          consolidation: {
+            target: 'repo',
+          },
+        },
+      }),
+    /UNIQUE constraint failed|constraint/i,
+  );
+  assert.throws(
+    () =>
+      app.listDueConsolidations({
+        scope: 'repo',
+        scopeKey: 'repo-consolidation',
+        target: 'repo',
+        windowKind: 'rolling',
+      }),
+    /windowKind must be one of: daily, custom/,
+  );
+
+  const duplicate = await app.processConsolidations({
+    scope: 'repo',
+    scopeKey: 'repo-consolidation',
+    target: 'repo',
+    day: new Date().toISOString(),
+  });
+  assert.equal(duplicate.created, 0);
+  assert.equal(duplicate.skipped, 1);
+  assert.equal(duplicate.items[0].reason, 'already_exists');
+
+  const bootstrap = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-consolidation',
+    query: 'period consolidation bootstrap',
+  });
+  assert.equal(bootstrap.handoff.latestConsolidation.repo.id, result.checkpoint.id);
+  assert.equal(bootstrap.handoff.latestConsolidation.repo.consolidation.target, 'repo');
+  assert.equal(bootstrap.memoryLifecycle.pendingReviewCount, 1);
+  assert.equal(bootstrap.memoryLifecycle.candidatesLast7d >= 1, true);
+  assert.equal(bootstrap.rawTail, undefined);
+});
+
+test('processConsolidations collapses race duplicate insertions into already_exists', async () => {
+  const dataDir = await makeTempDir();
+  const store = new ContextForgeStore({ dataDir });
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'race_provider',
+    },
+    cwd: process.cwd(),
+    store,
+    distillProviders: {
+      race_provider: async (input) => {
+        store.insertCheckpoint({
+          scopeType: input.session.scopeType,
+          scopeKey: input.session.scopeKey,
+          sessionId: 'competing-worker',
+          summaryShort: 'Competing consolidation.',
+          summaryText: 'A competing worker inserted this consolidation first.',
+          decisions: [],
+          todos: [],
+          openQuestions: [],
+          sourceEventCount: input.sourceCheckpoints.length,
+          provider: 'race_provider',
+          level: 1,
+          coversFrom: input.consolidation.coversFrom,
+          coversTo: input.consolidation.coversTo,
+          source: 'daily_consolidation',
+          sourceRef: input.consolidation.sourceRef,
+          metadata: {
+            consolidation: {
+              target: input.consolidation.target,
+            },
+          },
+        });
+        return {
+          summaryShort: 'Losing consolidation.',
+          summaryText: 'This output should be collapsed to the existing checkpoint.',
+          decisions: [],
+          todos: [],
+          openQuestions: [],
+          memoryCandidates: [],
+          sourceEventCount: input.sourceCheckpoints.length,
+          metadata: {},
+        };
+      },
+    },
+  });
+
+  for (const summaryText of ['First source checkpoint.', 'Second source checkpoint.']) {
+    store.insertCheckpoint({
+      scopeType: 'repo',
+      scopeKey: 'repo-consolidation-race',
+      sessionId: 'thread-race',
+      summaryShort: 'Source checkpoint.',
+      summaryText,
+      decisions: [],
+      todos: [],
+      openQuestions: [],
+      sourceEventCount: 1,
+      provider: 'test',
+      source: 'distill',
+      metadata: {},
+    });
+  }
+
+  const result = await app.processConsolidations({
+    scope: 'repo',
+    scopeKey: 'repo-consolidation-race',
+    target: 'repo',
+    day: new Date().toISOString(),
+  });
+
+  assert.equal(result.processed, 1);
+  assert.equal(result.created, 0);
+  assert.equal(result.skipped, 1);
+  assert.equal(result.items[0].reason, 'already_exists');
+  assert.equal(result.checkpoint.summaryShort, 'Competing consolidation.');
+});
+
+test('processConsolidations supports thread windows without mixing sessions', async () => {
+  const dataDir = await makeTempDir();
+  const store = new ContextForgeStore({ dataDir });
+  let sourceSessionIds = [];
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'thread_consolidation_provider',
+    },
+    cwd: process.cwd(),
+    store,
+    distillProviders: {
+      thread_consolidation_provider: async (input) => {
+        sourceSessionIds = input.sourceCheckpoints.map((checkpoint) => checkpoint.sessionId);
+        return {
+          summaryShort: 'Thread consolidated context.',
+          summaryText: 'Thread consolidated context from one session.',
+          decisions: [],
+          todos: [],
+          openQuestions: [],
+          memoryCandidates: [],
+          sourceEventCount: input.sourceCheckpoints.length,
+          metadata: {},
+        };
+      },
+    },
+  });
+
+  for (const sessionId of ['target-thread', 'target-thread', 'other-thread']) {
+    store.insertCheckpoint({
+      scopeType: 'repo',
+      scopeKey: 'repo-thread-consolidation',
+      sessionId,
+      summaryShort: 'Thread source checkpoint.',
+      summaryText: `Checkpoint for ${sessionId}.`,
+      decisions: [],
+      todos: [],
+      openQuestions: [],
+      sourceEventCount: 1,
+      provider: 'test',
+      source: 'distill',
+      metadata: {},
+    });
+  }
+
+  const result = await app.processConsolidations({
+    scope: 'repo',
+    scopeKey: 'repo-thread-consolidation',
+    target: 'thread',
+    sessionId: 'target-thread',
+    day: new Date().toISOString(),
+  });
+
+  assert.equal(result.created, 1);
+  assert.deepEqual(sourceSessionIds, ['target-thread', 'target-thread']);
+  assert.deepEqual(result.checkpoint.metadata.consolidation.sourceSessionIds, ['target-thread']);
+
+  const bootstrap = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-thread-consolidation',
+    sessionId: 'target-thread',
+    query: 'thread consolidated context',
+  });
+  assert.equal(bootstrap.handoff.latestConsolidation.thread.id, result.checkpoint.id);
+});
+
 test('bootstrapContext can include latest checkpoints from related repo scopes', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({
@@ -9332,6 +9641,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'get_session_working_context',
       'get_working_summary',
       'list_checkpoints',
+      'list_due_consolidations',
       'list_due_distill_sessions',
       'list_embedding_jobs',
       'list_memory_candidates',
@@ -9339,6 +9649,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'list_memory_update_candidates',
       'list_preference_occurrences',
       'migrate_scope',
+      'process_consolidations',
       'process_due_distills',
       'process_embedding_jobs',
       'promote_memory',
@@ -9371,6 +9682,14 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.ok(processDueDistillsTool.inputSchema.properties.dryRun);
     assert.ok(processDueDistillsTool.inputSchema.properties.limit);
     assert.ok(processDueDistillsTool.description.includes('catch-up batch'));
+    const listDueConsolidationsTool = toolList.tools.find((tool) => tool.name === 'list_due_consolidations');
+    assert.ok(listDueConsolidationsTool.inputSchema.properties.target);
+    assert.ok(listDueConsolidationsTool.inputSchema.properties.windowKind);
+    assert.deepEqual(listDueConsolidationsTool.inputSchema.properties.windowKind.enum, ['daily', 'custom']);
+    assert.ok(listDueConsolidationsTool.description.includes('time window'));
+    const processConsolidationsTool = toolList.tools.find((tool) => tool.name === 'process_consolidations');
+    assert.ok(processConsolidationsTool.inputSchema.properties.dryRun);
+    assert.ok(processConsolidationsTool.description.includes('handoff context'));
     const distillTool = toolList.tools.find((tool) => tool.name === 'distill_checkpoint');
     assert.ok(distillTool.inputSchema.properties.maxEvents);
     assert.ok(distillTool.inputSchema.properties.maxChars);
