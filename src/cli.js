@@ -100,6 +100,8 @@ function toCoreOptions(options) {
     sourceCandidateIndex: options.sourceCandidateIndex == null ? undefined : Number(options.sourceCandidateIndex),
     candidateId: options.candidateId,
     checkpointId: options.checkpointId,
+    distillRunId: options.distillRunId,
+    operation: options.operation,
     status: options.status,
     candidateType: options.candidateType,
     promotionRecommendation: options.promotionRecommendation,
@@ -195,6 +197,7 @@ function toCoreOptions(options) {
     confidence: options.confidence == null ? undefined : Number(options.confidence),
     batchSize: options.batchSize == null ? undefined : Number(options.batchSize),
     force: options.force === true || options.force === 'true',
+    includeEvents: options.includeEvents === true || options.includeEvents === 'true',
     retryFailed: options.retryFailed === true || options.retryFailed === 'true',
     staleAfterMs: options.staleAfterMs == null ? undefined : Number(options.staleAfterMs),
   };
@@ -261,6 +264,8 @@ async function main() {
     pruneRawEvents: (app, coreOptions) => app.pruneRawEvents(coreOptions),
     distillCheckpoint: (app, coreOptions) => app.distillCheckpoint(coreOptions),
     listDistillRuns: (app, coreOptions) => app.listDistillRuns(coreOptions),
+    listLlmUsageEvents: (app, coreOptions) => app.listLlmUsageEvents(coreOptions),
+    llmUsageRollup: (app, coreOptions) => app.llmUsageRollup(coreOptions),
     distillUsage: (app, coreOptions) => app.distillUsage(coreOptions),
     ingestCodexRollout: (app, coreOptions) => ingestCodexRolloutFile(app, coreOptions),
     ingestCodexSessions: (app, coreOptions) =>

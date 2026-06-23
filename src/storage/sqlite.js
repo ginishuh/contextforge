@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 
-export const SCHEMA_VERSION = 16;
+export const SCHEMA_VERSION = 17;
 
 function nowIso() {
   return new Date().toISOString();
@@ -105,6 +105,34 @@ function hydrateDistillRun(row) {
     errorStack: row.error_stack,
     createdAt: row.created_at,
     completedAt: row.completed_at,
+  };
+}
+
+function hydrateLlmUsageEvent(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    scopeType: row.scope_type,
+    scopeKey: row.scope_key,
+    operation: row.operation,
+    provider: row.provider,
+    model: row.model,
+    status: row.status,
+    sessionId: row.session_id,
+    distillRunId: row.distill_run_id,
+    checkpointId: row.checkpoint_id,
+    candidateId: row.candidate_id,
+    inputTokens: row.input_tokens,
+    cachedInputTokens: row.cached_input_tokens,
+    uncachedInputTokens: row.uncached_input_tokens,
+    outputTokens: row.output_tokens,
+    reasoningTokens: row.reasoning_tokens,
+    totalTokens: row.total_tokens,
+    usage: parseJson(row.usage_json, {}),
+    estimated: Boolean(row.estimated),
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    elapsedMs: row.elapsed_ms,
   };
 }
 
@@ -562,6 +590,34 @@ export class ContextForgeStore {
         completed_at TEXT
       );
 
+      CREATE TABLE IF NOT EXISTS llm_usage_events (
+        id TEXT PRIMARY KEY,
+        scope_type TEXT NOT NULL CHECK (scope_type IN ('shared', 'repo', 'local')),
+        scope_key TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT,
+        status TEXT NOT NULL CHECK (status IN ('started', 'succeeded', 'failed')),
+        session_id TEXT,
+        distill_run_id TEXT,
+        checkpoint_id TEXT,
+        candidate_id TEXT,
+        input_tokens INTEGER,
+        cached_input_tokens INTEGER,
+        uncached_input_tokens INTEGER,
+        output_tokens INTEGER,
+        reasoning_tokens INTEGER,
+        total_tokens INTEGER,
+        usage_json TEXT NOT NULL DEFAULT '{}',
+        estimated INTEGER NOT NULL DEFAULT 0 CHECK (estimated IN (0, 1)),
+        started_at TEXT NOT NULL,
+        completed_at TEXT,
+        elapsed_ms INTEGER,
+        FOREIGN KEY (distill_run_id) REFERENCES distill_runs(id) ON DELETE SET NULL,
+        FOREIGN KEY (checkpoint_id) REFERENCES checkpoints(id) ON DELETE SET NULL,
+        FOREIGN KEY (candidate_id) REFERENCES memory_candidate_index(id) ON DELETE SET NULL
+      );
+
       CREATE TABLE IF NOT EXISTS runtime_settings (
         key TEXT PRIMARY KEY,
         value_json TEXT NOT NULL,
@@ -746,6 +802,14 @@ export class ContextForgeStore {
         ON checkpoints(scope_type, scope_key, session_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_distill_runs_session
         ON distill_runs(scope_type, scope_key, session_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_llm_usage_events_scope
+        ON llm_usage_events(scope_type, scope_key, started_at);
+      CREATE INDEX IF NOT EXISTS idx_llm_usage_events_session
+        ON llm_usage_events(scope_type, scope_key, session_id, started_at);
+      CREATE INDEX IF NOT EXISTS idx_llm_usage_events_distill_run
+        ON llm_usage_events(distill_run_id);
+      CREATE INDEX IF NOT EXISTS idx_llm_usage_events_candidate
+        ON llm_usage_events(candidate_id);
       CREATE INDEX IF NOT EXISTS idx_runtime_settings_secret
         ON runtime_settings(secret, updated_at);
       CREATE INDEX IF NOT EXISTS idx_working_summaries_scope
@@ -837,6 +901,7 @@ export class ContextForgeStore {
         rawEvents: count('raw_events'),
         checkpoints: count('checkpoints'),
         distillRuns: count('distill_runs'),
+        llmUsageEvents: count('llm_usage_events'),
         runtimeSettings: count('runtime_settings'),
         workingSummaries: count('working_summaries'),
         sessionWorkingContexts: count('session_working_context'),
@@ -3136,6 +3201,124 @@ export class ContextForgeStore {
         id,
       );
     return hydrateDistillRun(row);
+  }
+
+  insertLlmUsageEvent({
+    scopeType,
+    scopeKey,
+    operation,
+    provider,
+    model = null,
+    status = 'succeeded',
+    sessionId = null,
+    distillRunId = null,
+    checkpointId = null,
+    candidateId = null,
+    inputTokens = null,
+    cachedInputTokens = null,
+    uncachedInputTokens = null,
+    outputTokens = null,
+    reasoningTokens = null,
+    totalTokens = null,
+    usage = {},
+    estimated = false,
+    startedAt = nowIso(),
+    completedAt = null,
+    elapsedMs = null,
+  }) {
+    if (!['started', 'succeeded', 'failed'].includes(status)) {
+      throw new Error('LLM usage event status must be started, succeeded, or failed.');
+    }
+    const row = this.db
+      .prepare(`
+        INSERT INTO llm_usage_events (
+          id, scope_type, scope_key, operation, provider, model, status,
+          session_id, distill_run_id, checkpoint_id, candidate_id,
+          input_tokens, cached_input_tokens, uncached_input_tokens,
+          output_tokens, reasoning_tokens, total_tokens, usage_json,
+          estimated, started_at, completed_at, elapsed_ms
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        RETURNING *
+      `)
+      .get(
+        randomUUID(),
+        scopeType,
+        scopeKey,
+        operation,
+        provider,
+        model,
+        status,
+        sessionId,
+        distillRunId,
+        checkpointId,
+        candidateId,
+        inputTokens == null ? null : Number(inputTokens),
+        cachedInputTokens == null ? null : Number(cachedInputTokens),
+        uncachedInputTokens == null ? null : Number(uncachedInputTokens),
+        outputTokens == null ? null : Number(outputTokens),
+        reasoningTokens == null ? null : Number(reasoningTokens),
+        totalTokens == null ? null : Number(totalTokens),
+        json(usage, {}),
+        estimated ? 1 : 0,
+        startedAt,
+        completedAt,
+        elapsedMs == null ? null : Number(elapsedMs),
+      );
+    return hydrateLlmUsageEvent(row);
+  }
+
+  listLlmUsageEvents({
+    scopeType,
+    scopeKey,
+    sessionId = null,
+    distillRunId = null,
+    checkpointId = null,
+    candidateId = null,
+    operation = null,
+    provider = null,
+    limit = null,
+    order = 'asc',
+  }) {
+    const filters = ['scope_type = ?', 'scope_key = ?'];
+    const values = [scopeType, scopeKey];
+    if (sessionId) {
+      filters.push('session_id = ?');
+      values.push(sessionId);
+    }
+    if (distillRunId) {
+      filters.push('distill_run_id = ?');
+      values.push(distillRunId);
+    }
+    if (checkpointId) {
+      filters.push('checkpoint_id = ?');
+      values.push(checkpointId);
+    }
+    if (candidateId) {
+      filters.push('candidate_id = ?');
+      values.push(candidateId);
+    }
+    if (operation) {
+      filters.push('operation = ?');
+      values.push(operation);
+    }
+    if (provider) {
+      filters.push('provider = ?');
+      values.push(provider);
+    }
+    const parsedLimit = limit == null ? null : Number(limit);
+    const limitClause = Number.isInteger(parsedLimit) && parsedLimit > 0 ? 'LIMIT ?' : '';
+    if (limitClause) values.push(parsedLimit);
+    const orderDirection = order === 'desc' ? 'DESC' : 'ASC';
+    return this.db
+      .prepare(`
+        SELECT * FROM llm_usage_events
+        WHERE ${filters.join(' AND ')}
+        ORDER BY started_at ${orderDirection}, id ${orderDirection}
+        ${limitClause}
+      `)
+      .all(...values)
+      .map(hydrateLlmUsageEvent);
   }
 
   listDistillRuns({ scopeType, scopeKey, sessionId = null, status = null, provider = null, limit = null, order = 'asc' }) {

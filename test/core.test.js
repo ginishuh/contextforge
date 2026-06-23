@@ -355,6 +355,7 @@ test('dbInfo initializes a fresh SQLite store', async () => {
 
   assert.equal(info.schemaVersion, SCHEMA_VERSION);
   assert.equal(info.tables.memories, 0);
+  assert.equal(info.tables.llmUsageEvents, 0);
   assert.equal(info.tables.embeddingJobs, 0);
   assert.equal(info.embeddings.requiredForQuality, true);
   assert.equal(info.embeddings.staleAfterMs, 10 * 60 * 1000);
@@ -5711,8 +5712,43 @@ test('distillUsage summarizes estimated and actual provider usage', async () => 
     promptCacheMissTokens: 32,
     promptCacheHitRatio: 10 / 42,
   });
+  assert.equal(usage.totals.persistedUsage.events, 1);
+  assert.equal(usage.totals.persistedUsage.inputTokens, 42);
+  assert.equal(usage.totals.persistedUsage.cachedInputTokens, 10);
+  assert.equal(usage.totals.persistedUsage.uncachedInputTokens, 32);
+  assert.equal(usage.totals.persistedUsage.outputTokens, 8);
+  assert.equal(usage.totals.persistedUsage.totalTokens, 50);
+  assert.equal(usage.totals.persistedUsage.byOperation.checkpoint_distill.events, 1);
+  assert.equal(usage.totals.persistedUsage.byProviderModel.usage_provider.events, 1);
+  assert.equal(usage.totals.persistedUsage.byProviderModelOperation['usage_provider:checkpoint_distill'].events, 1);
+  assert.equal(usage.totals.canonicalUsage.source, 'persisted_usage_events');
+  assert.equal(usage.totals.canonicalUsage.totalTokens, 50);
   assert.equal(usage.runs[0].usage.totalTokens, 50);
   assert.equal(usage.runs[0].usage.promptCacheHitTokens, 10);
+
+  const store = new ContextForgeStore({ dataDir });
+  const events = store.listLlmUsageEvents({
+    scopeType: 'repo',
+    scopeKey: 'repo-usage',
+    sessionId: 'usage-session',
+  });
+  assert.equal(events.length, 1);
+  assert.equal(events[0].operation, 'checkpoint_distill');
+  assert.equal(events[0].inputTokens, 42);
+  assert.equal(events[0].cachedInputTokens, 10);
+  assert.equal(events[0].uncachedInputTokens, 32);
+  assert.equal(events[0].usage.prompt_cache_hit_tokens, 10);
+  store.close();
+
+  const rollup = app.llmUsageRollup({
+    scope: 'repo',
+    scopeKey: 'repo-usage',
+    sessionId: 'usage-session',
+  });
+  assert.equal(rollup.totals.events, 1);
+  assert.equal(rollup.totals.byOperation.checkpoint_distill.totalTokens, 50);
+  assert.equal(rollup.totals.byProviderModel.usage_provider.inputTokens, 42);
+  assert.equal(rollup.totals.byProviderModelOperation['usage_provider:checkpoint_distill'].outputTokens, 8);
 });
 
 test('distillUsage averages elapsed time across completed runs only', async () => {
@@ -7349,6 +7385,17 @@ test('auditMemoryCandidates returns audited read-only recommendations', async ()
           provider: 'codex_exec',
           model: 'gpt-5.5',
           reasoningEffort: 'low',
+          usage: {
+            prompt_tokens: 100,
+            completion_tokens: 25,
+            total_tokens: 125,
+            prompt_tokens_details: {
+              cached_tokens: 40,
+            },
+            completion_tokens_details: {
+              reasoning_tokens: 7,
+            },
+          },
         },
       };
     },
@@ -7425,6 +7472,109 @@ test('auditMemoryCandidates returns audited read-only recommendations', async ()
   });
   assert.equal(pendingCandidates.length, 1);
   assert.equal(pendingCandidates[0].candidate.key, 'audited-readonly-runbook');
+
+  const store = new ContextForgeStore({ dataDir });
+  const events = store.listLlmUsageEvents({
+    scopeType: 'repo',
+    scopeKey: 'audit-suggestions-repo',
+    sessionId: 'audit-suggestions-session',
+  });
+  assert.equal(events.length, 1);
+  assert.equal(events[0].operation, 'candidate_audit');
+  assert.equal(events[0].provider, 'codex_exec');
+  assert.equal(events[0].model, 'gpt-5.5');
+  assert.equal(events[0].checkpointId, checkpoint.id);
+  assert.equal(events[0].candidateId, pendingCandidates[0].id);
+  assert.equal(events[0].inputTokens, 100);
+  assert.equal(events[0].cachedInputTokens, 40);
+  assert.equal(events[0].uncachedInputTokens, 60);
+  assert.equal(events[0].outputTokens, 25);
+  assert.equal(events[0].reasoningTokens, 7);
+  assert.equal(events[0].totalTokens, 125);
+  store.close();
+});
+
+test('auditMemoryCandidates records failed audit usage when error metadata includes usage', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'audit_failure_usage_provider',
+    },
+    cwd: process.cwd(),
+    autoPromoteAuditor: async () => {
+      const error = new Error('Synthetic audit transport failure.');
+      error.metadata = {
+        provider: 'codex_sdk_python',
+        model: 'gpt-5.5',
+        usage: {
+          input_tokens: 30,
+          output_tokens: 4,
+          total_tokens: 34,
+          input_tokens_details: {
+            cached_tokens: 12,
+          },
+        },
+      };
+      throw error;
+    },
+    distillProviders: {
+      audit_failure_usage_provider: async () => ({
+        summaryShort: 'Audit failure usage checkpoint.',
+        summaryText: 'Closeout produced a candidate whose audit fails after usage is known.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'audit-failure-usage-runbook',
+            content: 'Failed audit calls should preserve token usage when providers expose it.',
+            category: 'runbook',
+            candidateType: 'runbook',
+            confidence: 0.96,
+            stability: 0.96,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+        ],
+      }),
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'audit-failure-usage-repo',
+    sessionId: 'audit-failure-usage-session',
+    role: 'assistant',
+    content: 'Failed audit usage should be preserved.',
+  });
+  const checkpoint = await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'audit-failure-usage-repo',
+    sessionId: 'audit-failure-usage-session',
+  });
+
+  const result = await app.auditMemoryCandidates({
+    scope: 'repo',
+    scopeKey: 'audit-failure-usage-repo',
+    checkpointId: checkpoint.id,
+    trigger: 'manual_closeout',
+  });
+  assert.equal(result.proposals.length, 1);
+  assert.equal(result.proposals[0].recommendedAction, 'review');
+
+  const events = app.listLlmUsageEvents({
+    scope: 'repo',
+    scopeKey: 'audit-failure-usage-repo',
+    sessionId: 'audit-failure-usage-session',
+  });
+  assert.equal(events.length, 1);
+  assert.equal(events[0].operation, 'candidate_audit');
+  assert.equal(events[0].status, 'failed');
+  assert.equal(events[0].provider, 'codex_sdk_python');
+  assert.equal(events[0].inputTokens, 30);
+  assert.equal(events[0].cachedInputTokens, 12);
+  assert.equal(events[0].uncachedInputTokens, 18);
+  assert.equal(events[0].totalTokens, 34);
 });
 
 test('auditMemoryCandidates audits review candidates and skips noisy events before runner', async () => {
@@ -7675,6 +7825,11 @@ test('distillCheckpoint automatically audits session candidate batches', async (
           provider: 'codex_sdk_python',
           model: 'gpt-5.5',
           reasoningEffort: 'low',
+          usage: {
+            input_tokens: 20,
+            output_tokens: 5,
+            total_tokens: 25,
+          },
         },
       };
     },
@@ -7738,6 +7893,23 @@ test('distillCheckpoint automatically audits session candidate batches', async (
   assert.equal(candidates.length, 2);
   assert.ok(candidates.every((candidate) => candidate.reviewMetadata.audit?.metadata?.model === 'gpt-5.5'));
   assert.ok(candidates.every((candidate) => candidate.reviewMetadata.auditMetadata?.sourceMode === 'threshold_batch'));
+  const usageEvents = app.listLlmUsageEvents({
+    scope: 'repo',
+    scopeKey: 'batch-audit-repo',
+    sessionId: 'batch-audit-session',
+    operation: 'candidate_audit',
+    order: 'asc',
+  });
+  assert.equal(usageEvents.length, 2);
+  assert.ok(usageEvents.every((event) => event.distillRunId === checkpoint.distillRunId));
+  assert.deepEqual(
+    usageEvents.map((event) => event.candidateId).sort(),
+    candidates.map((candidate) => candidate.id).sort(),
+  );
+  assert.deepEqual(
+    usageEvents.map((event) => event.totalTokens),
+    [25, 25],
+  );
 
   const storedAudit = await app.auditMemoryCandidates({
     scope: 'repo',
@@ -9460,6 +9632,8 @@ test('REMOTE_METHODS exposes resume, suggestion, auto-promotion, and reconciliat
   assert.ok(REMOTE_METHODS.includes('checkDistillProvider'));
   assert.ok(REMOTE_METHODS.includes('listScopeKeys'));
   assert.ok(REMOTE_METHODS.includes('listRecentDistillRuns'));
+  assert.ok(REMOTE_METHODS.includes('listLlmUsageEvents'));
+  assert.ok(REMOTE_METHODS.includes('llmUsageRollup'));
   assert.ok(REMOTE_METHODS.includes('listDueDistillSessions'));
   assert.ok(REMOTE_METHODS.includes('processDueDistills'));
   assert.ok(REMOTE_METHODS.includes('listMemories'));
@@ -9603,6 +9777,39 @@ test('CLI supports the v0 workflow with synthetic data', async () => {
   );
   assert.match(usage.stdout, /"estimatedInputTokens":/);
   assert.match(usage.stdout, /"runs": 1/);
+
+  const usageRollup = await execFileAsync(
+    'node',
+    [
+      'src/cli.js',
+      'llmUsageRollup',
+      '--scope',
+      'repo',
+      '--scopeKey',
+      'cli-repo',
+      '--sessionId',
+      'cli-session',
+    ],
+    { env },
+  );
+  assert.match(usageRollup.stdout, /"byOperation":/);
+  assert.match(usageRollup.stdout, /"events":/);
+
+  const usageEvents = await execFileAsync(
+    'node',
+    [
+      'src/cli.js',
+      'listLlmUsageEvents',
+      '--scope',
+      'repo',
+      '--scopeKey',
+      'cli-repo',
+      '--sessionId',
+      'cli-session',
+    ],
+    { env },
+  );
+  assert.match(usageEvents.stdout, /\[/);
 });
 
 test('MCP stdio server exposes core tools for synthetic integration', async () => {
@@ -9644,10 +9851,12 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'list_due_consolidations',
       'list_due_distill_sessions',
       'list_embedding_jobs',
+      'list_llm_usage_events',
       'list_memory_candidates',
       'list_memory_events',
       'list_memory_update_candidates',
       'list_preference_occurrences',
+      'llm_usage_rollup',
       'migrate_scope',
       'process_consolidations',
       'process_due_distills',
@@ -9699,6 +9908,12 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.ok(listCheckpointsTool.inputSchema.properties.level);
     const distillUsageTool = toolList.tools.find((tool) => tool.name === 'distill_usage');
     assert.ok(distillUsageTool.inputSchema.properties.charsPerToken);
+    const llmUsageRollupTool = toolList.tools.find((tool) => tool.name === 'llm_usage_rollup');
+    assert.ok(llmUsageRollupTool.inputSchema.properties.operation);
+    assert.ok(llmUsageRollupTool.inputSchema.properties.includeEvents);
+    const listLlmUsageEventsTool = toolList.tools.find((tool) => tool.name === 'list_llm_usage_events');
+    assert.ok(listLlmUsageEventsTool.inputSchema.properties.distillRunId);
+    assert.ok(listLlmUsageEventsTool.inputSchema.properties.provider);
     const processEmbeddingJobsTool = toolList.tools.find((tool) => tool.name === 'process_embedding_jobs');
     assert.ok(processEmbeddingJobsTool.inputSchema.properties.retryFailed);
     const listEmbeddingJobsTool = toolList.tools.find((tool) => tool.name === 'list_embedding_jobs');

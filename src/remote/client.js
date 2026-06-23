@@ -49,6 +49,8 @@ const REMOTE_METHODS = [
   'distillCheckpoint',
   'listDistillRuns',
   'listRecentDistillRuns',
+  'listLlmUsageEvents',
+  'llmUsageRollup',
   'distillUsage',
 ];
 
