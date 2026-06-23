@@ -4672,7 +4672,7 @@ test('bootstrapContext records session-first consult reasons and active-session 
   assert.equal(active.consult.handoffRecommended, false);
   assert.ok(active.consult.warnings.some((warning) => warning.code === 'active_session_handoff_not_self_check'));
   assert.ok(active.consult.warnings.some((warning) => warning.code === 'same_session_bootstrap_warning'));
-  assert.ok(active.nextActions.some((action) => /routine self-confirmation/.test(action)));
+  assert.ok(!active.nextActions.some((action) => /routine self-confirmation/.test(action)));
 
   const targeted = await app.bootstrapContext({
     scope: 'repo',
@@ -4699,6 +4699,22 @@ test('bootstrapContext records session-first consult reasons and active-session 
     consultReason: 'compaction_recovery',
   });
   assert.equal(compaction.consult.handoffRecommended, true);
+
+  const resume = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-consult-policy',
+    query: 'resume recovery',
+    consultReason: 'resume',
+  });
+  assert.equal(resume.consult.handoffRecommended, true);
+
+  const agentSwitch = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-consult-policy',
+    query: 'agent switch recovery',
+    consultReason: 'agent_switch',
+  });
+  assert.equal(agentSwitch.consult.handoffRecommended, true);
 
   await assert.rejects(
     () =>

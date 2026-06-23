@@ -1582,10 +1582,12 @@ shared-scope hits, exposes `handoff.latestConsolidation` for thread/repo period
 context when available, and reports `memoryLifecycle` so agents can notice
 stale or missing candidate/promotion flow. It then reminds the agent to verify
 current branch, issue/PR, CI, migration, and runtime state against live sources
-before acting. Agents should read latest checkpoints and consolidation before
-durable memory for fast-moving work status only when the consult reason is
-startup/resume/compaction recovery/agent switch; durable memory remains the
-stable policy/contract/runbook layer.
+before acting. Only for startup, resume, compaction recovery, or agent switch,
+agents should read latest checkpoints and consolidation before durable memory
+for fast-moving work status; durable memory remains the stable
+policy/contract/runbook layer. Legacy calls that omit `consultReason` are
+treated as `unknown`: latest handoff is still returned for compatibility, but
+the response warns callers to pass an explicit reason.
 
 Inside the same uninterrupted active session, current conversation context is
 the source for current intent. Do not call `bootstrap_context` merely to

@@ -164,6 +164,7 @@ function normalizeConsultReason(value) {
 
 function bootstrapConsultPolicy({ consultReason, latestCheckpointLimit, sessionId }) {
   const warnings = [];
+  // Machine-readable tokens used by API consumers; prose can use friendlier names.
   const recommendedTools = [];
   const handoffRecommended = RECOVERY_CONSULT_REASONS.has(consultReason);
   if (consultReason === 'unknown') {
@@ -209,7 +210,7 @@ function bootstrapConsultPolicy({ consultReason, latestCheckpointLimit, sessionI
     warnings.push({
       code: 'same_session_bootstrap_warning',
       message:
-        'This bootstrap call includes a sessionId during active-session work; repeated same-session bootstrap calls can inject stale compressed context.',
+        'This bootstrap call includes a sessionId during active-session work; same-session bootstrap can inject stale compressed context.',
     });
   }
   return {
@@ -2777,7 +2778,6 @@ export function createContextForge(options = {}) {
           summary: bootstrapSummary(results),
           results,
           nextActions: [
-            ...consultPolicy.warnings.map((warning) => warning.message),
             'Verify current git/GitHub/CI/runtime/migration state before final claims or risky actions.',
             'Review memory_candidate results at task end if durable lessons remain.',
           ],
