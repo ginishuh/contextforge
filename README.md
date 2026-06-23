@@ -1379,11 +1379,14 @@ works for compatibility.
 
 Candidate promotion performs lightweight review checks before writing durable
 memory. It blocks obvious duplicate keys, identical content under another key,
-high-sensitivity candidates, low confidence/stability signals, and candidates
-whose recommendation is `ignore` or `reject`. After manual review, pass
-`--allowWarnings true` to promote anyway. Already promoted or rejected
-candidates are protected from accidental re-review; pass
-`--allowStatusOverride true` only for explicit repair work.
+near-duplicate durable memories, refinement/supersede/conflict cases that should
+update an existing memory, high-sensitivity candidates, low
+confidence/stability signals, and candidates whose recommendation is `ignore` or
+`reject`. `importance` is clamped to the durable ranking range `0..10` before it
+can affect retrieval ordering. After manual review, pass `--allowWarnings true`
+to promote anyway. Already promoted or rejected candidates are protected from
+accidental re-review; pass `--allowStatusOverride true` only for explicit repair
+work.
 
 Promotion is intentional: checkpoints can suggest memory candidates, but durable
 memory is written only when a caller promotes a reviewed fact or decision.
@@ -1425,6 +1428,22 @@ node src/cli.js deactivateMemory \
   --key retrieval-policy \
   --reason "Superseded by a newer policy."
 ```
+
+When a candidate overlaps existing durable memory, prefer an update proposal
+over a new memory. `suggestMemoryPromotions --createUpdateCandidates true` can
+persist `memory_update_candidates` for refinement/supersede/conflict cases. To
+find existing duplicate durable memories without promoting anything, run:
+
+```bash
+node src/cli.js auditMemoryDuplicates \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --minOverlap 0.82
+```
+
+Add `--createUpdateCandidates true` to persist reviewed
+`merge_duplicate_memories` proposals; applying them is still a separate approval
+step.
 
 Inactive memories are retained for provenance but excluded from search results.
 
@@ -1468,6 +1487,7 @@ The MCP server exposes a narrow tool surface over the same core API:
 - `list_memory_events`
 - `list_memory_candidates`
 - `list_memory_update_candidates`
+- `audit_memory_duplicates`
 - `append_raw`
 - `prune_raw_events`
 - `distill_checkpoint`

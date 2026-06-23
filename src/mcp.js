@@ -778,6 +778,27 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
   );
 
   server.registerTool(
+    'audit_memory_duplicates',
+    {
+      title: 'Audit Memory Duplicates',
+      description:
+        'Detect overlapping active durable memories in a scope and optionally persist merge_duplicate_memories update candidates. Read-only unless createUpdateCandidates=true.',
+      inputSchema: {
+        ...scopedSchema,
+        minOverlap: z.number().min(0).max(1).optional(),
+        limit: z.number().int().positive().optional(),
+        createUpdateCandidates: z.boolean().optional(),
+      },
+      annotations: {
+        title: 'Audit Memory Duplicates',
+        readOnlyHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.auditMemoryDuplicates(args)),
+  );
+
+  server.registerTool(
     'apply_memory_update_candidate',
     {
       title: 'Apply Memory Update Candidate',
@@ -865,10 +886,11 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
         promotionRecommendation: z.string().optional(),
         includeWarnings: z.boolean().optional(),
         allowScopeFallback: z.boolean().optional(),
+        createUpdateCandidates: z.boolean().optional(),
       },
       annotations: {
         title: 'Suggest Memory Promotions',
-        readOnlyHint: true,
+        readOnlyHint: false,
         idempotentHint: true,
       },
     },

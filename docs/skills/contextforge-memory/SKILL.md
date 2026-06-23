@@ -229,10 +229,17 @@ At closeout triggers only, make sure durable memory candidates are audited:
    durable memory.
 5. Promote only reviewed, stable, scoped, non-secret facts.
 6. Prefer `promote_memory_candidate` by `candidateId`.
-7. Use `remember` or `promote_memory` for a corrected durable write when the candidate key/content is wrong.
-8. Use `reject_memory_candidate` for wrong candidates.
+7. If `suggest_memory_promotions` reports a duplicate, refinement, supersedes,
+   or conflict assessment, prefer reviewing its `memory_update_candidates`
+   proposal over writing a new durable memory.
+8. Use `remember` or `promote_memory` for a corrected durable write when the candidate key/content is wrong.
+9. Use `reject_memory_candidate` for wrong candidates.
 
 `suggest_memory_promotions` defaults to `promotionRecommendation: "promote"`. If candidates exist but proposals are empty, inspect with `list_memory_candidates`; for `promotionRecommendation: "review"` candidates, either call `suggest_memory_promotions` with `promotionRecommendation: "review"` or manually review the listed candidates.
+
+Use `audit_memory_duplicates` to inspect existing active durable memories for
+merge candidates. It is read-only unless `createUpdateCandidates=true`, and even
+then it only creates `merge_duplicate_memories` review proposals.
 
 Use `auto_promote_memory_candidates` only when automatic write-side promotion is
 explicitly wanted. It must include `sessionId` or `checkpointId`; real promotion

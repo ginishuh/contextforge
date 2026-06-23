@@ -110,6 +110,7 @@ function toCoreOptions(options) {
     dryRun: options.dryRun == null ? undefined : options.dryRun === true || options.dryRun === 'true',
     minConfidence: options.minConfidence == null ? undefined : Number(options.minConfidence),
     minStability: options.minStability == null ? undefined : Number(options.minStability),
+    minOverlap: options.minOverlap == null ? undefined : Number(options.minOverlap),
     allowedCategories: options.allowedCategories
       ? String(options.allowedCategories)
           .split(',')
@@ -120,6 +121,7 @@ function toCoreOptions(options) {
     order: options.order,
     allowWarnings: options.allowWarnings === true || options.allowWarnings === 'true',
     allowStatusOverride: options.allowStatusOverride === true || options.allowStatusOverride === 'true',
+    createUpdateCandidates: options.createUpdateCandidates === true || options.createUpdateCandidates === 'true',
     reason: options.reason,
     live: options.live === true || options.live === 'true',
     minEvents: options.minEvents == null ? undefined : Number(options.minEvents),
@@ -244,6 +246,7 @@ async function main() {
     listMemoryCandidates: (app, coreOptions) => app.listMemoryCandidates(coreOptions),
     listPreferenceOccurrences: (app, coreOptions) => app.listPreferenceOccurrences(coreOptions),
     listMemoryUpdateCandidates: (app, coreOptions) => app.listMemoryUpdateCandidates(coreOptions),
+    auditMemoryDuplicates: (app, coreOptions) => app.auditMemoryDuplicates(coreOptions),
     applyMemoryUpdateCandidate: (app, coreOptions) => app.applyMemoryUpdateCandidate(coreOptions),
     rejectMemoryUpdateCandidate: (app, coreOptions) => app.rejectMemoryUpdateCandidate(coreOptions),
     skipMemoryUpdateCandidate: (app, coreOptions) => app.skipMemoryUpdateCandidate(coreOptions),
