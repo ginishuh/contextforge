@@ -855,6 +855,8 @@ function checkpointHandoffCompact(checkpoint, scope) {
     openQuestions: checkpoint.openQuestions || [],
     sourceEventCount: checkpoint.sourceEventCount,
     provider: checkpoint.provider,
+    source: checkpoint.source || null,
+    sourceRef: checkpoint.sourceRef || null,
     sourceAgent,
     sourceProvenance,
     structured,
@@ -870,6 +872,19 @@ function checkpointHandoffCompact(checkpoint, scope) {
         }
       : {}),
   };
+}
+
+function isPreferredHandoffCheckpoint(checkpoint) {
+  return Boolean(checkpoint?.sourceAgent || checkpoint?.sourceProvenance?.sourceAgent || checkpoint?.structured);
+}
+
+function selectHandoffCheckpoints(checkpoints, limit) {
+  if (limit <= 0) {
+    return [];
+  }
+  const preferred = checkpoints.filter((checkpoint) => isPreferredHandoffCheckpoint(checkpoint));
+  const pool = preferred.length ? preferred : checkpoints;
+  return pool.slice(0, limit);
 }
 
 function latestHandoffByAgent(checkpoints) {
@@ -3340,7 +3355,7 @@ export function createContextForge(options = {}) {
               )
             : [];
         const latestCheckpoints = fetchedLatestCheckpoints.flatMap((checkpoints) =>
-          checkpoints.slice(0, latestCheckpointLimit),
+          selectHandoffCheckpoints(checkpoints, latestCheckpointLimit),
         );
         const latestHandoff = latestCheckpoints[0] || null;
         const latestByAgent = latestHandoffByAgent(fetchedLatestCheckpoints.flat());
