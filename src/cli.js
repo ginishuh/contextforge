@@ -80,6 +80,7 @@ function toCoreOptions(options) {
     tags: Array.isArray(tags) ? tags : typeof tags === 'string' ? tags.split(',').filter(Boolean) : [],
     importance: options.importance == null ? 0 : Number(options.importance),
     query: options.query,
+    consultReason: options.consultReason,
     limit: options.limit == null ? 10 : Number(options.limit),
     searchScopes: options.searchScopes,
     sharedScopeKey: options.sharedScopeKey,

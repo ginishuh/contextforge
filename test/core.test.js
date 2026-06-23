@@ -4641,6 +4641,93 @@ test('bootstrapContext includes latest checkpoints independently from search res
   assert.equal(disabled.handoff.latestHandoff, null);
 });
 
+test('bootstrapContext records session-first consult reasons and active-session warnings', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-consult-policy',
+    key: 'targeted-search-rule',
+    content: 'Use targeted search for active-session API lookup.',
+  });
+
+  const startup = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-consult-policy',
+    query: 'startup consult policy',
+    consultReason: 'startup',
+  });
+  assert.equal(startup.consult.reason, 'startup');
+  assert.equal(startup.consult.handoffRecommended, true);
+  assert.deepEqual(startup.consult.warnings, []);
+
+  const active = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-consult-policy',
+    sessionId: 'active-session',
+    query: 'active session consult policy',
+    consultReason: 'active_session',
+  });
+  assert.equal(active.consult.reason, 'active_session');
+  assert.equal(active.consult.handoffRecommended, false);
+  assert.ok(active.consult.warnings.some((warning) => warning.code === 'active_session_handoff_not_self_check'));
+  assert.ok(active.consult.warnings.some((warning) => warning.code === 'same_session_bootstrap_warning'));
+  assert.ok(!active.nextActions.some((action) => /routine self-confirmation/.test(action)));
+
+  const targeted = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-consult-policy',
+    query: 'targeted API lookup',
+    consultReason: 'targeted_search',
+  });
+  assert.ok(targeted.consult.recommendedTools.includes('search'));
+  assert.ok(targeted.consult.warnings.some((warning) => warning.code === 'prefer_search_for_targeted_lookup'));
+
+  const liveState = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-consult-policy',
+    query: 'runtime status check',
+    consultReason: 'live_state_check',
+  });
+  assert.ok(liveState.consult.recommendedTools.includes('db_info'));
+  assert.ok(liveState.consult.warnings.some((warning) => warning.code === 'prefer_live_sources_for_mutable_state'));
+
+  const compaction = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-consult-policy',
+    query: 'compaction recovery',
+    consultReason: 'compaction_recovery',
+  });
+  assert.equal(compaction.consult.handoffRecommended, true);
+
+  const resume = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-consult-policy',
+    query: 'resume recovery',
+    consultReason: 'resume',
+  });
+  assert.equal(resume.consult.handoffRecommended, true);
+
+  const agentSwitch = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-consult-policy',
+    query: 'agent switch recovery',
+    consultReason: 'agent_switch',
+  });
+  assert.equal(agentSwitch.consult.handoffRecommended, true);
+
+  await assert.rejects(
+    () =>
+      app.bootstrapContext({
+        scope: 'repo',
+        scopeKey: 'repo-consult-policy',
+        query: 'bad consult reason',
+        consultReason: 'just_checking',
+      }),
+    /consultReason/,
+  );
+});
+
 test('processConsolidations creates scope-window checkpoints and bootstrap exposes them', async () => {
   const dataDir = await makeTempDir();
   const store = new ContextForgeStore({ dataDir });
@@ -9920,13 +10007,17 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.ok(listEmbeddingJobsTool.inputSchema.properties.status);
     const bootstrapTool = toolList.tools.find((tool) => tool.name === 'bootstrap_context');
     assert.ok(bootstrapTool.inputSchema.properties.sessionId);
+    assert.ok(bootstrapTool.inputSchema.properties.consultReason);
     assert.ok(bootstrapTool.inputSchema.properties.rawTailLimit);
     assert.ok(bootstrapTool.inputSchema.properties.latestCheckpointLimit);
     assert.ok(bootstrapTool.inputSchema.properties.relatedScopeKeys);
     assert.ok(bootstrapTool.description.includes('Does not create a session'));
     assert.ok(bootstrapTool.description.includes('latest checkpoint handoff'));
+    assert.ok(bootstrapTool.description.includes('not a routine active-session self-confirmation source'));
     const syncResumeTool = toolList.tools.find((tool) => tool.name === 'sync_resume_context');
     assert.ok(syncResumeTool.inputSchema.properties.sessionId);
+    assert.ok(syncResumeTool.inputSchema.properties.consultReason);
+    assert.ok(syncResumeTool.description.includes('Do not use this as routine active-session self-confirmation'));
     const sessionWorkingContextTool = toolList.tools.find((tool) => tool.name === 'upsert_session_working_context');
     assert.ok(sessionWorkingContextTool.inputSchema.properties.currentTask);
     assert.ok(sessionWorkingContextTool.inputSchema.properties.avoidMisreadings);

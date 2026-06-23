@@ -5,6 +5,16 @@ import { z } from 'zod';
 import { createContextForge } from './core.js';
 
 const scopeSchema = z.enum(['shared', 'repo', 'local']);
+const consultReasonSchema = z.enum([
+  'startup',
+  'resume',
+  'compaction_recovery',
+  'agent_switch',
+  'targeted_search',
+  'live_state_check',
+  'active_session',
+  'unknown',
+]);
 const metadataSchema = z.record(z.string(), z.unknown());
 const optionalTags = z.array(z.string()).optional();
 
@@ -24,10 +34,11 @@ function jsonResult(result) {
 
 const MCP_INSTRUCTIONS = [
   'Use ContextForge for scoped memory retrieval on demand.',
-  'At the start of non-trivial project work, call bootstrap_context with repoPath, cwd, or an explicit scopeKey. It summarizes storage authority, vector readiness, query retrieval results, trust hints, and query-independent latest checkpoint handoff in one response.',
+  'At the start of non-trivial project work or after resume/compaction/agent transfer, call bootstrap_context with repoPath, cwd, or an explicit scopeKey and consultReason=startup/resume/compaction_recovery/agent_switch. It summarizes storage authority, vector readiness, query retrieval results, trust hints, and query-independent latest checkpoint handoff in one response.',
+  'Do not call bootstrap_context merely to re-confirm current active-session intent. During uninterrupted work, prefer current conversation context; use search for targeted file/API/error/domain lookups and db_info/git/GitHub/health checks/service manager for mutable live state.',
   'bootstrap_context does not create a session. In Codex or Claude Code auto-ingest environments, preserve or recover the adapter session id such as codex:<native-session-id> or claude_code:<native-session-id> before session_status, distill_checkpoint, or closeout promotion. Use begin_session only for manual ContextForge evidence streams where the agent will call append_raw itself; do not create a fresh cf_... session at closeout to review candidates from an existing Codex/Claude session.',
   'Use db_info connection metadata for access path: prefer connection.summary, then connection.accessMode/accessPath and connection.serverRole. connection.mode is kept for compatibility. Top-level storageMode describes the responding ContextForge process; connection.server may describe the server-owned store behind a remote call.',
-  'Read bootstrap_context.handoff.latestCheckpoints before durable memory for recent work status, recent decisions, open todos, branch/PR/CI flow, and next actions. Durable memory is for reviewed stable facts, contracts, policies, and runbooks. Verify mutable checkpoint claims with git/GitHub/CI/runtime/migrations before final action.',
+  'Read bootstrap_context.handoff.latestCheckpoints before durable memory only when the consult reason is startup, resume, compaction recovery, or agent switch. Durable memory is for reviewed stable facts, contracts, policies, and runbooks. Verify mutable checkpoint claims with git/GitHub/CI/runtime/migrations before final action.',
   'Search result types have different trust roles: memory is reviewed durable fact or decision; checkpoint is credible recent handoff state for continuity, planning, prior intent, recent decisions, and unfinished work, but mutable live-state claims must be verified with git/GitHub/CI/runtime/migrations before acting; memory_candidate is unreviewed promotion material and not durable truth.',
   'For task start or loose continuation prompts such as "지난 환경 작업과 동기화", "어제 하던 거 이어서", "previous work", or "continue", call bootstrap_context first; it includes latest checkpoint handoff independent of search ranking. Use sync_resume_context only when you know the exact sessionId and need session working state or raw tail.',
   'For closeout distillation, pass auditTrigger to distill_checkpoint. Candidate audit is automatic and batched: session pending candidates are audited after closeout triggers or once the configured batch threshold is reached. Audit results are stored on candidates; automatic promotion only controls whether approved strict-safe results are written to durable memory.',
@@ -118,10 +129,11 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Bootstrap Context',
       description:
-        'Resolve scoped ContextForge memory for a task in one call. Includes query-independent latest checkpoint handoff (default 1, max 3) before search results, searches repo scope semantically across memory, checkpoint, and memory_candidate results, optionally includes up to 3 shared-scope results, and annotates trust and verification hints for agents. Does not create a session; pass a known Codex/Claude/ContextForge sessionId to load session working state. rawTailLimit defaults to 0; set a positive value to include raw tail.',
+        'Resolve scoped ContextForge memory for startup/resume/compaction recovery in one call. Includes query-independent latest checkpoint handoff (default 1, max 3) before search results, but latest handoff is not a routine active-session self-confirmation source. Pass consultReason to distinguish startup/resume/compaction_recovery/agent_switch from active_session, targeted_search, or live_state_check. During active work, prefer search for file/API/error/domain lookups and live sources for mutable state. Does not create a session; pass a known Codex/Claude/ContextForge sessionId to load session working state. rawTailLimit defaults to 0; set a positive value to include raw tail.',
       inputSchema: {
         ...scopedSchema,
         query: z.string(),
+        consultReason: consultReasonSchema.optional(),
         sessionId: z.string().optional(),
         rawTailLimit: z.number().int().nonnegative().optional(),
         latestCheckpointLimit: z.number().int().min(0).max(3).optional(),
@@ -144,10 +156,11 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Sync Resume Context',
       description:
-        'Build a start/resume handoff package for continuing work across machines or agent environments. Use checkpoints as credible recent handoff notes, durable memories as canonical long-term context, and memory candidates only as review material. rawTailLimit defaults to 0; set a positive value to include raw tail. This tool must not propose or perform durable memory promotion.',
+        'Build a resume/compaction/agent-transfer handoff package for continuing work across machines or agent environments. Use checkpoints as credible recent handoff notes, durable memories as canonical long-term context, and memory candidates only as review material. Do not use this as routine active-session self-confirmation. rawTailLimit defaults to 0; set a positive value to include raw tail. This tool must not propose or perform durable memory promotion.',
       inputSchema: {
         ...scopedSchema,
         query: z.string(),
+        consultReason: consultReasonSchema.optional(),
         sessionId: z.string().optional(),
         includeShared: z.boolean().optional(),
         limit: z.number().int().positive().optional(),
