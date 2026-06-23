@@ -47,6 +47,11 @@ Interpret search result types by trust role: `memory` is reviewed durable
 state, `checkpoint` is credible recent handoff state that still needs live
 verification, and `memory_candidate` is review material.
 
+Use `bootstrap_context.memoryMap` for durable-memory orientation before reading
+raw retrieval hits. Expand a cluster with `expand_memory_cluster` only when
+atomic memories or provenance are needed. The map covers the requested primary
+scope; include shared memory through search results when needed.
+
 Critical session invariant: `bootstrap_context` does not create a session. In
 Codex/Claude auto-ingest flows, use the adapter session id such as
 `codex:<id>` or `claude_code:<id>` for `session_status`,
@@ -86,6 +91,8 @@ and recent candidate/promotion flow. Treat
 `memory` as reviewed durable state for stable contracts, policies, and
 runbooks; treat `checkpoint` as credible recent handoff state that still needs
 live verification; and treat `memory_candidate` as review material.
+Use `memoryMap` as the compact durable-memory overview and call
+`expand_memory_cluster` only for the cluster whose details are needed.
 
 For loose continuation prompts such as "yesterday", "continue", "previous
 work", issue/PR follow-up, or cross-agent handoff, call `bootstrap_context`

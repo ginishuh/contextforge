@@ -4949,6 +4949,220 @@ test('bootstrapContext includes latest checkpoints independently from search res
   assert.equal(disabled.handoff.latestHandoff, null);
 });
 
+test('bootstrapContext returns compact memory map and cluster expansion hooks', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-memory-map',
+    key: 'retrieval.progressive-map',
+    content:
+      'Progressive retrieval should return a compact memory map with canonical consolidated memory before individual memory fragments.',
+    category: 'architecture',
+    tags: ['retrieval', 'memory-map', 'cluster'],
+    importance: 5,
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-memory-map',
+    key: 'retrieval.cluster-expansion',
+    content:
+      'Cluster expansion loads related atomic durable memories on demand without pulling every durable memory in the scope.',
+    category: 'architecture',
+    tags: ['retrieval', 'memory-map', 'cluster'],
+    importance: 4,
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-memory-map',
+    key: 'runtime.scheduler-note',
+    content: 'Scheduler maintenance windows belong to runtime operations and service restarts.',
+    category: 'operations',
+    tags: ['scheduler'],
+    importance: 3,
+  });
+
+  const bootstrap = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-memory-map',
+    query: 'progressive retrieval memory map cluster expansion',
+    memoryMapLimit: 3,
+    memoryMapClusterSize: 4,
+  });
+
+  assert.equal(bootstrap.memoryMap.kind, 'memory_map');
+  assert.equal(bootstrap.memoryMap.query, 'progressive retrieval memory map cluster expansion');
+  assert.equal(bootstrap.memoryMap.embedding.degraded, true);
+  assert.ok(bootstrap.memoryMap.embedding.reasons.includes('query_embedding_unavailable'));
+  assert.ok(Array.isArray(bootstrap.results));
+  assert.ok(bootstrap.results.some((item) => item.type === 'memory'));
+  assert.ok(bootstrap.memoryMap.clusters.length >= 1);
+
+  const cluster = bootstrap.memoryMap.clusters[0];
+  assert.equal(cluster.retrievalHooks.expand.tool, 'expand_memory_cluster');
+  assert.equal(cluster.retrievalHooks.expand.method, 'expandMemoryCluster');
+  assert.equal(cluster.consolidatedMemory.key, 'retrieval.progressive-map');
+  assert.ok(cluster.consolidatedMemory.coverageCount >= 2);
+  assert.ok(cluster.members.some((member) => member.key === 'retrieval.cluster-expansion'));
+  assert.ok(!cluster.members.some((member) => member.key === 'runtime.scheduler-note'));
+});
+
+test('bootstrapContext uses seed embeddings for memory map cluster membership', async () => {
+  const dataDir = await makeTempDir();
+  const embeddingProvider = {
+    name: 'test-vector',
+    model: 'test-embedding',
+    dimensions: 3,
+    async embed(texts) {
+      return texts.map((text) => {
+        const value = String(text).toLowerCase();
+        if (
+          value.includes('authorization') ||
+          value.includes('permission gate') ||
+          value.includes('bearer credentials')
+        ) {
+          return [1, 0, 0];
+        }
+        if (value.includes('billing')) return [0, 1, 0];
+        return [0, 0, 1];
+      });
+    },
+  };
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_EMBEDDINGS_PROVIDER: 'openai',
+      CONTEXTFORGE_EMBEDDINGS_DIMENSIONS: '3',
+    },
+    cwd: process.cwd(),
+    embeddingProviders: {
+      openai: embeddingProvider,
+    },
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-vector-map',
+    key: 'auth.header-contract',
+    content: 'Authorization header is required for protected endpoints.',
+    category: 'api',
+    tags: ['http'],
+    importance: 5,
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-vector-map',
+    key: 'security.gateway-rule',
+    content: 'Permission gate validates bearer credentials before handlers run.',
+    category: 'security',
+    tags: ['gateway'],
+    importance: 3,
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-vector-map',
+    key: 'billing.export-rule',
+    content: 'Billing export files are produced after monthly closeout.',
+    category: 'finance',
+    tags: ['billing'],
+    importance: 4,
+  });
+  await app.processEmbeddingJobs({
+    scope: 'repo',
+    scopeKey: 'repo-vector-map',
+  });
+
+  const bootstrap = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-vector-map',
+    query: 'authorization protected endpoints',
+    limit: 1,
+    memoryMapClusterSize: 4,
+  });
+
+  assert.equal(bootstrap.memoryMap.embedding.degraded, false);
+  assert.equal(bootstrap.memoryMap.embedding.used, true);
+  assert.equal(bootstrap.memoryMap.embedding.relationEmbeddingsUsed, true);
+  const cluster = bootstrap.memoryMap.clusters[0];
+  const vectorMember = cluster.members.find((member) => member.key === 'security.gateway-rule');
+  assert.ok(vectorMember);
+  assert.ok(vectorMember.vectorScore > 0);
+  assert.ok(!cluster.members.some((member) => member.key === 'billing.export-rule'));
+});
+
+test('expandMemoryCluster returns atomic durable memories for one map cluster', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-cluster-expand',
+    key: 'retrieval.canonical-contract',
+    content:
+      'Canonical durable memory for progressive retrieval says agents should read the memory map first.',
+    category: 'runbook',
+    tags: ['retrieval', 'memory-map'],
+    importance: 6,
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-cluster-expand',
+    key: 'retrieval.atomic-detail',
+    content:
+      'Atomic durable memory detail says expand the selected memory cluster only when implementation details are needed.',
+    category: 'runbook',
+    tags: ['retrieval', 'memory-map'],
+    importance: 4,
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-cluster-expand',
+    key: 'billing.unrelated',
+    content: 'Billing exports use a separate monthly closeout workflow.',
+    category: 'finance',
+    tags: ['billing'],
+    importance: 4,
+  });
+
+  const bootstrap = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-cluster-expand',
+    query: 'progressive retrieval memory map canonical atomic detail',
+  });
+  const clusterId = bootstrap.memoryMap.clusters[0].clusterId;
+  const expansion = await app.expandMemoryCluster({
+    scope: 'repo',
+    scopeKey: 'repo-cluster-expand',
+    clusterId,
+    limit: 4,
+  });
+
+  assert.equal(expansion.kind, 'memory_cluster_expansion');
+  assert.equal(expansion.clusterId, clusterId);
+  assert.equal(expansion.provenanceIncluded, false);
+  assert.equal(expansion.cluster.consolidatedMemory.key, 'retrieval.canonical-contract');
+  assert.ok(expansion.memories.some((memory) => memory.key === 'retrieval.atomic-detail'));
+  assert.ok(!expansion.memories.some((memory) => memory.key === 'billing.unrelated'));
+  assert.equal(expansion.memories.some((memory) => memory.provenance), false);
+
+  const withProvenance = await app.expandMemoryCluster({
+    scope: 'repo',
+    scopeKey: 'repo-cluster-expand',
+    clusterId,
+    includeProvenance: true,
+    limit: 4,
+  });
+  assert.equal(withProvenance.clusterId, clusterId);
+  assert.equal(withProvenance.provenanceIncluded, true);
+  assert.ok(Array.isArray(withProvenance.memories[0].provenance));
+
+  const byQuery = await app.expandMemoryCluster({
+    scope: 'repo',
+    scopeKey: 'repo-cluster-expand',
+    query: 'selected memory cluster atomic detail',
+    limit: 4,
+  });
+  assert.equal(byQuery.memories.some((memory) => memory.key === 'retrieval.canonical-contract'), true);
+});
+
 test('bootstrapContext records session-first consult reasons and active-session warnings', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
@@ -10027,6 +10241,7 @@ test('REMOTE_METHODS exposes resume, suggestion, auto-promotion, and reconciliat
   assert.ok(REMOTE_METHODS.includes('checkDistillProvider'));
   assert.ok(REMOTE_METHODS.includes('listScopeKeys'));
   assert.ok(REMOTE_METHODS.includes('listRecentDistillRuns'));
+  assert.ok(REMOTE_METHODS.includes('expandMemoryCluster'));
   assert.ok(REMOTE_METHODS.includes('listLlmUsageEvents'));
   assert.ok(REMOTE_METHODS.includes('llmUsageRollup'));
   assert.ok(REMOTE_METHODS.includes('listDueDistillSessions'));
@@ -10089,6 +10304,24 @@ test('CLI supports the v0 workflow with synthetic data', async () => {
   );
   assert.match(bootstrap.stdout, /"trust": "reviewed_durable"/);
   assert.match(bootstrap.stdout, /"nextActions":/);
+  assert.match(bootstrap.stdout, /"memoryMap":/);
+  const bootstrapJson = JSON.parse(bootstrap.stdout);
+  const expand = await execFileAsync(
+    'node',
+    [
+      'src/cli.js',
+      'expandMemoryCluster',
+      '--scope',
+      'repo',
+      '--scopeKey',
+      'cli-repo',
+      '--clusterId',
+      bootstrapJson.memoryMap.clusters[0].clusterId,
+    ],
+    { env },
+  );
+  assert.match(expand.stdout, /"kind": "memory_cluster_expansion"/);
+  assert.match(expand.stdout, /"key": "retrieval"/);
 
   await execFileAsync(
     'node',
@@ -10240,6 +10473,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'deactivate_memory',
       'distill_checkpoint',
       'distill_usage',
+      'expand_memory_cluster',
       'get_memory',
       'get_runtime_settings',
       'get_session_working_context',
@@ -10321,9 +10555,15 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.ok(bootstrapTool.inputSchema.properties.rawTailLimit);
     assert.ok(bootstrapTool.inputSchema.properties.latestCheckpointLimit);
     assert.ok(bootstrapTool.inputSchema.properties.relatedScopeKeys);
+    assert.ok(bootstrapTool.inputSchema.properties.memoryMapLimit);
+    assert.ok(bootstrapTool.inputSchema.properties.memoryMapClusterSize);
     assert.ok(bootstrapTool.description.includes('Does not create a session'));
     assert.ok(bootstrapTool.description.includes('latest checkpoint handoff'));
-    assert.ok(bootstrapTool.description.includes('not a routine active-session self-confirmation source'));
+    assert.ok(bootstrapTool.description.includes('memoryMap'));
+    const expandClusterTool = toolList.tools.find((tool) => tool.name === 'expand_memory_cluster');
+    assert.ok(expandClusterTool.inputSchema.properties.clusterId);
+    assert.ok(expandClusterTool.inputSchema.properties.includeProvenance);
+    assert.ok(expandClusterTool.description.includes('provenance disabled by default'));
     const syncResumeTool = toolList.tools.find((tool) => tool.name === 'sync_resume_context');
     assert.ok(syncResumeTool.inputSchema.properties.sessionId);
     assert.ok(syncResumeTool.inputSchema.properties.consultReason);
@@ -10408,6 +10648,19 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     });
     assert.equal(bootstrapResult.structuredContent.result.scope.scopeKey, 'mcp-repo');
     assert.equal(bootstrapResult.structuredContent.result.results[0].trust, 'reviewed_durable');
+    assert.equal(bootstrapResult.structuredContent.result.memoryMap.kind, 'memory_map');
+    const mcpClusterId = bootstrapResult.structuredContent.result.memoryMap.clusters[0].clusterId;
+
+    const expandedCluster = await client.callTool({
+      name: 'expand_memory_cluster',
+      arguments: {
+        scope: 'repo',
+        scopeKey: 'mcp-repo',
+        clusterId: mcpClusterId,
+      },
+    });
+    assert.equal(expandedCluster.structuredContent.result.kind, 'memory_cluster_expansion');
+    assert.equal(expandedCluster.structuredContent.result.memories[0].key, 'mcp-rule');
 
     const repoPathResult = await client.callTool({
       name: 'remember',
