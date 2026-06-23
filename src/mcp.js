@@ -786,6 +786,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
       inputSchema: {
         ...scopedSchema,
         minOverlap: z.number().min(0).max(1).optional(),
+        scanLimit: z.number().int().positive().optional(),
         limit: z.number().int().positive().optional(),
         createUpdateCandidates: z.boolean().optional(),
       },

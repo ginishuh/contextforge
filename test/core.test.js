@@ -1668,6 +1668,99 @@ test('promotion quality assessment prefers update proposals over duplicate durab
   );
 });
 
+test('promotion quality assessment covers supersedes, too-specific, and new candidates', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'classification_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      classification_provider: async () => ({
+        summaryShort: 'Classification checkpoint.',
+        summaryText: 'The checkpoint proposes several promotion classifications.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'runtime-verification',
+            content: 'Verify git, GitHub, CI, runtime health, and migrations before acting on live state.',
+            reason: 'This is a more complete runtime verification rule that should supersede the older version.',
+            category: 'runbook',
+            confidence: 0.92,
+            stability: 0.9,
+            promotionRecommendation: 'promote',
+          },
+          {
+            key: 'pr-142-status',
+            content: 'PR #142 CI passed on Node 20, 22, and 24.',
+            reason: 'One-off PR status should stay in checkpoint context.',
+            category: 'temporary',
+            confidence: 0.95,
+            stability: 0.95,
+            promotionRecommendation: 'promote',
+          },
+          {
+            key: 'api-contract-rule',
+            content: 'API contract memories should include endpoint, request shape, response shape, and migration notes.',
+            reason: 'Reusable API contract guidance.',
+            category: 'api-contract',
+            confidence: 0.95,
+            stability: 0.95,
+            promotionRecommendation: 'promote',
+          },
+        ],
+        sourceEventCount: 1,
+        metadata: { synthetic: true },
+      }),
+    },
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'classification-repo',
+    key: 'runtime-verification',
+    content: 'Verify git and GitHub before acting on live state.',
+    category: 'runbook',
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'classification-repo',
+    sessionId: 'classification-session',
+    role: 'assistant',
+    content: 'Candidate: classify memory promotions.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'classification-repo',
+    sessionId: 'classification-session',
+  });
+
+  const suggestions = await app.suggestMemoryPromotions({
+    scope: 'repo',
+    scopeKey: 'classification-repo',
+    sessionId: 'classification-session',
+    trigger: 'manual_closeout',
+    createUpdateCandidates: true,
+    scanLimit: 10,
+  });
+
+  assert.ok(suggestions.proposals.some((proposal) => proposal.key === 'api-contract-rule'));
+  assert.ok(
+    suggestions.updateCandidates.some(
+      (candidate) =>
+        candidate.targetMemoryKey === 'runtime-verification' &&
+        candidate.reason.includes('supersedes'),
+    ),
+  );
+  assert.ok(
+    suggestions.skipped.some(
+      (item) => item.promotionAssessment?.classification === 'too_specific',
+    ),
+  );
+});
+
 test('auditMemoryDuplicates reports merge proposals without mutating by default', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
@@ -1714,6 +1807,43 @@ test('auditMemoryDuplicates reports merge proposals without mutating by default'
     app.listMemoryUpdateCandidates({
       scope: 'repo',
       scopeKey: 'duplicate-audit-repo',
+      action: 'merge_duplicate_memories',
+    }).length,
+    1,
+  );
+});
+
+test('auditMemoryDuplicates limits persisted update candidates after sorting and dedupe', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+  for (const [key, importance] of [
+    ['runtime-rule-a', 9],
+    ['runtime-rule-b', 5],
+    ['runtime-rule-c', 1],
+  ]) {
+    app.remember({
+      scope: 'repo',
+      scopeKey: 'duplicate-limit-repo',
+      key,
+      content: 'Agents must verify git and GitHub before making live-state claims.',
+      category: 'runbook',
+      importance,
+    });
+  }
+
+  const result = app.auditMemoryDuplicates({
+    scope: 'repo',
+    scopeKey: 'duplicate-limit-repo',
+    createUpdateCandidates: true,
+    limit: 1,
+  });
+
+  assert.equal(result.matchedPairs, 3);
+  assert.equal(result.duplicatePairs.length, 1);
+  assert.equal(
+    app.listMemoryUpdateCandidates({
+      scope: 'repo',
+      scopeKey: 'duplicate-limit-repo',
       action: 'merge_duplicate_memories',
     }).length,
     1,
@@ -10214,6 +10344,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.ok(updateCandidatesTool.inputSchema.properties.action);
     const duplicateAuditTool = toolList.tools.find((tool) => tool.name === 'audit_memory_duplicates');
     assert.ok(duplicateAuditTool.inputSchema.properties.minOverlap);
+    assert.ok(duplicateAuditTool.inputSchema.properties.scanLimit);
     assert.ok(duplicateAuditTool.inputSchema.properties.createUpdateCandidates);
     const listCandidateTool = toolList.tools.find((tool) => tool.name === 'list_memory_candidates');
     assert.ok(listCandidateTool.description.includes('current closeout source'));

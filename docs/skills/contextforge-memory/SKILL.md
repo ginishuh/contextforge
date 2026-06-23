@@ -239,7 +239,9 @@ At closeout triggers only, make sure durable memory candidates are audited:
 
 Use `audit_memory_duplicates` to inspect existing active durable memories for
 merge candidates. It is read-only unless `createUpdateCandidates=true`, and even
-then it only creates `merge_duplicate_memories` review proposals.
+then it only creates `merge_duplicate_memories` review proposals. For large
+scopes, set `scanLimit` intentionally because duplicate audit compares memory
+pairs inside the scanned window.
 
 Use `auto_promote_memory_candidates` only when automatic write-side promotion is
 explicitly wanted. It must include `sessionId` or `checkpointId`; real promotion

@@ -1438,12 +1438,15 @@ find existing duplicate durable memories without promoting anything, run:
 node src/cli.js auditMemoryDuplicates \
   --scope repo \
   --scopeKey github.com/example/contextforge \
-  --minOverlap 0.82
+  --minOverlap 0.82 \
+  --scanLimit 250 \
+  --limit 20
 ```
 
 Add `--createUpdateCandidates true` to persist reviewed
 `merge_duplicate_memories` proposals; applying them is still a separate approval
-step.
+step. Duplicate auditing compares memory pairs inside the scanned window, so use
+`--scanLimit` deliberately for large scopes.
 
 Inactive memories are retained for provenance but excluded from search results.
 
