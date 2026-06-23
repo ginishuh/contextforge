@@ -1136,6 +1136,15 @@ It also exposes `handoff.latestConsolidation.thread` and
 so agents can see a richer period summary without loading raw evidence by
 default. For multi-repo work, pass comma-separated repo `--relatedScopeKeys` so a
 subrepo can also receive the suite/root repo's latest handoff.
+Bootstrap also returns a separate `memoryMap` channel for progressive durable
+memory navigation. The map groups related active memories into compact clusters,
+chooses a canonical `consolidatedMemory` for each cluster, and includes an
+`expand_memory_cluster` hook. This lets agents orient on durable context without
+loading every atomic memory, then pull details only for the cluster that matters.
+The map reports embedding/vector readiness and marks confidence degraded when
+embeddings are disabled, stale, pending, or failed. `memoryMap` is scoped to the
+requested primary scope; shared results still appear in `results` when
+`includeShared` is enabled.
 
 When a caller knows the session id, `bootstrapContext` can also return the
 working summary and a recent raw tail alongside ordinary retrieval results:
@@ -1171,9 +1180,29 @@ The bootstrap response keeps these channels separate:
 - `memoryLifecycle`: review/promotion visibility for the scope, including
   latest candidate/promoted timestamps, pending candidate counts, and recent
   candidate/promotion counts.
+- `memoryMap`: compact durable-memory clusters for map-first navigation. Read
+  `consolidatedMemory` first, then expand a cluster only when atomic memories
+  are needed.
 - `results`: durable memories, checkpoints, and memory candidates from search.
 - `workingSummary`: latest rolling handoff state for the requested session.
 - `rawTail`: newest raw events for last-mile continuity.
+
+To expand one memory-map cluster:
+
+```bash
+node src/cli.js expandMemoryCluster \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --clusterId cluster:abc123def456
+```
+
+Alternatively pass `--query` and ContextForge will expand the top matching
+cluster. Provenance is omitted by default; add `--includeProvenance true` only
+when the evidence trail is needed. `memoryMapLimit`, `memoryMapClusterSize`, and
+expand `limit` are capped at `20`; the response echoes the effective cap in
+`memoryMap.limits.maxLimit`. Cluster ids are stable handles for the current
+canonical durable memory, but cluster membership is recomputed from current
+memory and embedding state when expanded.
 
 For a direct lookup, use:
 

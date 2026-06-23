@@ -8,6 +8,7 @@ const REMOTE_METHODS = [
   'checkDistillProvider',
   'listScopeKeys',
   'bootstrapContext',
+  'expandMemoryCluster',
   'syncResumeContext',
   'checkCodexExec',
   'beginSession',

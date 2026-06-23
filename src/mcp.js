@@ -40,6 +40,7 @@ const MCP_INSTRUCTIONS = [
   'Use db_info connection metadata for access path: prefer connection.summary, then connection.accessMode/accessPath and connection.serverRole. connection.mode is kept for compatibility. Top-level storageMode describes the responding ContextForge process; connection.server may describe the server-owned store behind a remote call.',
   'Read bootstrap_context.handoff.latestCheckpoints before durable memory only when the consult reason is startup, resume, compaction recovery, or agent switch. Durable memory is for reviewed stable facts, contracts, policies, and runbooks. Verify mutable checkpoint claims with git/GitHub/CI/runtime/migrations before final action.',
   'Search result types have different trust roles: memory is reviewed durable fact or decision; checkpoint is credible recent handoff state for continuity, planning, prior intent, recent decisions, and unfinished work, but mutable live-state claims must be verified with git/GitHub/CI/runtime/migrations before acting; memory_candidate is unreviewed promotion material and not durable truth.',
+  'bootstrap_context returns a compact memoryMap separately from raw retrieval hits. Use the map for durable-memory orientation, then call expand_memory_cluster only for clusters whose atomic details are needed.',
   'For task start or loose continuation prompts such as "지난 환경 작업과 동기화", "어제 하던 거 이어서", "previous work", or "continue", call bootstrap_context first; it includes latest checkpoint handoff independent of search ranking. Use sync_resume_context only when you know the exact sessionId and need session working state or raw tail.',
   'For closeout distillation, pass auditTrigger to distill_checkpoint. Candidate audit is automatic and batched: session pending candidates are audited after closeout triggers or once the configured batch threshold is reached. Audit results are stored on candidates; automatic promotion only controls whether approved strict-safe results are written to durable memory.',
   'When an agent needs to inspect audited recommendations, call audit_memory_candidates with sessionId or checkpointId. It returns stored audit proposals and audits unaudited candidates in the same scoped batch when needed, but never mutates durable memory.',
@@ -129,7 +130,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Bootstrap Context',
       description:
-        'Resolve scoped ContextForge memory for startup/resume/compaction recovery in one call. Includes query-independent latest checkpoint handoff (default 1, max 3) before search results, but latest handoff is not a routine active-session self-confirmation source. Pass consultReason to distinguish startup/resume/compaction_recovery/agent_switch from active_session, targeted_search, or live_state_check. During active work, prefer search for file/API/error/domain lookups and live sources for mutable state. Does not create a session; pass a known Codex/Claude/ContextForge sessionId to load session working state. rawTailLimit defaults to 0; set a positive value to include raw tail.',
+        'Resolve scoped ContextForge memory for startup/resume/compaction recovery in one call. Includes query-independent latest checkpoint handoff (default 1, max 3) before search results, plus a compact memoryMap for progressive durable-memory navigation. Pass consultReason to distinguish startup/resume/compaction_recovery/agent_switch from active_session, targeted_search, or live_state_check. During active work, prefer search for file/API/error/domain lookups and live sources for mutable state. Does not create a session; pass a known Codex/Claude/ContextForge sessionId to load session working state. rawTailLimit defaults to 0; set a positive value to include raw tail.',
       inputSchema: {
         ...scopedSchema,
         query: z.string(),
@@ -140,6 +141,8 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
         relatedScopeKeys: z.array(z.string()).optional(),
         includeShared: z.boolean().optional(),
         limit: z.number().int().positive().optional(),
+        memoryMapLimit: z.number().int().positive().max(20).optional(),
+        memoryMapClusterSize: z.number().int().positive().max(20).optional(),
         sharedScopeKey: z.string().optional(),
       },
       annotations: {
@@ -149,6 +152,31 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
       },
     },
     async (args) => jsonResult(await app.bootstrapContext(args)),
+  );
+
+  server.registerTool(
+    'expand_memory_cluster',
+    {
+      title: 'Expand Memory Cluster',
+      description:
+        'Expand one durable-memory map cluster on demand. Pass clusterId from bootstrap_context.memoryMap or a query to select the top matching cluster. Keeps provenance disabled by default; set includeProvenance only when the evidence trail is needed.',
+      inputSchema: {
+        ...scopedSchema,
+        clusterId: z.string().optional(),
+        query: z.string().optional(),
+        limit: z.number().int().positive().max(20).optional(),
+        memoryMapLimit: z.number().int().positive().max(20).optional(),
+        memoryMapClusterSize: z.number().int().positive().max(20).optional(),
+        includeProvenance: z.boolean().optional(),
+        sharedScopeKey: z.string().optional(),
+      },
+      annotations: {
+        title: 'Expand Memory Cluster',
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.expandMemoryCluster(args)),
   );
 
   server.registerTool(
