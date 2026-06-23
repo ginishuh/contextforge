@@ -13,6 +13,8 @@
   memory-candidate v2 review fields (`schemaVersion`, `durabilityReason`,
   `riskReason`, `evidenceRefs`, and `suggestedAction`) when using the bundled
   strict schema.
+- Updated `openai_compatible` `json_schema` mode to send a strict-safe
+  checkpoint schema subset while preserving the default `json_object` behavior.
 - Localized human-readable memory-candidate review text and audit reasons to
   Korean by default while keeping keys, enum values, paths, commands, and other
   technical identifiers machine-readable.
