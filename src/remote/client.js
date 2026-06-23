@@ -26,6 +26,7 @@ const REMOTE_METHODS = [
   'listMemoryCandidates',
   'listPreferenceOccurrences',
   'listMemoryUpdateCandidates',
+  'auditMemoryDuplicates',
   'applyMemoryUpdateCandidate',
   'rejectMemoryUpdateCandidate',
   'skipMemoryUpdateCandidate',

@@ -324,6 +324,14 @@ function normalizeTags(tags) {
   return Array.isArray(tags) ? tags.map((tag) => String(tag)) : [];
 }
 
+function clampImportance(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(10, Math.round(parsed)));
+}
+
 function contentHash(value) {
   return createHash('sha256').update(String(value || '')).digest('hex');
 }
@@ -357,11 +365,34 @@ function validateDimensions(dimensions) {
   return parsed;
 }
 
-const SUGGESTED_ACTIONS = new Set(['promote', 'review', 'reject', 'skip']);
+const SUGGESTED_ACTIONS = new Set([
+  'promote',
+  'review',
+  'reject',
+  'skip',
+  'duplicate',
+  'merge',
+  'merge_duplicate',
+  'merge_duplicate_memories',
+  'refinement',
+  'refine',
+  'update',
+  'correct_memory',
+  'supersedes',
+  'supersede',
+  'replace',
+  'conflict',
+  'too_specific',
+]);
 
 function normalizeCandidate(candidate) {
   const value = candidate && typeof candidate === 'object' && !Array.isArray(candidate) ? candidate : {};
-  const suggestedAction = value.suggestedAction ? String(value.suggestedAction) : null;
+  const suggestedAction = value.suggestedAction
+    ? String(value.suggestedAction)
+        .trim()
+        .toLowerCase()
+        .replace(/[-\s]+/g, '_')
+    : null;
   return {
     schemaVersion: value.schemaVersion ? String(value.schemaVersion) : null,
     key: String(value.key || ''),
@@ -369,7 +400,7 @@ function normalizeCandidate(candidate) {
     reason: String(value.reason || ''),
     category: value.category ? String(value.category) : 'note',
     tags: normalizeTags(value.tags),
-    importance: Number.isFinite(Number(value.importance)) ? Number(value.importance) : 0,
+    importance: clampImportance(value.importance),
     candidateType: value.candidateType ? String(value.candidateType) : null,
     confidence: Number.isFinite(Number(value.confidence)) ? Number(value.confidence) : null,
     stability: Number.isFinite(Number(value.stability)) ? Number(value.stability) : null,
@@ -1753,7 +1784,7 @@ export class ContextForgeStore {
         candidate.reason,
         candidate.category,
         json(candidate.tags, []),
-        candidate.importance,
+        clampImportance(candidate.importance),
         candidate.candidateType,
         candidate.confidence,
         candidate.stability,
@@ -1993,7 +2024,7 @@ export class ContextForgeStore {
         category,
         content,
         json(normalizedTags, []),
-        Number(importance),
+        clampImportance(importance),
         status,
         supersedesMemoryId,
         deactivatedAt,
@@ -2790,7 +2821,7 @@ export class ContextForgeStore {
           proposedContent,
           proposedCategory,
           json(proposedTags, []),
-          proposedImportance,
+          proposedImportance == null ? null : clampImportance(proposedImportance),
           reason,
           confidence,
           sourceSessionId,
@@ -2824,7 +2855,7 @@ export class ContextForgeStore {
         proposedContent,
         proposedCategory,
         json(proposedTags, []),
-        proposedImportance,
+        proposedImportance == null ? null : clampImportance(proposedImportance),
         reason,
         confidence,
         sourceSessionId,

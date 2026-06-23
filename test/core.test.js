@@ -1510,7 +1510,14 @@ test('candidate promotion warnings require explicit override', async () => {
     assert.equal(error.name, 'MemoryCandidatePromotionWarningError');
     assert.deepEqual(
       error.warnings.map((warning) => warning.code),
-      ['existing_key_conflict', 'high_sensitivity', 'recommendation_not_promote', 'low_confidence', 'low_stability'],
+      [
+        'candidate_conflict_requires_update',
+        'existing_key_conflict',
+        'high_sensitivity',
+        'recommendation_not_promote',
+        'low_confidence',
+        'low_stability',
+      ],
     );
   }
 
@@ -1540,6 +1547,307 @@ test('candidate promotion warnings require explicit override', async () => {
   });
   assert.equal(events.at(-1).eventType, 'promote');
   assert.ok(events.at(-1).metadata.promotionWarnings.length >= 1);
+});
+
+test('promotion quality assessment prefers update proposals over duplicate durable memories', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'dedupe_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      dedupe_provider: async () => ({
+        summaryShort: 'Dedupe checkpoint.',
+        summaryText: 'The checkpoint proposes overlapping memory candidates.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'runtime-verification',
+            content: 'Verify git, GitHub, CI, runtime health, and migrations before making live-state claims.',
+            reason: 'Adds CI and migration specifics to the existing runtime verification rule.',
+            category: 'runbook',
+            tags: ['runtime', 'verification'],
+            importance: 72,
+            confidence: 0.9,
+            stability: 0.9,
+            promotionRecommendation: 'promote',
+          },
+          {
+            key: 'duplicate-runtime-rule',
+            content: 'Verify git and GitHub before making live-state claims.',
+            reason: 'Exact duplicate content should not be promoted again.',
+            category: 'runbook',
+            confidence: 0.9,
+            stability: 0.9,
+            promotionRecommendation: 'promote',
+          },
+        ],
+        sourceEventCount: 1,
+        metadata: { synthetic: true },
+      }),
+    },
+  });
+
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'dedupe-repo',
+    key: 'runtime-verification',
+    content: 'Verify git and GitHub before making live-state claims.',
+    category: 'runbook',
+    importance: 99,
+  });
+  assert.equal(
+    app.getMemory({ scope: 'repo', scopeKey: 'dedupe-repo', key: 'runtime-verification' }).importance,
+    10,
+  );
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'dedupe-repo',
+    sessionId: 'dedupe-session',
+    role: 'assistant',
+    content: 'Candidate: improve runtime verification memory.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'dedupe-repo',
+    sessionId: 'dedupe-session',
+  });
+
+  const suggestions = await app.suggestMemoryPromotions({
+    scope: 'repo',
+    scopeKey: 'dedupe-repo',
+    sessionId: 'dedupe-session',
+    trigger: 'manual_closeout',
+    createUpdateCandidates: true,
+    scanLimit: 10,
+  });
+  assert.equal(suggestions.proposals.length, 0);
+  assert.equal(suggestions.updateCandidates.length, 1);
+  assert.equal(suggestions.updateCandidates[0].action, 'correct_memory');
+  assert.equal(suggestions.updateCandidates[0].targetMemoryKey, 'runtime-verification');
+  assert.equal(suggestions.updateCandidates[0].proposedImportance, 10);
+  assert.ok(
+    suggestions.skipped.some(
+      (item) => item.promotionAssessment?.classification === 'refinement',
+    ),
+  );
+  assert.ok(
+    suggestions.skipped.some(
+      (item) => item.promotionAssessment?.classification === 'duplicate',
+    ),
+  );
+
+  const updateCandidates = app.listMemoryUpdateCandidates({
+    scope: 'repo',
+    scopeKey: 'dedupe-repo',
+    status: 'pending',
+  });
+  assert.equal(updateCandidates.length, 1);
+  assert.equal(updateCandidates[0].targetMemoryKey, 'runtime-verification');
+
+  const duplicateCandidate = app
+    .listMemoryCandidates({
+      scope: 'repo',
+      scopeKey: 'dedupe-repo',
+      status: 'pending',
+    })
+    .find((candidate) => candidate.candidate.key === 'duplicate-runtime-rule');
+  assert.equal(duplicateCandidate.candidate.importance, 0);
+  assert.throws(
+    () =>
+      app.promoteMemoryCandidate({
+        scope: 'repo',
+        scopeKey: 'dedupe-repo',
+        candidateId: duplicateCandidate.id,
+      }),
+    /allowWarnings/,
+  );
+});
+
+test('promotion quality assessment covers supersedes, too-specific, and new candidates', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'classification_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      classification_provider: async () => ({
+        summaryShort: 'Classification checkpoint.',
+        summaryText: 'The checkpoint proposes several promotion classifications.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'runtime-verification',
+            content: 'Verify git, GitHub, CI, runtime health, and migrations before acting on live state.',
+            reason: 'This is a more complete runtime verification rule that should supersede the older version.',
+            category: 'runbook',
+            confidence: 0.92,
+            stability: 0.9,
+            promotionRecommendation: 'promote',
+          },
+          {
+            key: 'pr-142-status',
+            content: 'PR #142 CI passed on Node 20, 22, and 24.',
+            reason: 'One-off PR status should stay in checkpoint context.',
+            category: 'temporary',
+            confidence: 0.95,
+            stability: 0.95,
+            promotionRecommendation: 'promote',
+          },
+          {
+            key: 'api-contract-rule',
+            content: 'API contract memories should include endpoint, request shape, response shape, and migration notes.',
+            reason: 'Reusable API contract guidance.',
+            category: 'api-contract',
+            confidence: 0.95,
+            stability: 0.95,
+            promotionRecommendation: 'promote',
+          },
+        ],
+        sourceEventCount: 1,
+        metadata: { synthetic: true },
+      }),
+    },
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'classification-repo',
+    key: 'runtime-verification',
+    content: 'Verify git and GitHub before acting on live state.',
+    category: 'runbook',
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'classification-repo',
+    sessionId: 'classification-session',
+    role: 'assistant',
+    content: 'Candidate: classify memory promotions.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'classification-repo',
+    sessionId: 'classification-session',
+  });
+
+  const suggestions = await app.suggestMemoryPromotions({
+    scope: 'repo',
+    scopeKey: 'classification-repo',
+    sessionId: 'classification-session',
+    trigger: 'manual_closeout',
+    createUpdateCandidates: true,
+    scanLimit: 10,
+  });
+
+  assert.ok(suggestions.proposals.some((proposal) => proposal.key === 'api-contract-rule'));
+  assert.ok(
+    suggestions.updateCandidates.some(
+      (candidate) =>
+        candidate.targetMemoryKey === 'runtime-verification' &&
+        candidate.reason.includes('supersedes'),
+    ),
+  );
+  assert.ok(
+    suggestions.skipped.some(
+      (item) => item.promotionAssessment?.classification === 'too_specific',
+    ),
+  );
+});
+
+test('auditMemoryDuplicates reports merge proposals without mutating by default', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'duplicate-audit-repo',
+    key: 'runtime-rule-a',
+    content: 'Agents must verify git and GitHub before making live-state claims.',
+    category: 'runbook',
+    importance: 5,
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'duplicate-audit-repo',
+    key: 'runtime-rule-b',
+    content: 'Agents must verify git and GitHub before making live-state claims.',
+    category: 'runbook',
+    importance: 2,
+  });
+
+  const dryRun = app.auditMemoryDuplicates({
+    scope: 'repo',
+    scopeKey: 'duplicate-audit-repo',
+  });
+  assert.equal(dryRun.duplicatePairs.length, 1);
+  assert.equal(dryRun.duplicatePairs[0].survivor.key, 'runtime-rule-a');
+  assert.equal(dryRun.duplicatePairs[0].updateCandidate.status, 'proposed');
+  assert.equal(
+    app.listMemoryUpdateCandidates({
+      scope: 'repo',
+      scopeKey: 'duplicate-audit-repo',
+    }).length,
+    0,
+  );
+
+  const persisted = app.auditMemoryDuplicates({
+    scope: 'repo',
+    scopeKey: 'duplicate-audit-repo',
+    createUpdateCandidates: true,
+  });
+  assert.equal(persisted.duplicatePairs[0].updateCandidate.status, 'pending');
+  assert.equal(
+    app.listMemoryUpdateCandidates({
+      scope: 'repo',
+      scopeKey: 'duplicate-audit-repo',
+      action: 'merge_duplicate_memories',
+    }).length,
+    1,
+  );
+});
+
+test('auditMemoryDuplicates limits persisted update candidates after sorting and dedupe', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+  for (const [key, importance] of [
+    ['runtime-rule-a', 9],
+    ['runtime-rule-b', 5],
+    ['runtime-rule-c', 1],
+  ]) {
+    app.remember({
+      scope: 'repo',
+      scopeKey: 'duplicate-limit-repo',
+      key,
+      content: 'Agents must verify git and GitHub before making live-state claims.',
+      category: 'runbook',
+      importance,
+    });
+  }
+
+  const result = app.auditMemoryDuplicates({
+    scope: 'repo',
+    scopeKey: 'duplicate-limit-repo',
+    createUpdateCandidates: true,
+    limit: 1,
+  });
+
+  assert.equal(result.matchedPairs, 3);
+  assert.equal(result.duplicatePairs.length, 1);
+  assert.equal(
+    app.listMemoryUpdateCandidates({
+      scope: 'repo',
+      scopeKey: 'duplicate-limit-repo',
+      action: 'merge_duplicate_memories',
+    }).length,
+    1,
+  );
 });
 
 test('CLI accepts repoPath for repo-scoped memory', async () => {
@@ -7121,8 +7429,8 @@ test('suggestMemoryPromotions avoids scope fallback unless explicitly allowed', 
         memoryCandidates: [
           {
             key: 'closeout-runbook',
-            content: 'Closeout should verify branch parity before frontend follow-up.',
-            reason: 'PR #595 merge and main parity were verified.',
+            content: 'Closeout should verify branch parity before follow-up work starts.',
+            reason: 'Branch parity verification is a reusable closeout runbook.',
             category: 'runbook',
             candidateType: 'runbook',
             confidence: 0.91,
@@ -9730,6 +10038,7 @@ test('REMOTE_METHODS exposes resume, suggestion, auto-promotion, and reconciliat
   assert.ok(REMOTE_METHODS.includes('reconcileMemory'));
   assert.ok(REMOTE_METHODS.includes('listPreferenceOccurrences'));
   assert.ok(REMOTE_METHODS.includes('listMemoryUpdateCandidates'));
+  assert.ok(REMOTE_METHODS.includes('auditMemoryDuplicates'));
   assert.ok(REMOTE_METHODS.includes('applyMemoryUpdateCandidate'));
   assert.ok(REMOTE_METHODS.includes('rejectMemoryUpdateCandidate'));
   assert.ok(REMOTE_METHODS.includes('skipMemoryUpdateCandidate'));
@@ -9922,6 +10231,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'append_raw',
       'apply_memory_update_candidate',
       'audit_memory_candidates',
+      'audit_memory_duplicates',
       'auto_promote_memory_candidates',
       'begin_session',
       'bootstrap_context',
@@ -10024,6 +10334,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     const suggestTool = toolList.tools.find((tool) => tool.name === 'suggest_memory_promotions');
     assert.ok(suggestTool.inputSchema.properties.allowScopeFallback);
     assert.ok(suggestTool.inputSchema.properties.trigger);
+    assert.ok(suggestTool.inputSchema.properties.createUpdateCandidates);
     assert.ok(suggestTool.description.includes('missing_closeout_source'));
     const preferenceOccurrencesTool = toolList.tools.find((tool) => tool.name === 'list_preference_occurrences');
     assert.ok(preferenceOccurrencesTool.inputSchema.properties.status);
@@ -10031,6 +10342,10 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     const updateCandidatesTool = toolList.tools.find((tool) => tool.name === 'list_memory_update_candidates');
     assert.ok(updateCandidatesTool.inputSchema.properties.status);
     assert.ok(updateCandidatesTool.inputSchema.properties.action);
+    const duplicateAuditTool = toolList.tools.find((tool) => tool.name === 'audit_memory_duplicates');
+    assert.ok(duplicateAuditTool.inputSchema.properties.minOverlap);
+    assert.ok(duplicateAuditTool.inputSchema.properties.scanLimit);
+    assert.ok(duplicateAuditTool.inputSchema.properties.createUpdateCandidates);
     const listCandidateTool = toolList.tools.find((tool) => tool.name === 'list_memory_candidates');
     assert.ok(listCandidateTool.description.includes('current closeout source'));
     const applyUpdateTool = toolList.tools.find((tool) => tool.name === 'apply_memory_update_candidate');

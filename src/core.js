@@ -964,12 +964,240 @@ function normalizeContentForRisk(value) {
     .trim();
 }
 
+function clampImportance(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.min(10, Math.round(parsed)));
+}
+
+function qualityTokens(value) {
+  return String(value || '')
+    .toLowerCase()
+    .split(/[^a-z0-9_./:-]+/)
+    .filter((token) => token.length > 2);
+}
+
+function tokenOverlapScore(left, right) {
+  const leftTokens = new Set(qualityTokens(left));
+  const rightTokens = new Set(qualityTokens(right));
+  if (!leftTokens.size || !rightTokens.size) return 0;
+  let intersection = 0;
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) intersection += 1;
+  }
+  const union = new Set([...leftTokens, ...rightTokens]).size;
+  return union ? intersection / union : 0;
+}
+
+function candidateQualityText({ key, content, candidate = {} }) {
+  return [
+    key,
+    candidate.key,
+    content,
+    candidate.content,
+    candidate.reason,
+    candidate.durabilityReason,
+    candidate.riskReason,
+    candidate.candidateType,
+    candidate.category,
+    ...(Array.isArray(candidate.tags) ? candidate.tags : []),
+    ...(Array.isArray(candidate.evidenceRefs) ? candidate.evidenceRefs : []),
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+function normalizeSuggestedPromotionAction(candidate = {}) {
+  return String(candidate.suggestedAction || candidate.duplicateAction || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[-\s]+/g, '_');
+}
+
+function promotionClassificationFromProvider(candidate = {}) {
+  const action = normalizeSuggestedPromotionAction(candidate);
+  if (['duplicate', 'refinement', 'supersedes', 'conflict', 'too_specific'].includes(action)) {
+    return action;
+  }
+  if (['merge', 'merge_duplicate', 'merge_duplicate_memories'].includes(action)) return 'duplicate';
+  if (['refine', 'update', 'correct_memory'].includes(action)) return 'refinement';
+  if (['supersede', 'replace'].includes(action)) return 'supersedes';
+  return null;
+}
+
+function memorySimilaritySummary(memory, { key, content, candidate = {} }, retrieval = null) {
+  const candidateText = candidateQualityText({ key, content, candidate });
+  const memoryText = [memory.key, memory.category, memory.content, ...(memory.tags || [])].join('\n');
+  const overlap = tokenOverlapScore(candidateText, memoryText);
+  return {
+    memoryId: memory.id,
+    key: memory.key,
+    category: memory.category,
+    content: truncateText(memory.content, 280),
+    importance: memory.importance,
+    overlap,
+    exactContent: normalizeContentForRisk(memory.content) === normalizeContentForRisk(content),
+    sameKey: memory.key === key,
+    retrieval: retrieval || null,
+  };
+}
+
+function similarDurableMemories(store, scope, { key, content, candidate = {}, queryEmbedding = null, limit = 8 }) {
+  const query = candidateQualityText({ key, content, candidate });
+  const lexicalMatches = store.listMemories(scope).map((memory) =>
+    memorySimilaritySummary(memory, { key, content, candidate }),
+  );
+  const searchMatches = searchMemories(store, {
+    ...scope,
+    query,
+    limit: Math.max(limit, 8),
+    queryEmbedding,
+  })
+    .filter((result) => result.type === 'memory' && result.memory)
+    .map((result) =>
+      memorySimilaritySummary(result.memory, { key, content, candidate }, result.retrieval),
+    );
+  const byId = new Map();
+  for (const item of [...lexicalMatches, ...searchMatches]) {
+    const existing = byId.get(item.memoryId);
+    if (
+      !existing ||
+      item.overlap > existing.overlap ||
+      (item.retrieval?.vectorDistance != null && existing.retrieval?.vectorDistance == null)
+    ) {
+      byId.set(item.memoryId, item);
+    }
+  }
+  return [...byId.values()]
+    .filter((item) => item.sameKey || item.exactContent || item.overlap >= 0.2 || item.retrieval?.vectorDistance != null)
+    .sort(
+      (a, b) =>
+        Number(b.exactContent) - Number(a.exactContent) ||
+        Number(b.sameKey) - Number(a.sameKey) ||
+        b.overlap - a.overlap ||
+        (a.retrieval?.vectorDistance ?? Number.POSITIVE_INFINITY) -
+          (b.retrieval?.vectorDistance ?? Number.POSITIVE_INFINITY),
+    )
+    .slice(0, limit);
+}
+
+function classifyPromotionAssessment(candidate, similarMemories) {
+  const providerClassification = promotionClassificationFromProvider(candidate);
+  const candidateText = candidateQualityText({
+    key: candidate.key,
+    content: candidate.content,
+    candidate,
+  });
+  if (providerClassification) return providerClassification;
+  if (AUTO_ONE_OFF_EVENT_PATTERN.test(candidateText) || AUTO_TRANSIENT_CATEGORIES.has(normalizeToken(candidate.category))) {
+    return 'too_specific';
+  }
+  const top = similarMemories[0];
+  if (!top) return 'new';
+  if (top.exactContent || (top.sameKey && top.overlap >= 0.85)) return 'duplicate';
+  const strongOverlap =
+    top.sameKey || top.overlap >= 0.6 || (top.retrieval?.vectorDistance != null && top.retrieval.vectorDistance <= 0.2);
+  if (strongOverlap && /conflict|contradict|incompatible|different content/i.test(candidateText)) return 'conflict';
+  if (strongOverlap && /supersede|replace|newer|more complete|deprecate/i.test(candidateText)) return 'supersedes';
+  if (top.sameKey || top.overlap >= 0.45 || (top.retrieval?.vectorDistance != null && top.retrieval.vectorDistance <= 0.2)) {
+    return 'refinement';
+  }
+  return 'new';
+}
+
+function promotionAssessment(store, scope, { key, content, candidate = {}, queryEmbedding = null, embedding = null }) {
+  const normalizedCandidate = {
+    ...candidate,
+    key: key || candidate.key,
+    content: content || candidate.content,
+  };
+  const similarMemories = similarDurableMemories(store, scope, {
+    key: normalizedCandidate.key,
+    content: normalizedCandidate.content,
+    candidate: normalizedCandidate,
+    queryEmbedding,
+  });
+  const classification = classifyPromotionAssessment(normalizedCandidate, similarMemories);
+  const recommendedAction =
+    classification === 'new'
+      ? 'promote_as_new_memory'
+      : classification === 'duplicate'
+        ? 'reject_or_merge_duplicate'
+        : classification === 'too_specific'
+          ? 'keep_as_checkpoint_context'
+          : 'create_memory_update_candidate';
+  return {
+    classification,
+    recommendedAction,
+    similarMemories,
+    embedding: embedding || {
+      used: Boolean(queryEmbedding),
+      degraded: !queryEmbedding,
+      reason: queryEmbedding ? null : 'embedding_not_used_for_this_assessment',
+    },
+  };
+}
+
+function warningForPromotionAssessment(assessment) {
+  if (!assessment || assessment.classification === 'new') return null;
+  const top = assessment.similarMemories[0] || null;
+  const base = {
+    classification: assessment.classification,
+    recommendedAction: assessment.recommendedAction,
+    similarMemories: assessment.similarMemories,
+  };
+  if (assessment.classification === 'duplicate') {
+    return {
+      code: 'duplicate_durable_memory',
+      message: top
+        ? `Candidate is already covered by active durable memory "${top.key}".`
+        : 'Candidate appears to duplicate existing durable memory.',
+      memoryKey: top?.key || null,
+      memoryId: top?.memoryId || null,
+      ...base,
+    };
+  }
+  if (assessment.classification === 'too_specific') {
+    return {
+      code: 'candidate_too_specific',
+      message: 'Candidate appears useful as checkpoint handoff context, but too specific for durable memory.',
+      ...base,
+    };
+  }
+  return {
+    code: `candidate_${assessment.classification}_requires_update`,
+    message: top
+      ? `Candidate overlaps active durable memory "${top.key}" and should create a ${assessment.classification} update proposal instead of a new memory.`
+      : `Candidate should create a ${assessment.classification} update proposal instead of a new memory.`,
+    memoryKey: top?.key || null,
+    memoryId: top?.memoryId || null,
+    ...base,
+  };
+}
+
+function mergeWarnings(warnings, extraWarnings) {
+  const merged = [];
+  const seen = new Set();
+  for (const warning of [...warnings, ...extraWarnings].filter(Boolean)) {
+    const key = `${warning.code}:${warning.memoryId || ''}:${warning.memoryKey || ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(warning);
+  }
+  return merged;
+}
+
 function truthyOption(value) {
   return value === true || value === 'true' || value === '1' || value === 1;
 }
 
-function candidatePromotionWarnings(store, scope, { key, content, candidate }) {
+function candidatePromotionWarnings(store, scope, { key, content, candidate, assessment = null }) {
   const warnings = [];
+  const effectiveAssessment = assessment || promotionAssessment(store, scope, { key, content, candidate });
+  const assessmentWarning = warningForPromotionAssessment(effectiveAssessment);
+  if (assessmentWarning) {
+    warnings.push(assessmentWarning);
+  }
   const existingByKey = store.getMemory({ ...scope, key });
   if (existingByKey?.status === 'active') {
     warnings.push({
@@ -1054,6 +1282,11 @@ const AUTO_SKIP_WARNING_CODES = new Set([
   'duplicate_key',
   'existing_key_conflict',
   'duplicate_content',
+  'duplicate_durable_memory',
+  'candidate_refinement_requires_update',
+  'candidate_supersedes_requires_update',
+  'candidate_conflict_requires_update',
+  'candidate_too_specific',
   'high_sensitivity',
   'recommendation_not_promote',
   'low_confidence',
@@ -1387,13 +1620,81 @@ function indexedCandidateBasisResult(indexedCandidate) {
   };
 }
 
-function promotionCandidateWarnings(store, scope, indexedCandidate) {
+function promotionCandidateWarnings(store, scope, indexedCandidate, assessment = null) {
   const candidate = indexedCandidate.candidate || {};
+  const effectiveAssessment = assessment || promotionAssessmentForIndexedCandidate(store, scope, indexedCandidate);
   return candidatePromotionWarnings(store, scope, {
     key: candidate.key,
     content: candidate.content,
     candidate,
+    assessment: effectiveAssessment,
   });
+}
+
+function promotionAssessmentForIndexedCandidate(store, scope, indexedCandidate, queryEmbedding = null) {
+  const candidate = indexedCandidate.candidate || {};
+  return promotionAssessment(store, scope, {
+    key: candidate.key,
+    content: candidate.content,
+    candidate,
+    queryEmbedding,
+    embedding: {
+      used: Boolean(queryEmbedding),
+      degraded: !queryEmbedding,
+      reason: queryEmbedding ? null : 'embedding_not_available_or_not_requested',
+    },
+  });
+}
+
+function updateCandidateDraftForPromotionAssessment(scope, indexedCandidate, assessment) {
+  if (!assessment || ['new', 'duplicate', 'too_specific'].includes(assessment.classification)) {
+    return null;
+  }
+  const candidate = indexedCandidate.candidate || {};
+  const target = assessment.similarMemories[0] || null;
+  if (!target) return null;
+  return {
+    id: null,
+    // `proposed` is an in-memory draft status; persisted update candidates are stored as `pending`.
+    status: 'proposed',
+    scopeType: scope.scopeType,
+    scopeKey: scope.scopeKey,
+    action: assessment.classification === 'duplicate' ? 'merge_duplicate_memories' : 'correct_memory',
+    targetMemoryId: target.memoryId,
+    targetMemoryKey: target.key,
+    proposedKey: target.key,
+    proposedContent: candidate.content,
+    proposedCategory: candidate.category || target.category || 'note',
+    proposedTags: candidate.tags || [],
+    proposedImportance: clampImportance(candidate.importance ?? target.importance ?? 0),
+    reason: `Promotion quality assessment classified candidate as ${assessment.classification}; update existing durable memory instead of writing a new one.`,
+    confidence:
+      assessment.classification === 'conflict'
+        ? 0.55
+        : assessment.classification === 'supersedes'
+          ? 0.75
+          : 0.7,
+    sourceSessionId: indexedCandidate.sessionId || null,
+    sourceCheckpointId: indexedCandidate.checkpointId || null,
+    sourceCandidateId: indexedCandidate.id || null,
+    correction: candidate.content,
+    basis: [
+      {
+        type: 'memory',
+        key: target.key,
+        memoryId: target.memoryId,
+        category: target.category,
+        content: target.content,
+        overlap: target.overlap,
+        classification: assessment.classification,
+      },
+      indexedCandidateBasisResult(indexedCandidate),
+    ],
+  };
+}
+
+function persistUpdateCandidateDraft(store, draft) {
+  return draft ? store.createMemoryUpdateCandidate(draft) : null;
 }
 
 function candidateWarningReason(warnings) {
@@ -1420,6 +1721,7 @@ function scorePromotionCandidate(indexedCandidate, warnings, skipWarningCodes = 
 function promotionProposal(indexedCandidate, warnings, rank) {
   const candidate = indexedCandidate.candidate || {};
   const sourceProvenance = indexedCandidate.source?.sourceProvenance || null;
+  const assessmentWarning = warnings.find((warning) => warning.classification);
   const proposal = {
     rank,
     candidateId: indexedCandidate.id,
@@ -1448,6 +1750,13 @@ function promotionProposal(indexedCandidate, warnings, rank) {
     warnings,
     recommendedAction: 'ask_user',
   };
+  if (assessmentWarning) {
+    proposal.promotionAssessment = {
+      classification: assessmentWarning.classification,
+      recommendedAction: assessmentWarning.recommendedAction,
+      similarMemories: assessmentWarning.similarMemories || [],
+    };
+  }
   if (candidate.suggestedAction) {
     proposal.providerSuggestedAction = candidate.suggestedAction;
   }
@@ -1524,9 +1833,9 @@ function normalizeAllowedCategories(value, defaultCategories = SAFE_AUTO_PROMOTE
   };
 }
 
-function autoPromotionWarnings(store, scope, indexedCandidate, policy) {
+function autoPromotionWarnings(store, scope, indexedCandidate, policy, assessment = null) {
   const candidate = indexedCandidate.candidate || {};
-  const warnings = [...promotionCandidateWarnings(store, scope, indexedCandidate)];
+  const warnings = [...promotionCandidateWarnings(store, scope, indexedCandidate, assessment)];
   const category = normalizeToken(candidate.category);
   const searchableText = [
     candidate.key,
@@ -3279,6 +3588,132 @@ export function createContextForge(options = {}) {
       );
     },
 
+    auditMemoryDuplicates(options = {}) {
+      const scope = normalizeScopeOptions(options, config);
+      const minOverlap = Number(options.minOverlap ?? 0.82);
+      if (!Number.isFinite(minOverlap) || minOverlap < 0 || minOverlap > 1) {
+        throw new Error('minOverlap must be between 0 and 1.');
+      }
+      const limit = positiveNumber(options.limit == null ? 20 : Number(options.limit), 'limit');
+      const scanLimit = positiveNumber(options.scanLimit == null ? 250 : Number(options.scanLimit), 'scanLimit');
+      const createUpdateCandidates = truthyOption(options.createUpdateCandidates);
+      return useStore((store) => {
+        const memories = store.listMemories(scope).slice(0, scanLimit);
+        const pairs = [];
+        for (let i = 0; i < memories.length; i += 1) {
+          for (let j = i + 1; j < memories.length; j += 1) {
+            const left = memories[i];
+            const right = memories[j];
+            const leftText = [left.key, left.category, left.content, ...(left.tags || [])].join('\n');
+            const rightText = [right.key, right.category, right.content, ...(right.tags || [])].join('\n');
+            const exactContent = normalizeContentForRisk(left.content) === normalizeContentForRisk(right.content);
+            const overlap = tokenOverlapScore(leftText, rightText);
+            const sameKeyStem = slugForKey(left.key) === slugForKey(right.key);
+            if (!exactContent && overlap < minOverlap && !(sameKeyStem && overlap >= Math.min(minOverlap, 0.6))) {
+              continue;
+            }
+            const survivor =
+              left.importance > right.importance ||
+              (left.importance === right.importance && left.updatedAt >= right.updatedAt)
+                ? left
+                : right;
+            const duplicate = survivor.id === left.id ? right : left;
+            const updateDraft = {
+              id: null,
+              // `proposed` is an in-memory draft status; persisted update candidates are stored as `pending`.
+              status: createUpdateCandidates ? 'pending' : 'proposed',
+              scopeType: scope.scopeType,
+              scopeKey: scope.scopeKey,
+              action: 'merge_duplicate_memories',
+              targetMemoryId: duplicate.id,
+              targetMemoryKey: duplicate.key,
+              proposedKey: survivor.key,
+              proposedContent: survivor.content,
+              proposedCategory: survivor.category,
+              proposedTags: survivor.tags,
+              proposedImportance: clampImportance(survivor.importance),
+              reason: exactContent
+                ? `Duplicate durable memory content; merge ${duplicate.key} into ${survivor.key}.`
+                : `Highly overlapping durable memory (${overlap.toFixed(2)} token overlap); review merge into ${survivor.key}.`,
+              confidence: exactContent ? 0.95 : Math.max(0.5, overlap),
+              basis: [
+                {
+                  type: 'memory',
+                  key: survivor.key,
+                  memoryId: survivor.id,
+                  content: truncateText(survivor.content, 500),
+                  role: 'survivor',
+                },
+                {
+                  type: 'memory',
+                  key: duplicate.key,
+                  memoryId: duplicate.id,
+                  content: truncateText(duplicate.content, 500),
+                  role: 'duplicate',
+                },
+              ],
+            };
+            pairs.push({
+              survivor: {
+                memoryId: survivor.id,
+                key: survivor.key,
+                importance: survivor.importance,
+                updatedAt: survivor.updatedAt,
+              },
+              duplicate: {
+                memoryId: duplicate.id,
+                key: duplicate.key,
+                importance: duplicate.importance,
+                updatedAt: duplicate.updatedAt,
+              },
+              exactContent,
+              overlap,
+              reason: updateDraft.reason,
+              updateDraft,
+            });
+          }
+        }
+        const selectedPairs = [];
+        const seenDuplicates = new Set();
+        for (const pair of pairs
+          .sort((a, b) => Number(b.exactContent) - Number(a.exactContent) || b.overlap - a.overlap)) {
+          if (seenDuplicates.has(pair.duplicate.memoryId)) {
+            continue;
+          }
+          seenDuplicates.add(pair.duplicate.memoryId);
+          selectedPairs.push(pair);
+          if (selectedPairs.length >= limit) {
+            break;
+          }
+        }
+        return {
+          kind: 'memory_duplicate_audit',
+          scope,
+          minOverlap,
+          scanLimit,
+          createUpdateCandidates,
+          scanned: memories.length,
+          matchedPairs: pairs.length,
+          duplicatePairs: selectedPairs.map((pair) => {
+            const updateCandidate = createUpdateCandidates
+              ? store.createMemoryUpdateCandidate(pair.updateDraft)
+              : pair.updateDraft;
+            const { updateDraft, ...rest } = pair;
+            return {
+              ...rest,
+              updateCandidate: memoryUpdateCandidateProposal(updateCandidate),
+            };
+          }),
+          nextActions: [
+            createUpdateCandidates
+              ? 'Review pending merge_duplicate_memories update candidates before applying them.'
+              : 'Rerun with createUpdateCandidates=true to persist merge proposals for reviewed duplicates.',
+            'Do not merge memories without checking provenance and current policy relevance.',
+          ],
+        };
+      });
+    },
+
     applyMemoryUpdateCandidate(options) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.candidateId, 'candidateId');
@@ -3425,6 +3860,7 @@ export function createContextForge(options = {}) {
           : [];
       const scanLimit = positiveNumber(options.scanLimit == null ? 10 : Number(options.scanLimit), 'scanLimit');
       const promotionRecommendation = options.promotionRecommendation || 'promote';
+      const createUpdateCandidates = truthyOption(options.createUpdateCandidates);
 
       return useStore(async (store) => {
         let checkpointId = options.checkpointId || null;
@@ -3495,10 +3931,55 @@ export function createContextForge(options = {}) {
           sort: 'recommendation',
           limit: scanLimit,
         });
-        const assessed = candidates.map((candidate) => {
-          const warnings = promotionCandidateWarnings(store, scope, candidate);
+        let candidateEmbeddings = [];
+        let assessmentEmbedding = {
+          used: false,
+          degraded: !embeddingProvider,
+          reason: embeddingProvider ? 'no_candidates' : 'embeddings_disabled',
+          provider: embeddingProvider?.name || config.embeddings.provider,
+          model: embeddingProvider?.model || null,
+          dimensions: embeddingProvider?.dimensions || null,
+        };
+        if (embeddingProvider && candidates.length > 0) {
+          try {
+            candidateEmbeddings = await embeddingProvider.embed(
+              candidates.map((candidate) =>
+                candidateQualityText({
+                  key: candidate.candidate?.key,
+                  content: candidate.candidate?.content,
+                  candidate: candidate.candidate,
+                }),
+              ),
+            );
+            assessmentEmbedding = {
+              used: true,
+              degraded: false,
+              reason: null,
+              provider: embeddingProvider.name,
+              model: embeddingProvider.model,
+              dimensions: embeddingProvider.dimensions,
+            };
+          } catch (error) {
+            assessmentEmbedding = {
+              used: false,
+              degraded: true,
+              reason: `embedding_failed: ${error.message}`,
+              provider: embeddingProvider.name,
+              model: embeddingProvider.model,
+              dimensions: embeddingProvider.dimensions,
+            };
+          }
+        }
+        const assessed = candidates.map((candidate, index) => {
+          const queryEmbedding = candidateEmbeddings[index] || null;
+          const assessment = promotionAssessmentForIndexedCandidate(store, scope, candidate, queryEmbedding);
+          assessment.embedding = queryEmbedding ? assessmentEmbedding : { ...assessmentEmbedding, used: false };
+          const warnings = promotionCandidateWarnings(store, scope, candidate, assessment);
           const score = scorePromotionCandidate(candidate, warnings);
-          return { candidate, warnings, score };
+          const updateDraft = updateCandidateDraftForPromotionAssessment(scope, candidate, assessment);
+          const updateCandidate =
+            createUpdateCandidates && updateDraft ? persistUpdateCandidateDraft(store, updateDraft) : updateDraft;
+          return { candidate, warnings, score, assessment, updateCandidate };
         });
         const selected = assessed
           .filter((item) => item.score > 0)
@@ -3514,11 +3995,22 @@ export function createContextForge(options = {}) {
             allowScopeFallback,
           },
           proposals: selected.map((item, index) => promotionProposal(item.candidate, item.warnings, index + 1)),
+          updateCandidates: assessed
+            .filter((item) => item.updateCandidate)
+            .map((item) => memoryUpdateCandidateProposal(item.updateCandidate)),
           skipped: assessed
             .filter((item) => item.score <= 0)
             .map((item) => ({
               candidateId: item.candidate.id,
               reason: candidateWarningReason(item.warnings) || 'low_score',
+              ...(item.assessment?.classification && item.assessment.classification !== 'new'
+                ? {
+                    promotionAssessment: item.assessment,
+                    updateCandidate: item.updateCandidate
+                      ? memoryUpdateCandidateProposal(item.updateCandidate)
+                      : null,
+                  }
+                : {}),
             })),
           requestWarnings,
           nextActions: [
@@ -3950,10 +4442,54 @@ export function createContextForge(options = {}) {
           sort: 'recommendation',
           limit: scanLimit,
         });
-        const assessed = candidates.map((candidate) => {
-          const warnings = autoPromotionWarnings(store, scope, candidate, policy);
+        let candidateEmbeddings = [];
+        let assessmentEmbedding = {
+          used: false,
+          degraded: !embeddingProvider,
+          reason: embeddingProvider ? 'no_candidates' : 'embeddings_disabled',
+          provider: embeddingProvider?.name || config.embeddings.provider,
+          model: embeddingProvider?.model || null,
+          dimensions: embeddingProvider?.dimensions || null,
+        };
+        if (embeddingProvider && candidates.length > 0) {
+          try {
+            candidateEmbeddings = await embeddingProvider.embed(
+              candidates.map((candidate) =>
+                candidateQualityText({
+                  key: candidate.candidate?.key,
+                  content: candidate.candidate?.content,
+                  candidate: candidate.candidate,
+                }),
+              ),
+            );
+            assessmentEmbedding = {
+              used: true,
+              degraded: false,
+              reason: null,
+              provider: embeddingProvider.name,
+              model: embeddingProvider.model,
+              dimensions: embeddingProvider.dimensions,
+            };
+          } catch (error) {
+            assessmentEmbedding = {
+              used: false,
+              degraded: true,
+              reason: `embedding_failed: ${error.message}`,
+              provider: embeddingProvider.name,
+              model: embeddingProvider.model,
+              dimensions: embeddingProvider.dimensions,
+            };
+          }
+        }
+        const assessed = candidates.map((candidate, index) => {
+          const queryEmbedding = candidateEmbeddings[index] || null;
+          const assessment = promotionAssessmentForIndexedCandidate(store, scope, candidate, queryEmbedding);
+          assessment.embedding = queryEmbedding ? assessmentEmbedding : { ...assessmentEmbedding, used: false };
+          const warnings = mergeWarnings(autoPromotionWarnings(store, scope, candidate, policy, assessment), [
+            warningForPromotionAssessment(assessment),
+          ]);
           const score = scorePromotionCandidate(candidate, warnings, AUTO_PROMOTE_SKIP_WARNING_CODES);
-          return { candidate, warnings, score };
+          return { candidate, warnings, score, assessment };
         });
         const selected = assessed
           .filter((item) => item.score > 0)
@@ -4073,6 +4609,9 @@ export function createContextForge(options = {}) {
               .map((item) => ({
                 candidateId: item.candidate.id,
                 reason: candidateWarningReason(item.warnings) || 'low_score',
+                ...(item.assessment?.classification && item.assessment.classification !== 'new'
+                  ? { promotionAssessment: item.assessment }
+                  : {}),
               })),
             ...auditSkipped,
           ],
@@ -4390,7 +4929,8 @@ export function createContextForge(options = {}) {
         requireOption(key, 'key');
         const content = options.content || candidate.content;
         requireOption(content, 'content');
-        const warnings = candidatePromotionWarnings(store, scope, { key, content, candidate });
+        const assessment = promotionAssessment(store, scope, { key, content, candidate });
+        const warnings = candidatePromotionWarnings(store, scope, { key, content, candidate, assessment });
         if (warnings.length > 0 && !truthyOption(options.allowWarnings)) {
           const error = new Error(
             `Memory candidate promotion has ${warnings.length} warning(s). Pass allowWarnings to promote anyway.`,
@@ -4409,11 +4949,17 @@ export function createContextForge(options = {}) {
           content,
           category: options.category || candidate.category || 'note',
           tags: options.tags?.length ? options.tags : candidate.tags || [],
-          importance: options.importance == null ? candidate.importance || 0 : options.importance,
+          importance: clampImportance(options.importance == null ? candidate.importance || 0 : options.importance),
           reason: options.reason || null,
           warnings,
           sourceRawEventIds: options.sourceRawEventIds || [],
           allowStatusOverride: truthyOption(options.allowStatusOverride),
+          eventMetadata: {
+            promotionAssessment: assessment,
+          },
+          reviewMetadata: {
+            promotionAssessment: assessment,
+          },
         });
         enqueueEmbeddingSources(store, [store.embeddingSourceForMemory(memory)]);
         return memory;
