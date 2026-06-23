@@ -1572,18 +1572,26 @@ server's env files, service manager, or local database. When available, use
 `db_info` or `bootstrap_context` `connection.summary` or `connection.accessMode`
 as the live access-path check.
 For loose continuation prompts like "yesterday", "continue", "previous work",
-issue/PR follow-up, or cross-agent handoff, agents should call
-`bootstrap_context` or `bootstrapContext` early. The bootstrap response includes
-`handoff.latestCheckpoints` independently of search ranking, then reviews
-repo-scoped `memory`, `checkpoint`, and `memory_candidate` hits as context
-candidates, optionally includes up to three shared-scope hits, exposes
-`handoff.latestConsolidation` for thread/repo period context when available,
-and reports `memoryLifecycle` so agents can notice stale or missing
-candidate/promotion flow. It then reminds the agent to verify current branch,
-issue/PR, CI, migration, and runtime state against live sources before acting.
-Agents should read latest checkpoints and consolidation before durable memory
-for fast-moving work status; durable memory remains the stable
-policy/contract/runbook layer.
+issue/PR follow-up, context compaction, or cross-agent handoff, agents should
+call `bootstrap_context` or `bootstrapContext` early with an explicit
+`consultReason` such as `resume`, `compaction_recovery`, or `agent_switch`.
+The bootstrap response includes `handoff.latestCheckpoints` independently of
+search ranking, then reviews repo-scoped `memory`, `checkpoint`, and
+`memory_candidate` hits as context candidates, optionally includes up to three
+shared-scope hits, exposes `handoff.latestConsolidation` for thread/repo period
+context when available, and reports `memoryLifecycle` so agents can notice
+stale or missing candidate/promotion flow. It then reminds the agent to verify
+current branch, issue/PR, CI, migration, and runtime state against live sources
+before acting. Agents should read latest checkpoints and consolidation before
+durable memory for fast-moving work status only when the consult reason is
+startup/resume/compaction recovery/agent switch; durable memory remains the
+stable policy/contract/runbook layer.
+
+Inside the same uninterrupted active session, current conversation context is
+the source for current intent. Do not call `bootstrap_context` merely to
+re-confirm what was just discussed. Use targeted `search` for file/API/error or
+domain lookups, and use `db_info`, SQL, git, GitHub, health checks, or service
+manager state for mutable runtime facts.
 
 When resuming a known session, pass `sessionId` to `bootstrap_context` or
 `bootstrapContext`. ContextForge will include the session's latest

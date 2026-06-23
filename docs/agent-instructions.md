@@ -25,9 +25,18 @@ Replace `github.com/example/repo` when a canonical scope key is required.
 ```text
 Use ContextForge MCP for scoped project memory when it is available.
 
-At task start, call `bootstrap_context` with this task, `scope: "repo"`, and
-this repo path or the canonical scope key `github.com/example/repo`. Include
-shared memory only when cross-repo or user-wide policy may matter.
+At task start, after context compaction, or when resuming prior work, call
+`bootstrap_context` with this task, `scope: "repo"`, this repo path or the
+canonical scope key `github.com/example/repo`, and an explicit
+`consultReason` such as `startup`, `resume`, `compaction_recovery`, or
+`agent_switch`. Include shared memory only when cross-repo or user-wide policy
+may matter.
+
+Do not call `bootstrap_context` just to re-confirm current intent inside the
+same uninterrupted active session. For active-session file/API/error/domain
+lookups, use targeted `search`. For runtime, DB, git, GitHub, CI, health, or
+deployment state, use live checks such as `db_info`, SQL, git, GitHub,
+`/healthz`, or the service manager.
 
 Before relying on retrieval, distinguish storage authority. Remote
 ContextForge storage is canonical shared memory for the configured scope;
@@ -61,9 +70,12 @@ Connection mode: external remote client. Storage authority: remote canonical
 ContextForge. Agents may be sandboxed and may not be able to inspect the
 ContextForge server env files, service manager, or local database.
 
-At task start, call `bootstrap_context` with `scope: "repo"` and the canonical
-scope key `github.com/example/repo`. Include shared scope only for user-wide
-policy, deployment, credential-location, or cross-repo conventions.
+At task start, after context compaction, or when resuming prior work, call
+`bootstrap_context` with `scope: "repo"`, the canonical scope key
+`github.com/example/repo`, and an explicit `consultReason` such as `startup`,
+`resume`, `compaction_recovery`, or `agent_switch`. Include shared scope only
+for user-wide policy, deployment, credential-location, or cross-repo
+conventions.
 
 Read `handoff.latestCheckpoints` before durable memory for recent work status,
 recent decisions, open todos, branch/PR/CI flow, and next actions. Treat
@@ -82,6 +94,11 @@ ranking. Use `sync_resume_context` only when the exact session id is known and
 session working state or raw tail is needed. Use checkpoints for prior intent,
 recent decisions, and unfinished work, then verify current git/GitHub/CI/runtime
 state from live sources.
+
+Inside the same uninterrupted active session, current conversation context is
+the source for current intent. Do not use latest handoff as routine
+self-confirmation. Use targeted `search` for stable memory lookup by
+file/API/error/domain names, and use live source checks for mutable state.
 
 Use the installed `contextforge-memory` skill for session IDs, distillation,
 checkpoint consolidation, candidate review, closeout promotion, correction, and

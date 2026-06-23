@@ -77,11 +77,30 @@ Before relying on results, check connection metadata and storage authority from 
 - `remote-client` access means server-backed canonical memory for the configured scope.
 - `direct-local` with `local` or `project-local` storage is local context unless the repo `AGENTS.md` says otherwise.
 
+## Session-First Consult Policy
+
+Latest handoff is for continuity recovery. Do not use it as routine
+self-confirmation when the current uninterrupted session still contains the
+user's intent and recent decisions.
+
+Use paths by reason:
+
+- `startup`, `resume`, `compaction_recovery`, `agent_switch`: call
+  `bootstrap_context` with that `consultReason` and read latest handoff.
+- active uninterrupted session: proceed from current conversation context.
+- file/API/error/domain lookup during active work: use targeted `search`.
+- runtime/DB/git/GitHub/CI/health/deployment questions: use live checks such as
+  `db_info`, SQL, git, GitHub, `/healthz`, or service manager.
+
+If current session context conflicts with a handoff, prefer current context or
+live verification. Treat handoff as compressed stale-prone context.
+
 ## Startup Bootstrap
 
 At the start of non-trivial project work:
 
-1. Call `bootstrap_context` with a task-derived query, `scope: "repo"`, and `repoPath`, `cwd`, or explicit `scopeKey`.
+1. Call `bootstrap_context` with a task-derived query, `scope: "repo"`,
+   `repoPath`, `cwd`, or explicit `scopeKey`, and `consultReason: "startup"`.
 2. Read `handoff.latestHandoff` first when present. It is the deterministic
    newest handoff checkpoint and is loaded independently from search ranking.
 3. Inspect `handoff.latestHandoff.structured`, especially
@@ -120,7 +139,9 @@ When resuming a known session, pass that `sessionId` to `bootstrap_context`, `sy
 
 For "continue", "yesterday", prior issue/PR follow-up, or cross-agent handoff:
 
-1. Call `bootstrap_context` first; its latest checkpoint handoff is not dependent on semantic search ranking.
+1. Call `bootstrap_context` first with `consultReason: "resume"` or
+   `consultReason: "compaction_recovery"`; its latest checkpoint handoff is not
+   dependent on semantic search ranking.
 2. Prefer `handoff.latestHandoff` for the immediate resume state, then read
    other `handoff.latestCheckpoints` if more recent context is needed.
 3. Use `handoff.latestConsolidation` for broader thread/repo period context

@@ -137,6 +137,94 @@ function positiveInteger(value, name) {
   return parsed;
 }
 
+const CONSULT_REASONS = new Set([
+  'startup',
+  'resume',
+  'compaction_recovery',
+  'agent_switch',
+  'targeted_search',
+  'live_state_check',
+  'active_session',
+  'unknown',
+]);
+
+const RECOVERY_CONSULT_REASONS = new Set(['startup', 'resume', 'compaction_recovery', 'agent_switch']);
+const ACTIVE_SESSION_CONSULT_REASONS = new Set(['active_session', 'targeted_search', 'live_state_check']);
+
+function normalizeConsultReason(value) {
+  const reason = String(value || 'unknown')
+    .trim()
+    .toLowerCase()
+    .replace(/[-\s]+/g, '_');
+  if (!CONSULT_REASONS.has(reason)) {
+    throw new Error(`consultReason must be one of: ${Array.from(CONSULT_REASONS).join(', ')}.`);
+  }
+  return reason;
+}
+
+function bootstrapConsultPolicy({ consultReason, latestCheckpointLimit, sessionId }) {
+  const warnings = [];
+  const recommendedTools = [];
+  const handoffRecommended = RECOVERY_CONSULT_REASONS.has(consultReason);
+  if (consultReason === 'unknown') {
+    warnings.push({
+      code: 'consult_reason_unknown',
+      message:
+        'Pass consultReason so agents can distinguish startup/resume recovery from active-session targeted lookup.',
+    });
+  }
+  if (ACTIVE_SESSION_CONSULT_REASONS.has(consultReason)) {
+    warnings.push({
+      code: 'active_session_handoff_not_self_check',
+      message:
+        'Current uninterrupted session context should remain authoritative for current intent; do not use latest handoff as routine self-confirmation.',
+    });
+    if (latestCheckpointLimit > 0) {
+      warnings.push({
+        code: 'latest_handoff_returned_for_context_only',
+        message:
+          'latestHandoff is still returned for compatibility, but should be ignored unless this is actually resume, compaction recovery, or agent transfer.',
+      });
+    }
+  }
+  if (consultReason === 'targeted_search') {
+    recommendedTools.push('search');
+    warnings.push({
+      code: 'prefer_search_for_targeted_lookup',
+      message: 'Use targeted search for file/API/error/domain lookups during an active session instead of full handoff bootstrap.',
+    });
+  }
+  if (consultReason === 'live_state_check') {
+    recommendedTools.push('db_info', 'git', 'gh', 'healthz', 'service_manager');
+    warnings.push({
+      code: 'prefer_live_sources_for_mutable_state',
+      message:
+        'Use live sources for mutable DB/git/GitHub/CI/runtime/deployment state; checkpoints are compressed handoff notes.',
+    });
+  }
+  if (consultReason === 'active_session') {
+    recommendedTools.push('current_conversation', 'search');
+  }
+  if (sessionId && ACTIVE_SESSION_CONSULT_REASONS.has(consultReason)) {
+    warnings.push({
+      code: 'same_session_bootstrap_warning',
+      message:
+        'This bootstrap call includes a sessionId during active-session work; repeated same-session bootstrap calls can inject stale compressed context.',
+    });
+  }
+  return {
+    reason: consultReason,
+    handoffRecommended,
+    latestHandoffUse: handoffRecommended
+      ? 'Use latest handoff for continuity recovery, then verify mutable live state.'
+      : 'Do not use latest handoff as routine self-confirmation while active session context is intact.',
+    targetedSearchUse: 'Use search for active-session file/API/error/domain lookups.',
+    liveStateUse: 'Use db_info, git, GitHub, health checks, service manager, SQL, or migrations for mutable state.',
+    warnings,
+    recommendedTools: [...new Set(recommendedTools)],
+  };
+}
+
 function withStore(config, fn) {
   const store = new ContextForgeStore({ dataDir: config.dataDir });
   try {
@@ -2557,6 +2645,12 @@ export function createContextForge(options = {}) {
         'latestCheckpointLimit',
         { min: 0, max: 3 },
       );
+      const consultReason = normalizeConsultReason(options.consultReason);
+      const consultPolicy = bootstrapConsultPolicy({
+        consultReason,
+        latestCheckpointLimit,
+        sessionId,
+      });
       const relatedScopeKeys = normalizeRelatedScopeKeys(options.relatedScopeKeys).filter(
         (scopeKey) => scopeKey !== scope.scopeKey,
       );
@@ -2660,6 +2754,7 @@ export function createContextForge(options = {}) {
           scope,
           storage: storageBootstrapInfo(config, info),
           query: options.query,
+          consult: consultPolicy,
           includeShared,
           sharedLimit: includeShared ? sharedLimit : null,
           handoff: {
@@ -2682,6 +2777,7 @@ export function createContextForge(options = {}) {
           summary: bootstrapSummary(results),
           results,
           nextActions: [
+            ...consultPolicy.warnings.map((warning) => warning.message),
             'Verify current git/GitHub/CI/runtime/migration state before final claims or risky actions.',
             'Review memory_candidate results at task end if durable lessons remain.',
           ],
@@ -2694,6 +2790,7 @@ export function createContextForge(options = {}) {
       const bootstrap = await this.bootstrapContext({
         ...options,
         limit: options.limit == null ? 8 : options.limit,
+        consultReason: options.consultReason || 'resume',
       });
       const durableMemories = [];
       const recentCheckpoints = [];
@@ -2732,6 +2829,7 @@ export function createContextForge(options = {}) {
         scope: bootstrap.scope,
         storage: bootstrap.storage,
         query: bootstrap.query,
+        consult: bootstrap.consult,
         includeShared: bootstrap.includeShared,
         ...(bootstrap.sessionId ? { sessionId: bootstrap.sessionId } : {}),
         handoff: {
