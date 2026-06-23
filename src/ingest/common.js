@@ -504,6 +504,8 @@ export function createWatchSummary(result, options = {}) {
     stateFile: result.stateFile,
     stateLoaded: Boolean(result.stateLoaded),
     stateUpdated: Boolean(result.stateUpdated),
+    adapterStateLoadedCount: result.adapterStateLoadedCount || 0,
+    adapterStateUpdatedCount: result.adapterStateUpdatedCount || 0,
   };
   if (result.corruptStateFile) {
     summary.corruptStateFile = result.corruptStateFile;

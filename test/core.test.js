@@ -3716,6 +3716,10 @@ test('multi-agent routed watch auto-detects installed adapters and uses incremen
   );
   assert.equal(first.totals.filesScanned, 1);
   assert.equal(first.totals.appendedEvents, 2);
+  assert.equal(first.results[0].stateLoaded, false);
+  assert.equal(first.results[0].stateUpdated, true);
+  assert.equal(first.results[0].adapterStateLoadedCount, 0);
+  assert.equal(first.results[0].adapterStateUpdatedCount, 1);
   assert.equal(first.results[0].adapterResults[0].stateUpdated, true);
 
   const second = await watchAgentRoutedSessions(app, {
@@ -3736,6 +3740,10 @@ test('multi-agent routed watch auto-detects installed adapters and uses incremen
   assert.equal(second.totals.filesScanned, 1);
   assert.equal(second.totals.filesChanged, 0);
   assert.equal(second.totals.appendedEvents, 0);
+  assert.equal(second.results[0].stateLoaded, true);
+  assert.equal(second.results[0].stateUpdated, false);
+  assert.equal(second.results[0].adapterStateLoadedCount, 1);
+  assert.equal(second.results[0].adapterStateUpdatedCount, 0);
   assert.equal(second.results[0].adapterResults[0].stateLoaded, true);
 
   await fs.appendFile(rolloutFile, '{"malformed":\n');

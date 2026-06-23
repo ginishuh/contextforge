@@ -1013,6 +1013,10 @@ export async function ingestAgentRoutedSessionsIncremental(app, options = {}) {
     checkpointsCreated: adapterResults.reduce((total, result) => total + result.checkpointsCreated, 0),
     routedFiles: adapterResults.reduce((total, result) => total + result.routedFiles, 0),
     skippedFiles: adapterResults.reduce((total, result) => total + result.skippedFiles, 0),
+    stateLoaded: adapterResults.some((result) => result.stateLoaded),
+    stateUpdated: adapterResults.some((result) => result.stateUpdated),
+    adapterStateLoadedCount: adapterResults.filter((result) => result.stateLoaded).length,
+    adapterStateUpdatedCount: adapterResults.filter((result) => result.stateUpdated).length,
   };
 }
 
