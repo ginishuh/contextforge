@@ -1749,6 +1749,14 @@ JSON output via `response_format: {"type":"json_object"}`. The provider still
 validates the returned checkpoint JSON locally and records failed runs without
 deleting raw evidence.
 
+`CONTEXTFORGE_OPENAI_COMPATIBLE_RESPONSE_FORMAT` defaults to `json_object`.
+When set to `json_schema`, ContextForge sends a strict-safe subset of the
+checkpoint schema with `strict: true`: object schemas use
+`additionalProperties: false`, all properties are listed in `required`, optional
+values are represented with nullable union types, and type-specific validation
+keywords unsupported by strict structured-output implementations are omitted.
+Local validation still runs after the provider response is parsed.
+
 ## Public Repo Hygiene
 
 - Runtime state lives under `.contextforge/` by default and is ignored by git.

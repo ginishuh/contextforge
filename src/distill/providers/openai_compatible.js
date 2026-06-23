@@ -6,6 +6,26 @@ export const OPENAI_COMPATIBLE_PROMPT_VERSION = 'openai_compatible.prompt.v3';
 const DEFAULT_TIMEOUT_MS = 120000;
 const DEFAULT_BASE_URL = 'https://api.deepseek.com';
 const DEFAULT_MODEL = 'deepseek-v4-flash';
+const STRICT_SCHEMA_UNSUPPORTED_KEYS = new Set(['$id', 'minLength', 'minimum', 'maximum']);
+
+function strictSafeSchema(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => strictSafeSchema(item));
+  }
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+  const sanitized = {};
+  for (const [key, nested] of Object.entries(value)) {
+    if (STRICT_SCHEMA_UNSUPPORTED_KEYS.has(key)) {
+      continue;
+    }
+    sanitized[key] = strictSafeSchema(nested);
+  }
+  return sanitized;
+}
+
+export const OPENAI_COMPATIBLE_CHECKPOINT_OUTPUT_SCHEMA = strictSafeSchema(CHECKPOINT_OUTPUT_SCHEMA);
 
 function normalizeBaseUrl(baseUrl) {
   const url = new URL(baseUrl || DEFAULT_BASE_URL);
@@ -61,7 +81,7 @@ function responseFormat(format) {
       json_schema: {
         name: 'contextforge_checkpoint',
         strict: true,
-        schema: CHECKPOINT_OUTPUT_SCHEMA,
+        schema: OPENAI_COMPATIBLE_CHECKPOINT_OUTPUT_SCHEMA,
       },
     };
   }

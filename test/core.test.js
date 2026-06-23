@@ -13,6 +13,7 @@ import Database from 'better-sqlite3';
 import { createCodexSdkPythonAutoPromoteAuditor } from '../src/audit/codex_sdk_python.js';
 import { canonicalizeScope, parseScopeAliases } from '../src/config/index.js';
 import { createContextForge } from '../src/core.js';
+import { OPENAI_COMPATIBLE_CHECKPOINT_OUTPUT_SCHEMA } from '../src/distill/providers/openai_compatible.js';
 import { STRUCTURED_CHECKPOINT_SCHEMA_VERSION, validateDistillOutput } from '../src/distill/validate.js';
 import { createOpenAiEmbeddingProvider } from '../src/embeddings/index.js';
 import { createInterruptibleSleep, normalizeRepoIdentity, shouldSkipRecentFailedAutoDistill } from '../src/ingest/common.js';
@@ -39,6 +40,64 @@ function testAdminPasswordHash(password) {
   const iterations = 100000;
   const hash = crypto.pbkdf2Sync(password, salt, iterations, 32, 'sha256');
   return `${iterations}:${salt.toString('hex')}:${hash.toString('hex')}`;
+}
+
+function collectSchemaKeywordPaths(value, keywords, pathParts = []) {
+  const matches = [];
+  if (Array.isArray(value)) {
+    for (const [index, item] of value.entries()) {
+      matches.push(...collectSchemaKeywordPaths(item, keywords, [...pathParts, String(index)]));
+    }
+    return matches;
+  }
+  if (!value || typeof value !== 'object') {
+    return matches;
+  }
+  for (const [key, nested] of Object.entries(value)) {
+    const nextPath = [...pathParts, key];
+    if (keywords.has(key)) {
+      matches.push(nextPath.join('.'));
+    }
+    matches.push(...collectSchemaKeywordPaths(nested, keywords, nextPath));
+  }
+  return matches;
+}
+
+function collectStrictObjectSchemaViolations(value, pathParts = []) {
+  const violations = [];
+  if (Array.isArray(value)) {
+    for (const [index, item] of value.entries()) {
+      violations.push(...collectStrictObjectSchemaViolations(item, [...pathParts, String(index)]));
+    }
+    return violations;
+  }
+  if (!value || typeof value !== 'object') {
+    return violations;
+  }
+  const type = value.type;
+  const includesObject = type === 'object' || (Array.isArray(type) && type.includes('object'));
+  if (includesObject) {
+    const pathText = pathParts.join('.') || '<root>';
+    if (value.additionalProperties !== false) {
+      violations.push(`${pathText}:missing_additionalProperties_false`);
+    }
+    const properties = value.properties && typeof value.properties === 'object' ? Object.keys(value.properties) : [];
+    const required = Array.isArray(value.required) ? value.required : [];
+    for (const property of properties) {
+      if (!required.includes(property)) {
+        violations.push(`${pathText}:missing_required:${property}`);
+      }
+    }
+    for (const property of required) {
+      if (!properties.includes(property)) {
+        violations.push(`${pathText}:unknown_required:${property}`);
+      }
+    }
+  }
+  for (const [key, nested] of Object.entries(value)) {
+    violations.push(...collectStrictObjectSchemaViolations(nested, [...pathParts, key]));
+  }
+  return violations;
 }
 
 test('interruptible ingest sleep wakes when stopped', async () => {
@@ -7119,6 +7178,108 @@ test('openai_compatible provider distills through a fake DeepSeek-style chat com
   assert.equal(checkpoint.metadata.providerMetadata.openAiCompatible.baseUrlHost, 'api.deepseek.com');
   assert.equal(checkpoint.metadata.providerMetadata.openAiCompatible.model, 'manual-model');
   assert.equal(checkpoint.metadata.providerMetadata.openAiCompatible.usage.total_tokens, 20);
+});
+
+test('openai_compatible json_schema mode sends a strict-safe checkpoint schema', async () => {
+  const dataDir = await makeTempDir();
+  let requestBody;
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+    },
+    cwd: process.cwd(),
+    fetchImpl: async (url, request) => {
+      assert.equal(String(url), 'https://api.deepseek.com/chat/completions');
+      requestBody = JSON.parse(request.body);
+      return {
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    summaryShort: 'Strict schema checkpoint.',
+                    summaryText: 'The json_schema response returned valid checkpoint JSON.',
+                    workingSummary: 'Strict schema mode is under test.',
+                    sessionWorkingContext: {
+                      mode: 'task_execution',
+                      currentTask: 'Test strict schema',
+                      currentUserIntent: 'Verify OpenAI-compatible json_schema payload',
+                      targetSubject: null,
+                      sourceSubject: null,
+                      lastUserCorrection: null,
+                      openQuestion: null,
+                      nonGoals: [],
+                      avoidMisreadings: [],
+                      confidence: 0.8,
+                    },
+                    decisions: [],
+                    todos: [],
+                    openQuestions: [],
+                    memoryCandidates: [],
+                    structured: null,
+                    sourceEventCount: 1,
+                    provider: 'openai_compatible',
+                    metadata: {
+                      providerNotes: 'strict schema synthetic output',
+                      retrievalHooks: ['json_schema'],
+                    },
+                  }),
+                },
+              },
+            ],
+          }),
+      };
+    },
+  });
+  app.updateRuntimeSettings({
+    values: {
+      distillProvider: 'openai_compatible',
+      openAiCompatible: {
+        preset: 'deepseek',
+        baseUrl: 'https://api.deepseek.com',
+        model: 'deepseek-v4-flash',
+        responseFormat: 'json_schema',
+      },
+    },
+    secrets: {
+      openAiCompatibleApiKey: 'deepseek-secret',
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'strict-openai-compatible-repo',
+    sessionId: 'strict-openai-compatible-session',
+    role: 'user',
+    content: 'Strict json_schema mode should use a compatible schema subset.',
+  });
+
+  const checkpoint = await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'strict-openai-compatible-repo',
+    sessionId: 'strict-openai-compatible-session',
+  });
+
+  assert.equal(requestBody.response_format.type, 'json_schema');
+  assert.equal(requestBody.response_format.json_schema.strict, true);
+  assert.deepEqual(requestBody.response_format.json_schema.schema, OPENAI_COMPATIBLE_CHECKPOINT_OUTPUT_SCHEMA);
+  assert.deepEqual(
+    collectSchemaKeywordPaths(
+      requestBody.response_format.json_schema.schema,
+      new Set(['$id', 'minLength', 'minimum', 'maximum']),
+    ),
+    [],
+  );
+  assert.deepEqual(
+    requestBody.response_format.json_schema.schema.properties.structured.properties.changes.items.properties
+      .description.type,
+    ['string', 'null'],
+  );
+  assert.deepEqual(collectStrictObjectSchemaViolations(requestBody.response_format.json_schema.schema), []);
+  assert.equal(checkpoint.provider, 'openai_compatible');
+  assert.equal(checkpoint.metadata.providerMetadata.openAiCompatible.responseFormat, 'json_schema');
 });
 
 test('openai_compatible provider repairs invalid JSON output and records retry metadata', async () => {
