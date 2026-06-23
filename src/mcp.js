@@ -626,6 +626,59 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
   );
 
   server.registerTool(
+    'list_llm_usage_events',
+    {
+      title: 'List LLM Usage Events',
+      description:
+        'List persisted normalized LLM usage events for a scope, optionally filtered by session, distill run, checkpoint, candidate, operation, or provider.',
+      inputSchema: {
+        ...scopedSchema,
+        sessionId: z.string().optional(),
+        distillRunId: z.string().optional(),
+        checkpointId: z.string().optional(),
+        candidateId: z.string().optional(),
+        operation: z.string().optional(),
+        provider: z.string().optional(),
+        limit: z.number().int().positive().optional(),
+        order: z.enum(['asc', 'desc']).optional(),
+      },
+      annotations: {
+        title: 'List LLM Usage Events',
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.listLlmUsageEvents(args)),
+  );
+
+  server.registerTool(
+    'llm_usage_rollup',
+    {
+      title: 'LLM Usage Rollup',
+      description:
+        'Report persisted LLM usage totals by operation, provider/model, and provider/model/operation for a scope.',
+      inputSchema: {
+        ...scopedSchema,
+        sessionId: z.string().optional(),
+        distillRunId: z.string().optional(),
+        checkpointId: z.string().optional(),
+        candidateId: z.string().optional(),
+        operation: z.string().optional(),
+        provider: z.string().optional(),
+        limit: z.number().int().positive().optional(),
+        order: z.enum(['asc', 'desc']).optional(),
+        includeEvents: z.boolean().optional(),
+      },
+      annotations: {
+        title: 'LLM Usage Rollup',
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.llmUsageRollup(args)),
+  );
+
+  server.registerTool(
     'list_memory_events',
     {
       title: 'List Memory Events',

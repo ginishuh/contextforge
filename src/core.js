@@ -331,6 +331,14 @@ function providerModelFromMetadata(metadata = {}, fallback = null) {
   );
 }
 
+function errorUsageMetadata(error) {
+  const metadata = error?.metadata && typeof error.metadata === 'object' ? { ...error.metadata } : {};
+  if (error?.usage && metadata.usage == null) {
+    metadata.usage = error.usage;
+  }
+  return metadata;
+}
+
 function recordLlmUsageEvent(store, options) {
   const usage = extractProviderUsage(options.metadata || {});
   if (!usage) return null;
@@ -369,12 +377,15 @@ function summarizeLlmUsageEvents(events) {
   };
   const byOperation = {};
   const byProviderModel = {};
+  const byProviderModelOperation = {};
   for (const event of events) {
     const operationKey = event.operation;
     const providerKey = [event.provider, event.model].filter(Boolean).join('/') || event.provider;
+    const providerOperationKey = `${providerKey}:${operationKey}`;
     for (const [key, target] of [
       [operationKey, byOperation],
       [providerKey, byProviderModel],
+      [providerOperationKey, byProviderModelOperation],
     ]) {
       target[key] ||= {
         events: 0,
@@ -394,7 +405,7 @@ function summarizeLlmUsageEvents(events) {
       target[key].totalTokens += event.totalTokens || 0;
     }
   }
-  return { ...totals, byOperation, byProviderModel };
+  return { ...totals, byOperation, byProviderModel, byProviderModelOperation };
 }
 
 function summarizeDistillUsage({ scope, sessionId, runs, usageEvents = [], charsPerToken = 4 }) {
@@ -433,7 +444,7 @@ function summarizeDistillUsage({ scope, sessionId, runs, usageEvents = [], chars
   };
   const completedRuns = totals.succeeded + totals.failed;
   const actualUsageRuns = details.filter((run) => run.usage);
-  const actualUsage = {
+  const embeddedActualUsage = {
     runs: actualUsageRuns.length,
     inputTokens: actualUsageRuns.reduce((total, run) => total + (run.usage.inputTokens || 0), 0),
     outputTokens: actualUsageRuns.reduce((total, run) => total + (run.usage.outputTokens || 0), 0),
@@ -444,9 +455,14 @@ function summarizeDistillUsage({ scope, sessionId, runs, usageEvents = [], chars
     promptCacheHitTokens: actualUsageRuns.reduce((total, run) => total + (run.usage.promptCacheHitTokens || 0), 0),
     promptCacheMissTokens: actualUsageRuns.reduce((total, run) => total + (run.usage.promptCacheMissTokens || 0), 0),
   };
-  actualUsage.promptCacheHitRatio = actualUsage.inputTokens
-    ? actualUsage.promptCacheHitTokens / actualUsage.inputTokens
+  embeddedActualUsage.promptCacheHitRatio = embeddedActualUsage.inputTokens
+    ? embeddedActualUsage.promptCacheHitTokens / embeddedActualUsage.inputTokens
     : null;
+  const persistedUsage = summarizeLlmUsageEvents(usageEvents);
+  const canonicalUsage =
+    usageEvents.length > 0
+      ? { source: 'persisted_usage_events', ...persistedUsage }
+      : { source: 'embedded_provider_metadata', ...embeddedActualUsage };
 
   return {
     scopeType: scope.scopeType,
@@ -455,16 +471,18 @@ function summarizeDistillUsage({ scope, sessionId, runs, usageEvents = [], chars
     charsPerEstimatedToken: charsPerToken,
     note:
       usageEvents.length > 0
-        ? 'Persisted LLM usage events were found; older runs without events may still only have estimates or embedded provider metadata.'
-        : actualUsage.runs > 0
+        ? 'Persisted LLM usage events are the canonical usage totals for this response. embeddedActualUsage is legacy run metadata and must not be added to persistedUsage.'
+        : embeddedActualUsage.runs > 0
           ? 'Actual provider usage was found for some runs; runs without actual usage only have estimates.'
           : 'No actual provider token usage was recorded; estimatedInputTokens uses selectedCharCount divided by charsPerEstimatedToken. Older runs without sourceEventWindow metadata may estimate as 0.',
     totals: {
       ...totals,
       completedRuns,
       averageElapsedMs: completedRuns ? Math.round(totals.elapsedMs / completedRuns) : 0,
-      actualUsage,
-      persistedUsage: summarizeLlmUsageEvents(usageEvents),
+      actualUsage: embeddedActualUsage,
+      embeddedActualUsage,
+      persistedUsage,
+      canonicalUsage,
     },
     runs: details,
   };
@@ -1665,7 +1683,10 @@ async function auditAutoPromotionCandidate({ auditor, store, scope, item }) {
   });
 }
 
-function recordCandidateAuditUsageEvent(store, { scope, item, audit, sessionId = null, checkpointId = null }) {
+function recordCandidateAuditUsageEvent(
+  store,
+  { scope, item, audit, sessionId = null, checkpointId = null, status = 'succeeded' },
+) {
   const metadata = audit?.metadata || {};
   const provider = metadata.provider || 'none';
   if (provider === 'none') return null;
@@ -1674,7 +1695,7 @@ function recordCandidateAuditUsageEvent(store, { scope, item, audit, sessionId =
     operation: 'candidate_audit',
     provider,
     model: providerModelFromMetadata(metadata),
-    status: audit?.riskCodes?.includes('audit_failed') ? 'failed' : 'succeeded',
+    status,
     sessionId: sessionId || item.candidate.sessionId || null,
     distillRunId: item.candidate.source?.distillRunId || null,
     checkpointId: checkpointId || item.candidate.checkpointId || null,
@@ -3630,8 +3651,16 @@ export function createContextForge(options = {}) {
               decision: 'needs_review',
               reason: `Memory candidate audit failed: ${error.message}`,
               riskCodes: ['audit_failed'],
-              metadata: { errorName: error.name },
+              metadata: { ...(auditor?.metadata || {}), ...errorUsageMetadata(error), errorName: error.name },
             };
+            recordCandidateAuditUsageEvent(store, {
+              scope,
+              item,
+              audit,
+              sessionId: options.sessionId || null,
+              checkpointId,
+              status: 'failed',
+            });
             const auditedCandidate = store.markMemoryCandidateAudited({
               ...scope,
               candidateId: item.candidate.id,
@@ -3861,15 +3890,24 @@ export function createContextForge(options = {}) {
                 });
                 audited.push({ ...item, audit });
               } catch (error) {
+                const audit = {
+                  approved: false,
+                  decision: 'needs_review',
+                  reason: `Auto-promotion audit failed: ${error.message}`,
+                  riskCodes: ['audit_failed'],
+                  metadata: { ...(auditor?.metadata || {}), ...errorUsageMetadata(error), errorName: error.name },
+                };
+                recordCandidateAuditUsageEvent(store, {
+                  scope,
+                  item,
+                  audit,
+                  sessionId: options.sessionId || null,
+                  checkpointId,
+                  status: 'failed',
+                });
                 audited.push({
                   ...item,
-                  audit: {
-                    approved: false,
-                    decision: 'needs_review',
-                    reason: `Auto-promotion audit failed: ${error.message}`,
-                    riskCodes: ['audit_failed'],
-                    metadata: { errorName: error.name },
-                  },
+                  audit,
                 });
               }
             }
@@ -4627,6 +4665,18 @@ export function createContextForge(options = {}) {
             requestedOutputSchema: consolidationRequestedOutputSchema(),
           });
         } catch (error) {
+          recordLlmUsageEvent(store, {
+            scope,
+            operation: 'checkpoint_consolidation',
+            provider: provider.name,
+            model: providerModelFromMetadata(errorUsageMetadata(error), providerMetadata.model),
+            status: 'failed',
+            sessionId: plan.sessionId,
+            distillRunId: distillRun.id,
+            metadata: errorUsageMetadata(error),
+            startedAt: distillRun.createdAt,
+            completedAt: new Date().toISOString(),
+          });
           store.failDistillRun({
             id: distillRun.id,
             error,
@@ -4642,6 +4692,18 @@ export function createContextForge(options = {}) {
         try {
           output = validateDistillOutput(rawOutput);
         } catch (error) {
+          recordLlmUsageEvent(store, {
+            scope,
+            operation: 'checkpoint_consolidation',
+            provider: provider.name,
+            model: providerModelFromMetadata(rawOutput?.metadata || {}, providerMetadata.model),
+            status: 'failed',
+            sessionId: plan.sessionId,
+            distillRunId: distillRun.id,
+            metadata: rawOutput?.metadata || {},
+            startedAt: distillRun.createdAt,
+            completedAt: new Date().toISOString(),
+          });
           store.failDistillRun({
             id: distillRun.id,
             error,
@@ -4703,6 +4765,19 @@ export function createContextForge(options = {}) {
               })
             : null;
           if (existing) {
+            recordLlmUsageEvent(store, {
+              scope,
+              operation: 'checkpoint_consolidation',
+              provider: output.provider || provider.name,
+              model: providerModelFromMetadata(output.metadata, providerMetadata.model),
+              status: 'succeeded',
+              sessionId: plan.sessionId,
+              distillRunId: distillRun.id,
+              checkpointId: existing.id,
+              metadata: output.metadata,
+              startedAt: distillRun.createdAt,
+              completedAt: new Date().toISOString(),
+            });
             store.failDistillRun({
               id: distillRun.id,
               error,
@@ -4732,6 +4807,18 @@ export function createContextForge(options = {}) {
               memoryLifecycle: lifecycle,
             };
           }
+          recordLlmUsageEvent(store, {
+            scope,
+            operation: 'checkpoint_consolidation',
+            provider: output.provider || provider.name,
+            model: providerModelFromMetadata(output.metadata, providerMetadata.model),
+            status: 'succeeded',
+            sessionId: plan.sessionId,
+            distillRunId: distillRun.id,
+            metadata: output.metadata,
+            startedAt: distillRun.createdAt,
+            completedAt: new Date().toISOString(),
+          });
           store.failDistillRun({
             id: distillRun.id,
             error,
@@ -4746,7 +4833,7 @@ export function createContextForge(options = {}) {
         recordLlmUsageEvent(store, {
           scope,
           operation: 'checkpoint_consolidation',
-          provider: checkpoint.provider,
+          provider: output.provider || provider.name,
           model: providerModelFromMetadata(output.metadata, providerMetadata.model),
           status: 'succeeded',
           sessionId: plan.sessionId,
@@ -4931,6 +5018,18 @@ export function createContextForge(options = {}) {
             requestedOutputSchema,
           });
         } catch (error) {
+          recordLlmUsageEvent(store, {
+            scope,
+            operation: 'checkpoint_distill',
+            provider: provider.name,
+            model: providerModelFromMetadata(errorUsageMetadata(error), providerMetadata.model),
+            status: 'failed',
+            sessionId: options.sessionId,
+            distillRunId: distillRun.id,
+            metadata: errorUsageMetadata(error),
+            startedAt: distillRun.createdAt,
+            completedAt: new Date().toISOString(),
+          });
           store.failDistillRun({
             id: distillRun.id,
             error,
@@ -4946,6 +5045,18 @@ export function createContextForge(options = {}) {
         try {
           output = validateDistillOutput(rawOutput);
         } catch (error) {
+          recordLlmUsageEvent(store, {
+            scope,
+            operation: 'checkpoint_distill',
+            provider: provider.name,
+            model: providerModelFromMetadata(rawOutput?.metadata || {}, providerMetadata.model),
+            status: 'failed',
+            sessionId: options.sessionId,
+            distillRunId: distillRun.id,
+            metadata: rawOutput?.metadata || {},
+            startedAt: distillRun.createdAt,
+            completedAt: new Date().toISOString(),
+          });
           store.failDistillRun({
             id: distillRun.id,
             error,
@@ -5050,6 +5161,18 @@ export function createContextForge(options = {}) {
         }
 
         if (checkpointError) {
+          recordLlmUsageEvent(store, {
+            scope,
+            operation: 'checkpoint_distill',
+            provider: output.provider || provider.name,
+            model: providerModelFromMetadata(output.metadata, providerMetadata.model),
+            status: 'succeeded',
+            sessionId: options.sessionId,
+            distillRunId: distillRun.id,
+            metadata: output.metadata,
+            startedAt: distillRun.createdAt,
+            completedAt: new Date().toISOString(),
+          });
           store.failDistillRun({
             id: distillRun.id,
             error: checkpointError,
@@ -5152,7 +5275,7 @@ export function createContextForge(options = {}) {
                   decision: 'needs_review',
                   reason: `Automatic candidate audit failed: ${error.message}`,
                   riskCodes: ['audit_failed'],
-                  metadata: { errorName: error.name },
+                  metadata: { ...(auditor?.metadata || {}), ...errorUsageMetadata(error), errorName: error.name },
                 };
               }
               recordCandidateAuditUsageEvent(store, {
@@ -5161,6 +5284,7 @@ export function createContextForge(options = {}) {
                 audit,
                 sessionId: options.sessionId,
                 checkpointId: checkpoint.id,
+                status: audit.riskCodes?.includes('audit_failed') ? 'failed' : 'succeeded',
               });
               const auditedCandidate = store.markMemoryCandidateAudited({
                 ...scope,
@@ -5233,7 +5357,7 @@ export function createContextForge(options = {}) {
         recordLlmUsageEvent(store, {
           scope,
           operation: 'checkpoint_distill',
-          provider: checkpoint.provider,
+          provider: output.provider || provider.name,
           model: providerModelFromMetadata(output.metadata, providerMetadata.model),
           status: 'succeeded',
           sessionId: options.sessionId,
@@ -5331,6 +5455,57 @@ export function createContextForge(options = {}) {
           limit: options.limit == null ? 25 : Number(options.limit),
         }),
       );
+    },
+
+    listLlmUsageEvents(options) {
+      const scope = normalizeScopeOptions(options, config);
+      return useStore((store) =>
+        store.listLlmUsageEvents({
+          ...scope,
+          sessionId: options.sessionId || null,
+          distillRunId: options.distillRunId || null,
+          checkpointId: options.checkpointId || null,
+          candidateId: options.candidateId || null,
+          operation: options.operation || null,
+          provider: options.provider || null,
+          limit: options.limit == null ? 100 : Number(options.limit),
+          order: options.order || 'desc',
+        }),
+      );
+    },
+
+    llmUsageRollup(options) {
+      const scope = normalizeScopeOptions(options, config);
+      const limit = options.limit == null ? 1000 : Number(options.limit);
+      return useStore((store) => {
+        const events = store.listLlmUsageEvents({
+          ...scope,
+          sessionId: options.sessionId || null,
+          distillRunId: options.distillRunId || null,
+          checkpointId: options.checkpointId || null,
+          candidateId: options.candidateId || null,
+          operation: options.operation || null,
+          provider: options.provider || null,
+          limit,
+          order: options.order || 'desc',
+        });
+        return {
+          scopeType: scope.scopeType,
+          scopeKey: scope.scopeKey,
+          filters: {
+            sessionId: options.sessionId || null,
+            distillRunId: options.distillRunId || null,
+            checkpointId: options.checkpointId || null,
+            candidateId: options.candidateId || null,
+            operation: options.operation || null,
+            provider: options.provider || null,
+            limit,
+            order: options.order || 'desc',
+          },
+          totals: summarizeLlmUsageEvents(events),
+          events: truthyOption(options.includeEvents) ? events : undefined,
+        };
+      });
     },
 
     distillUsage(options) {

@@ -597,7 +597,7 @@ export class ContextForgeStore {
         operation TEXT NOT NULL,
         provider TEXT NOT NULL,
         model TEXT,
-        status TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('started', 'succeeded', 'failed')),
         session_id TEXT,
         distill_run_id TEXT,
         checkpoint_id TEXT,
@@ -3226,6 +3226,9 @@ export class ContextForgeStore {
     completedAt = null,
     elapsedMs = null,
   }) {
+    if (!['started', 'succeeded', 'failed'].includes(status)) {
+      throw new Error('LLM usage event status must be started, succeeded, or failed.');
+    }
     const row = this.db
       .prepare(`
         INSERT INTO llm_usage_events (
