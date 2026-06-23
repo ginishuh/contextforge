@@ -5711,8 +5711,30 @@ test('distillUsage summarizes estimated and actual provider usage', async () => 
     promptCacheMissTokens: 32,
     promptCacheHitRatio: 10 / 42,
   });
+  assert.equal(usage.totals.persistedUsage.events, 1);
+  assert.equal(usage.totals.persistedUsage.inputTokens, 42);
+  assert.equal(usage.totals.persistedUsage.cachedInputTokens, 10);
+  assert.equal(usage.totals.persistedUsage.uncachedInputTokens, 32);
+  assert.equal(usage.totals.persistedUsage.outputTokens, 8);
+  assert.equal(usage.totals.persistedUsage.totalTokens, 50);
+  assert.equal(usage.totals.persistedUsage.byOperation.checkpoint_distill.events, 1);
+  assert.equal(usage.totals.persistedUsage.byProviderModel.usage_provider.events, 1);
   assert.equal(usage.runs[0].usage.totalTokens, 50);
   assert.equal(usage.runs[0].usage.promptCacheHitTokens, 10);
+
+  const store = new ContextForgeStore({ dataDir });
+  const events = store.listLlmUsageEvents({
+    scopeType: 'repo',
+    scopeKey: 'repo-usage',
+    sessionId: 'usage-session',
+  });
+  assert.equal(events.length, 1);
+  assert.equal(events[0].operation, 'checkpoint_distill');
+  assert.equal(events[0].inputTokens, 42);
+  assert.equal(events[0].cachedInputTokens, 10);
+  assert.equal(events[0].uncachedInputTokens, 32);
+  assert.equal(events[0].usage.prompt_cache_hit_tokens, 10);
+  store.close();
 });
 
 test('distillUsage averages elapsed time across completed runs only', async () => {
@@ -7349,6 +7371,17 @@ test('auditMemoryCandidates returns audited read-only recommendations', async ()
           provider: 'codex_exec',
           model: 'gpt-5.5',
           reasoningEffort: 'low',
+          usage: {
+            prompt_tokens: 100,
+            completion_tokens: 25,
+            total_tokens: 125,
+            prompt_tokens_details: {
+              cached_tokens: 40,
+            },
+            completion_tokens_details: {
+              reasoning_tokens: 7,
+            },
+          },
         },
       };
     },
@@ -7425,6 +7458,26 @@ test('auditMemoryCandidates returns audited read-only recommendations', async ()
   });
   assert.equal(pendingCandidates.length, 1);
   assert.equal(pendingCandidates[0].candidate.key, 'audited-readonly-runbook');
+
+  const store = new ContextForgeStore({ dataDir });
+  const events = store.listLlmUsageEvents({
+    scopeType: 'repo',
+    scopeKey: 'audit-suggestions-repo',
+    sessionId: 'audit-suggestions-session',
+  });
+  assert.equal(events.length, 1);
+  assert.equal(events[0].operation, 'candidate_audit');
+  assert.equal(events[0].provider, 'codex_exec');
+  assert.equal(events[0].model, 'gpt-5.5');
+  assert.equal(events[0].checkpointId, checkpoint.id);
+  assert.equal(events[0].candidateId, pendingCandidates[0].id);
+  assert.equal(events[0].inputTokens, 100);
+  assert.equal(events[0].cachedInputTokens, 40);
+  assert.equal(events[0].uncachedInputTokens, 60);
+  assert.equal(events[0].outputTokens, 25);
+  assert.equal(events[0].reasoningTokens, 7);
+  assert.equal(events[0].totalTokens, 125);
+  store.close();
 });
 
 test('auditMemoryCandidates audits review candidates and skips noisy events before runner', async () => {

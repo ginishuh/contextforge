@@ -219,55 +219,185 @@ function usageNestedNumberFrom(metadata, path) {
   return finiteNumber(current);
 }
 
-function extractUsageMetadata(run) {
-  const providerMetadata = run.outputMetadata?.providerMetadata || {};
-  const candidates = [
-    run.outputMetadata?.usage,
-    providerMetadata.usage,
-    providerMetadata.codexExec?.usage,
-    providerMetadata.codexExec,
-  ];
-
-  for (const candidate of candidates) {
-    const inputTokens = usageNumberFrom(candidate, ['inputTokens', 'input_tokens', 'promptTokens', 'prompt_tokens']);
-    const outputTokens = usageNumberFrom(candidate, [
-      'outputTokens',
-      'output_tokens',
-      'completionTokens',
-      'completion_tokens',
-    ]);
-    const totalTokens = usageNumberFrom(candidate, ['totalTokens', 'total_tokens']);
-    if (inputTokens != null || outputTokens != null || totalTokens != null) {
-      const promptCacheHitTokens =
-        usageNumberFrom(candidate, [
-          'promptCacheHitTokens',
-          'prompt_cache_hit_tokens',
-          'cacheHitInputTokens',
-          'input_cache_hit_tokens',
-        ]) ?? usageNestedNumberFrom(candidate, ['prompt_tokens_details', 'cached_tokens']);
-      const explicitPromptCacheMissTokens = usageNumberFrom(candidate, [
-        'promptCacheMissTokens',
-        'prompt_cache_miss_tokens',
-        'cacheMissInputTokens',
-        'input_cache_miss_tokens',
-      ]);
-      const promptCacheMissTokens =
-        explicitPromptCacheMissTokens ??
-        (inputTokens != null && promptCacheHitTokens != null ? Math.max(0, inputTokens - promptCacheHitTokens) : null);
-      return {
-        inputTokens,
-        outputTokens,
-        totalTokens: totalTokens ?? (inputTokens != null && outputTokens != null ? inputTokens + outputTokens : null),
-        promptCacheHitTokens,
-        promptCacheMissTokens,
-      };
-    }
+function normalizeUsageMetadata(candidate, { includeRaw = false } = {}) {
+  const inputTokens = usageNumberFrom(candidate, ['inputTokens', 'input_tokens', 'promptTokens', 'prompt_tokens']);
+  const outputTokens = usageNumberFrom(candidate, [
+    'outputTokens',
+    'output_tokens',
+    'completionTokens',
+    'completion_tokens',
+  ]);
+  const reasoningTokens =
+    usageNumberFrom(candidate, ['reasoningTokens', 'reasoning_tokens']) ??
+    usageNestedNumberFrom(candidate, ['completion_tokens_details', 'reasoning_tokens']) ??
+    usageNestedNumberFrom(candidate, ['output_tokens_details', 'reasoning_tokens']);
+  const totalTokens = usageNumberFrom(candidate, ['totalTokens', 'total_tokens']);
+  if (inputTokens == null && outputTokens == null && totalTokens == null && reasoningTokens == null) {
+    return null;
   }
 
+  const cachedInputTokens =
+    usageNumberFrom(candidate, [
+      'cachedInputTokens',
+      'cached_input_tokens',
+      'promptCacheHitTokens',
+      'prompt_cache_hit_tokens',
+      'cacheHitInputTokens',
+      'input_cache_hit_tokens',
+    ]) ??
+    usageNestedNumberFrom(candidate, ['prompt_tokens_details', 'cached_tokens']) ??
+    usageNestedNumberFrom(candidate, ['input_tokens_details', 'cached_tokens']);
+  const explicitUncachedInputTokens = usageNumberFrom(candidate, [
+    'uncachedInputTokens',
+    'uncached_input_tokens',
+    'promptCacheMissTokens',
+    'prompt_cache_miss_tokens',
+    'cacheMissInputTokens',
+    'input_cache_miss_tokens',
+  ]);
+  const uncachedInputTokens =
+    explicitUncachedInputTokens ??
+    (inputTokens != null && cachedInputTokens != null ? Math.max(0, inputTokens - cachedInputTokens) : null);
+
+  return {
+    inputTokens,
+    cachedInputTokens,
+    uncachedInputTokens,
+    outputTokens,
+    reasoningTokens,
+    totalTokens: totalTokens ?? (inputTokens != null && outputTokens != null ? inputTokens + outputTokens : null),
+    promptCacheHitTokens: cachedInputTokens,
+    promptCacheMissTokens: uncachedInputTokens,
+    ...(includeRaw ? { usage: candidate } : {}),
+  };
+}
+
+function extractUsageFromCandidates(candidates, options = {}) {
+  for (const candidate of candidates) {
+    const usage = normalizeUsageMetadata(candidate, options);
+    if (usage) return usage;
+  }
   return null;
 }
 
-function summarizeDistillUsage({ scope, sessionId, runs, charsPerToken = 4 }) {
+function providerUsageCandidates(metadata = {}) {
+  const providerMetadata = metadata?.providerMetadata || metadata || {};
+  return [
+    metadata?.usage,
+    providerMetadata.usage,
+    providerMetadata.openAiCompatible?.usage,
+    providerMetadata.openAiCompatible,
+    providerMetadata.codexExec?.usage,
+    providerMetadata.codexExec,
+    providerMetadata.codexSdkPython?.usage,
+    providerMetadata.codexSdkPython,
+  ];
+}
+
+function extractUsageMetadata(run) {
+  return extractUsageFromCandidates([run.outputMetadata?.usage, ...providerUsageCandidates(run.outputMetadata)], {
+    includeRaw: false,
+  });
+}
+
+function extractProviderUsage(metadata) {
+  return extractUsageFromCandidates(providerUsageCandidates(metadata), { includeRaw: true });
+}
+
+function usageEventTimes({ startedAt = null, completedAt = null, elapsedMs = null } = {}) {
+  const completed = completedAt || new Date().toISOString();
+  const elapsed = finiteNumber(elapsedMs);
+  if (startedAt) {
+    return { startedAt, completedAt: completed, elapsedMs: elapsed };
+  }
+  if (elapsed != null) {
+    return {
+      startedAt: new Date(Date.parse(completed) - elapsed).toISOString(),
+      completedAt: completed,
+      elapsedMs: elapsed,
+    };
+  }
+  return { startedAt: completed, completedAt: completed, elapsedMs: null };
+}
+
+function providerModelFromMetadata(metadata = {}, fallback = null) {
+  return (
+    metadata.model ||
+    metadata.openAiCompatible?.model ||
+    metadata.codexExec?.model ||
+    metadata.codexSdkPython?.model ||
+    fallback ||
+    null
+  );
+}
+
+function recordLlmUsageEvent(store, options) {
+  const usage = extractProviderUsage(options.metadata || {});
+  if (!usage) return null;
+  const { usage: usageJson, promptCacheHitTokens, promptCacheMissTokens, ...columns } = usage;
+  const times = usageEventTimes({
+    startedAt: options.startedAt || null,
+    completedAt: options.completedAt || null,
+    elapsedMs: options.elapsedMs ?? options.metadata?.elapsedMs ?? null,
+  });
+  return store.insertLlmUsageEvent({
+    ...options.scope,
+    operation: options.operation,
+    provider: options.provider,
+    model: options.model || providerModelFromMetadata(options.metadata || {}),
+    status: options.status || 'succeeded',
+    sessionId: options.sessionId || null,
+    distillRunId: options.distillRunId || null,
+    checkpointId: options.checkpointId || null,
+    candidateId: options.candidateId || null,
+    ...columns,
+    usage: usageJson || {},
+    estimated: false,
+    ...times,
+  });
+}
+
+function summarizeLlmUsageEvents(events) {
+  const totals = {
+    events: events.length,
+    inputTokens: events.reduce((total, event) => total + (event.inputTokens || 0), 0),
+    cachedInputTokens: events.reduce((total, event) => total + (event.cachedInputTokens || 0), 0),
+    uncachedInputTokens: events.reduce((total, event) => total + (event.uncachedInputTokens || 0), 0),
+    outputTokens: events.reduce((total, event) => total + (event.outputTokens || 0), 0),
+    reasoningTokens: events.reduce((total, event) => total + (event.reasoningTokens || 0), 0),
+    totalTokens: events.reduce((total, event) => total + (event.totalTokens || 0), 0),
+  };
+  const byOperation = {};
+  const byProviderModel = {};
+  for (const event of events) {
+    const operationKey = event.operation;
+    const providerKey = [event.provider, event.model].filter(Boolean).join('/') || event.provider;
+    for (const [key, target] of [
+      [operationKey, byOperation],
+      [providerKey, byProviderModel],
+    ]) {
+      target[key] ||= {
+        events: 0,
+        inputTokens: 0,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 0,
+        outputTokens: 0,
+        reasoningTokens: 0,
+        totalTokens: 0,
+      };
+      target[key].events += 1;
+      target[key].inputTokens += event.inputTokens || 0;
+      target[key].cachedInputTokens += event.cachedInputTokens || 0;
+      target[key].uncachedInputTokens += event.uncachedInputTokens || 0;
+      target[key].outputTokens += event.outputTokens || 0;
+      target[key].reasoningTokens += event.reasoningTokens || 0;
+      target[key].totalTokens += event.totalTokens || 0;
+    }
+  }
+  return { ...totals, byOperation, byProviderModel };
+}
+
+function summarizeDistillUsage({ scope, sessionId, runs, usageEvents = [], charsPerToken = 4 }) {
   const details = runs.map((run) => {
     const window = run.inputMetadata?.sourceEventWindow || {};
     const selectedCharCount = finiteNumber(window.selectedCharCount) ?? 0;
@@ -324,14 +454,17 @@ function summarizeDistillUsage({ scope, sessionId, runs, charsPerToken = 4 }) {
     sessionId,
     charsPerEstimatedToken: charsPerToken,
     note:
-      actualUsage.runs > 0
-        ? 'Actual provider usage was found for some runs; runs without actual usage only have estimates.'
-        : 'No actual provider token usage was recorded; estimatedInputTokens uses selectedCharCount divided by charsPerEstimatedToken. Older runs without sourceEventWindow metadata may estimate as 0.',
+      usageEvents.length > 0
+        ? 'Persisted LLM usage events were found; older runs without events may still only have estimates or embedded provider metadata.'
+        : actualUsage.runs > 0
+          ? 'Actual provider usage was found for some runs; runs without actual usage only have estimates.'
+          : 'No actual provider token usage was recorded; estimatedInputTokens uses selectedCharCount divided by charsPerEstimatedToken. Older runs without sourceEventWindow metadata may estimate as 0.',
     totals: {
       ...totals,
       completedRuns,
       averageElapsedMs: completedRuns ? Math.round(totals.elapsedMs / completedRuns) : 0,
       actualUsage,
+      persistedUsage: summarizeLlmUsageEvents(usageEvents),
     },
     runs: details,
   };
@@ -1529,6 +1662,24 @@ async function auditAutoPromotionCandidate({ auditor, store, scope, item }) {
     candidate: item.candidate,
     warnings: item.warnings,
     checkpoint,
+  });
+}
+
+function recordCandidateAuditUsageEvent(store, { scope, item, audit, sessionId = null, checkpointId = null }) {
+  const metadata = audit?.metadata || {};
+  const provider = metadata.provider || 'none';
+  if (provider === 'none') return null;
+  return recordLlmUsageEvent(store, {
+    scope,
+    operation: 'candidate_audit',
+    provider,
+    model: providerModelFromMetadata(metadata),
+    status: audit?.riskCodes?.includes('audit_failed') ? 'failed' : 'succeeded',
+    sessionId: sessionId || item.candidate.sessionId || null,
+    distillRunId: item.candidate.source?.distillRunId || null,
+    checkpointId: checkpointId || item.candidate.checkpointId || null,
+    candidateId: item.candidate.id,
+    metadata,
   });
 }
 
@@ -3451,6 +3602,13 @@ export function createContextForge(options = {}) {
         for (const item of selected) {
           try {
             const audit = await auditAutoPromotionCandidate({ auditor, store, scope, item });
+            recordCandidateAuditUsageEvent(store, {
+              scope,
+              item,
+              audit,
+              sessionId: options.sessionId || null,
+              checkpointId,
+            });
             const auditedCandidate = store.markMemoryCandidateAudited({
               ...scope,
               candidateId: item.candidate.id,
@@ -3694,6 +3852,13 @@ export function createContextForge(options = {}) {
             for (const item of selected) {
               try {
                 const audit = await auditAutoPromotionCandidate({ auditor, store, scope, item });
+                recordCandidateAuditUsageEvent(store, {
+                  scope,
+                  item,
+                  audit,
+                  sessionId: options.sessionId || null,
+                  checkpointId,
+                });
                 audited.push({ ...item, audit });
               } catch (error) {
                 audited.push({
@@ -4577,6 +4742,21 @@ export function createContextForge(options = {}) {
           });
           throw error;
         }
+        const completedAt = new Date().toISOString();
+        recordLlmUsageEvent(store, {
+          scope,
+          operation: 'checkpoint_consolidation',
+          provider: checkpoint.provider,
+          model: providerModelFromMetadata(output.metadata, providerMetadata.model),
+          status: 'succeeded',
+          sessionId: plan.sessionId,
+          distillRunId: distillRun.id,
+          checkpointId: checkpoint.id,
+          metadata: output.metadata,
+          startedAt: distillRun.createdAt,
+          completedAt,
+          elapsedMs: Date.parse(completedAt) - Date.parse(distillRun.createdAt),
+        });
         store.completeDistillRun({
           id: distillRun.id,
           outputMetadata: {
@@ -4975,6 +5155,13 @@ export function createContextForge(options = {}) {
                   metadata: { errorName: error.name },
                 };
               }
+              recordCandidateAuditUsageEvent(store, {
+                scope,
+                item,
+                audit,
+                sessionId: options.sessionId,
+                checkpointId: checkpoint.id,
+              });
               const auditedCandidate = store.markMemoryCandidateAudited({
                 ...scope,
                 candidateId: item.candidate.id,
@@ -5042,6 +5229,21 @@ export function createContextForge(options = {}) {
           };
         }
 
+        const completedAt = new Date().toISOString();
+        recordLlmUsageEvent(store, {
+          scope,
+          operation: 'checkpoint_distill',
+          provider: checkpoint.provider,
+          model: providerModelFromMetadata(output.metadata, providerMetadata.model),
+          status: 'succeeded',
+          sessionId: options.sessionId,
+          distillRunId: distillRun.id,
+          checkpointId: checkpoint.id,
+          metadata: output.metadata,
+          startedAt: distillRun.createdAt,
+          completedAt,
+          elapsedMs: Date.parse(completedAt) - Date.parse(distillRun.createdAt),
+        });
         store.completeDistillRun({
           id: distillRun.id,
           outputMetadata: {
@@ -5143,10 +5345,15 @@ export function createContextForge(options = {}) {
           ...scope,
           sessionId: options.sessionId,
         });
+        const usageEvents = store.listLlmUsageEvents({
+          ...scope,
+          sessionId: options.sessionId,
+        });
         return summarizeDistillUsage({
           scope,
           sessionId: options.sessionId,
           runs,
+          usageEvents,
           charsPerToken,
         });
       });
