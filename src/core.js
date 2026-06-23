@@ -882,6 +882,8 @@ function selectHandoffCheckpoints(checkpoints, limit) {
   if (limit <= 0) {
     return [];
   }
+  // Prefer checkpoints that carry handoff-quality signals over pure recency;
+  // fall back to newest-first behavior for scopes that have no such signals.
   const preferred = checkpoints.filter((checkpoint) => isPreferredHandoffCheckpoint(checkpoint));
   const pool = preferred.length ? preferred : checkpoints;
   return pool.slice(0, limit);

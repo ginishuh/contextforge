@@ -5047,6 +5047,68 @@ test('bootstrapContext includes latest checkpoints independently from search res
   assert.equal(disabled.handoff.latestHandoff, null);
 });
 
+test('bootstrapContext falls back to newest checkpoint when no preferred handoff exists', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'plain_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      plain_provider: async (input) => ({
+        summaryShort: input.rawEvents.at(-1).content,
+        summaryText: `Plain checkpoint: ${input.rawEvents.at(-1).content}`,
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [],
+        sourceEventCount: input.rawEvents.length,
+      }),
+    },
+  });
+
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-plain-handoff',
+    sessionId: 'plain-old',
+    role: 'assistant',
+    content: 'older manual checkpoint',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'repo-plain-handoff',
+    sessionId: 'plain-old',
+    source: 'manual',
+    sourceRef: 'older',
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-plain-handoff',
+    sessionId: 'plain-new',
+    role: 'assistant',
+    content: 'newer manual checkpoint',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'repo-plain-handoff',
+    sessionId: 'plain-new',
+    source: 'manual',
+    sourceRef: 'newer',
+  });
+
+  const bootstrap = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-plain-handoff',
+    query: 'plain checkpoint fallback',
+  });
+
+  assert.equal(bootstrap.handoff.latestHandoff.sessionId, 'plain-new');
+  assert.equal(bootstrap.handoff.latestHandoff.source, 'manual');
+  assert.equal(bootstrap.handoff.latestHandoff.structured, null);
+  assert.equal(bootstrap.handoff.latestCheckpoints[0].sessionId, 'plain-new');
+});
+
 test('bootstrapContext returns compact memory map and cluster expansion hooks', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
