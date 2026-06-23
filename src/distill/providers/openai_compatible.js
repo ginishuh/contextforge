@@ -6,7 +6,7 @@ export const OPENAI_COMPATIBLE_PROMPT_VERSION = 'openai_compatible.prompt.v3';
 const DEFAULT_TIMEOUT_MS = 120000;
 const DEFAULT_BASE_URL = 'https://api.deepseek.com';
 const DEFAULT_MODEL = 'deepseek-v4-flash';
-const STRICT_SCHEMA_UNSUPPORTED_KEYS = new Set(['$id', 'minLength', 'minimum', 'maximum', 'description']);
+const STRICT_SCHEMA_UNSUPPORTED_KEYS = new Set(['$id', 'minLength', 'minimum', 'maximum']);
 
 function strictSafeSchema(value) {
   if (Array.isArray(value)) {

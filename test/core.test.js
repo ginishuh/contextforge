@@ -88,6 +88,11 @@ function collectStrictObjectSchemaViolations(value, pathParts = []) {
         violations.push(`${pathText}:missing_required:${property}`);
       }
     }
+    for (const property of required) {
+      if (!properties.includes(property)) {
+        violations.push(`${pathText}:unknown_required:${property}`);
+      }
+    }
   }
   for (const [key, nested] of Object.entries(value)) {
     violations.push(...collectStrictObjectSchemaViolations(nested, [...pathParts, key]));
@@ -7263,9 +7268,14 @@ test('openai_compatible json_schema mode sends a strict-safe checkpoint schema',
   assert.deepEqual(
     collectSchemaKeywordPaths(
       requestBody.response_format.json_schema.schema,
-      new Set(['$id', 'minLength', 'minimum', 'maximum', 'description']),
+      new Set(['$id', 'minLength', 'minimum', 'maximum']),
     ),
     [],
+  );
+  assert.deepEqual(
+    requestBody.response_format.json_schema.schema.properties.structured.properties.changes.items.properties
+      .description.type,
+    ['string', 'null'],
   );
   assert.deepEqual(collectStrictObjectSchemaViolations(requestBody.response_format.json_schema.schema), []);
   assert.equal(checkpoint.provider, 'openai_compatible');
