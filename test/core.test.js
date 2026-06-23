@@ -4928,38 +4928,53 @@ test('bootstrapContext includes latest checkpoints independently from search res
     },
     cwd: process.cwd(),
     distillProviders: {
-      handoff_provider: async (input) => ({
-        summaryShort: 'Latest handoff.',
-        summaryText: `Recent checkpoint: ${input.rawEvents.at(-1).content}`,
-        decisions: ['Recent decision.'],
-        todos: ['Recent todo.'],
-        openQuestions: [],
-        memoryCandidates: [],
-        structured: {
-          schemaVersion: STRUCTURED_CHECKPOINT_SCHEMA_VERSION,
-          work: {
-            intent: 'Preserve latest handoff independently from search ranking.',
-            status: 'verified',
-            outcome: 'Latest checkpoint should appear in handoff.latestHandoff.',
+      handoff_provider: async (input) => {
+        const latestContent = input.rawEvents.at(-1).content;
+        if (latestContent.includes('usage smoke')) {
+          return {
+            summaryShort: 'Usage smoke checkpoint.',
+            summaryText: `Synthetic checkpoint: ${latestContent}`,
+            decisions: [],
+            todos: [],
+            openQuestions: [],
+            memoryCandidates: [],
+            sourceEventCount: input.rawEvents.length,
+            metadata: { synthetic: true },
+          };
+        }
+        return {
+          summaryShort: 'Latest handoff.',
+          summaryText: `Recent checkpoint: ${latestContent}`,
+          decisions: ['Recent decision.'],
+          todos: ['Recent todo.'],
+          openQuestions: [],
+          memoryCandidates: [],
+          structured: {
+            schemaVersion: STRUCTURED_CHECKPOINT_SCHEMA_VERSION,
+            work: {
+              intent: 'Preserve latest handoff independently from search ranking.',
+              status: 'verified',
+              outcome: 'Latest checkpoint should appear in handoff.latestHandoff.',
+            },
+            liveState: {
+              repo: 'github.com/example/mcp-repo',
+              branch: 'feature/handoff',
+              headCommit: 'abc1234',
+              ciStatus: 'pass',
+              observedAt: '2026-06-03T00:00:00Z',
+              verificationRequired: true,
+              staleReasons: ['branch, commit, and CI are mutable live state'],
+              verifyHints: ['git status --short --branch', 'gh pr view 123 --json statusCheckRollup'],
+            },
+            changes: [],
+            verification: [],
+            risks: [],
+            nextActions: [],
           },
-          liveState: {
-            repo: 'github.com/example/mcp-repo',
-            branch: 'feature/handoff',
-            headCommit: 'abc1234',
-            ciStatus: 'pass',
-            observedAt: '2026-06-03T00:00:00Z',
-            verificationRequired: true,
-            staleReasons: ['branch, commit, and CI are mutable live state'],
-            verifyHints: ['git status --short --branch', 'gh pr view 123 --json statusCheckRollup'],
-          },
-          changes: [],
-          verification: [],
-          risks: [],
-          nextActions: [],
-        },
-        sourceEventCount: input.rawEvents.length,
-        metadata: { synthetic: true },
-      }),
+          sourceEventCount: input.rawEvents.length,
+          metadata: { synthetic: true },
+        };
+      },
     },
   });
 
@@ -4981,6 +4996,20 @@ test('bootstrapContext includes latest checkpoints independently from search res
     scopeKey: 'repo-handoff',
     sessionId: 'handoff-session',
   });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-handoff',
+    sessionId: 'usage-smoke-session',
+    role: 'assistant',
+    content: 'usage smoke checkpoint should not become the preferred latest handoff.',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'repo-handoff',
+    sessionId: 'usage-smoke-session',
+    source: 'manual',
+    sourceRef: 'usage-smoke',
+  });
 
   const bootstrap = await app.bootstrapContext({
     scope: 'repo',
@@ -4994,6 +5023,8 @@ test('bootstrapContext includes latest checkpoints independently from search res
   assert.equal(bootstrap.handoff.latestHandoff.id, bootstrap.handoff.latestCheckpoints[0].id);
   assert.equal(bootstrap.handoff.latestHandoff.structured.schemaVersion, STRUCTURED_CHECKPOINT_SCHEMA_VERSION);
   assert.equal(bootstrap.handoff.latestHandoff.structured.liveState.branch, 'feature/handoff');
+  assert.equal(bootstrap.handoff.latestHandoff.source, 'distill');
+  assert.notEqual(bootstrap.handoff.latestHandoff.sessionId, 'usage-smoke-session');
   assert.equal(bootstrap.handoff.latestHandoff.structuredWarnings[0].code, 'live_state_may_be_stale');
   assert.ok(bootstrap.handoff.latestHandoff.structuredWarnings[0].fields.includes('liveState.branch'));
   assert.deepEqual(bootstrap.handoff.latestHandoff.structuredWarnings[0].verifyHints, [
@@ -5014,6 +5045,68 @@ test('bootstrapContext includes latest checkpoints independently from search res
   });
   assert.deepEqual(disabled.handoff.latestCheckpoints, []);
   assert.equal(disabled.handoff.latestHandoff, null);
+});
+
+test('bootstrapContext falls back to newest checkpoint when no preferred handoff exists', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'plain_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      plain_provider: async (input) => ({
+        summaryShort: input.rawEvents.at(-1).content,
+        summaryText: `Plain checkpoint: ${input.rawEvents.at(-1).content}`,
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [],
+        sourceEventCount: input.rawEvents.length,
+      }),
+    },
+  });
+
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-plain-handoff',
+    sessionId: 'plain-old',
+    role: 'assistant',
+    content: 'older manual checkpoint',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'repo-plain-handoff',
+    sessionId: 'plain-old',
+    source: 'manual',
+    sourceRef: 'older',
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'repo-plain-handoff',
+    sessionId: 'plain-new',
+    role: 'assistant',
+    content: 'newer manual checkpoint',
+  });
+  await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'repo-plain-handoff',
+    sessionId: 'plain-new',
+    source: 'manual',
+    sourceRef: 'newer',
+  });
+
+  const bootstrap = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'repo-plain-handoff',
+    query: 'plain checkpoint fallback',
+  });
+
+  assert.equal(bootstrap.handoff.latestHandoff.sessionId, 'plain-new');
+  assert.equal(bootstrap.handoff.latestHandoff.source, 'manual');
+  assert.equal(bootstrap.handoff.latestHandoff.structured, null);
+  assert.equal(bootstrap.handoff.latestCheckpoints[0].sessionId, 'plain-new');
 });
 
 test('bootstrapContext returns compact memory map and cluster expansion hooks', async () => {
