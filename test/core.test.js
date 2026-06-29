@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -26,6 +26,16 @@ import { startContextForgeServer } from '../src/server.js';
 import { ContextForgeStore, SCHEMA_VERSION } from '../src/storage/sqlite.js';
 
 const execFileAsync = promisify(execFile);
+
+function ciDetectRunTests(files) {
+  const result = spawnSync('bash', ['scripts/ci-detect-run-tests.sh'], {
+    cwd: process.cwd(),
+    input: `${files.join('\n')}\n`,
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.trim();
+}
 
 async function makeTempDir() {
   return fs.mkdtemp(path.join(os.tmpdir(), 'contextforge-test-'));
@@ -12872,4 +12882,21 @@ test('runtime database artifacts are ignored by git rules', async () => {
   assert.match(gitignore, /^\*\.db$/m);
   assert.match(gitignore, /^\*\.db-wal$/m);
   assert.match(gitignore, /^\*\.db-shm$/m);
+});
+
+test('CI path filter runs tests for source, workflow, test, and eval fixture changes', () => {
+  assert.equal(ciDetectRunTests(['README.md']), 'false');
+  assert.equal(ciDetectRunTests(['docs/architecture.md']), 'false');
+  assert.equal(ciDetectRunTests(['docs/assets/contextforge-explainer-comic-en.jpg']), 'false');
+
+  assert.equal(ciDetectRunTests(['src/eval/retrieval.js']), 'true');
+  assert.equal(ciDetectRunTests(['src/workspaces/resolve.js']), 'true');
+  assert.equal(ciDetectRunTests(['src/core.js']), 'true');
+  assert.equal(ciDetectRunTests(['test/core.test.js']), 'true');
+  assert.equal(ciDetectRunTests(['.github/workflows/ci.yml']), 'true');
+  assert.equal(ciDetectRunTests(['package-lock.json']), 'true');
+  assert.equal(ciDetectRunTests(['scripts/install-agent-router-service.sh']), 'true');
+  assert.equal(ciDetectRunTests(['docs/examples/workspace-eval/wastelite.synthetic.json']), 'true');
+  assert.equal(ciDetectRunTests(['docs/skills/contextforge-memory/SKILL.md']), 'true');
+  assert.equal(ciDetectRunTests(['README.md', 'src/cli.js']), 'true');
 });

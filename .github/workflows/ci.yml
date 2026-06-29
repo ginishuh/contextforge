@@ -30,27 +30,23 @@ jobs:
 
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
-            mapfile -t files < <(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+            if git merge-base "origin/${{ github.base_ref }}" HEAD >/dev/null; then
+              git diff --name-only "origin/${{ github.base_ref }}...HEAD" > /tmp/contextforge-changed-files.txt
+            else
+              echo "No merge base found with origin/${{ github.base_ref }}; run tests defensively."
+              printf '__force_tests__\n' > /tmp/contextforge-changed-files.txt
+            fi
           else
             before="${{ github.event.before }}"
             after="${{ github.sha }}"
             if [[ "$before" =~ ^0+$ ]]; then
-              mapfile -t files < <(git diff-tree --no-commit-id --name-only -r "$after")
+              git diff-tree --no-commit-id --name-only -r "$after" > /tmp/contextforge-changed-files.txt
             else
-              mapfile -t files < <(git diff --name-only "$before" "$after")
+              git diff --name-only "$before" "$after" > /tmp/contextforge-changed-files.txt
             fi
           fi
 
-          run_tests=false
-          for file in "${files[@]}"; do
-            case "$file" in
-              *.md|LICENSE)
-                ;;
-              *)
-                run_tests=true
-                ;;
-            esac
-          done
+          run_tests="$(bash scripts/ci-detect-run-tests.sh < /tmp/contextforge-changed-files.txt)"
 
           printf 'run_tests=%s\n' "$run_tests" >> "$GITHUB_OUTPUT"
 
