@@ -12886,9 +12886,12 @@ test('runtime database artifacts are ignored by git rules', async () => {
 
 test('CI path filter runs tests for source, workflow, test, and eval fixture changes', () => {
   assert.equal(ciDetectRunTests(['README.md']), 'false');
+  assert.equal(ciDetectRunTests(['README.ja.md']), 'false');
   assert.equal(ciDetectRunTests(['docs/architecture.md']), 'false');
+  assert.equal(ciDetectRunTests(['docs/issues/001-design-note.md']), 'false');
   assert.equal(ciDetectRunTests(['docs/assets/contextforge-explainer-comic-en.jpg']), 'false');
 
+  assert.equal(ciDetectRunTests(['__force_tests__']), 'true');
   assert.equal(ciDetectRunTests(['src/eval/retrieval.js']), 'true');
   assert.equal(ciDetectRunTests(['src/workspaces/resolve.js']), 'true');
   assert.equal(ciDetectRunTests(['src/core.js']), 'true');

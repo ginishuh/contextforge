@@ -6,7 +6,10 @@ run_tests=false
 while IFS= read -r file; do
   [[ -z "$file" ]] && continue
   case "$file" in
-    README.md|README.ko.md|CHANGELOG.md|LICENSE)
+    __force_tests__)
+      run_tests=true
+      ;;
+    README*.md|CHANGELOG.md|LICENSE)
       ;;
     docs/skills/*|docs/examples/*)
       run_tests=true

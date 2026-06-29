@@ -28,25 +28,29 @@ jobs:
         run: |
           set -euo pipefail
 
+          changed_files="$(mktemp)"
+
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            # Refresh the base ref for PRs from forks or stale checkouts before
+            # comparing against the merge base.
             git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
             if git merge-base "origin/${{ github.base_ref }}" HEAD >/dev/null; then
-              git diff --name-only "origin/${{ github.base_ref }}...HEAD" > /tmp/contextforge-changed-files.txt
+              git diff --name-only "origin/${{ github.base_ref }}...HEAD" > "$changed_files"
             else
               echo "No merge base found with origin/${{ github.base_ref }}; run tests defensively."
-              printf '__force_tests__\n' > /tmp/contextforge-changed-files.txt
+              printf '__force_tests__\n' > "$changed_files"
             fi
           else
             before="${{ github.event.before }}"
             after="${{ github.sha }}"
             if [[ "$before" =~ ^0+$ ]]; then
-              git diff-tree --no-commit-id --name-only -r "$after" > /tmp/contextforge-changed-files.txt
+              git diff-tree --no-commit-id --name-only -r "$after" > "$changed_files"
             else
-              git diff --name-only "$before" "$after" > /tmp/contextforge-changed-files.txt
+              git diff --name-only "$before" "$after" > "$changed_files"
             fi
           fi
 
-          run_tests="$(bash scripts/ci-detect-run-tests.sh < /tmp/contextforge-changed-files.txt)"
+          run_tests="$(bash scripts/ci-detect-run-tests.sh < "$changed_files")"
 
           printf 'run_tests=%s\n' "$run_tests" >> "$GITHUB_OUTPUT"
 
