@@ -1266,6 +1266,12 @@ For configured workspace profiles, pass `--workspaceKey` to add a separate
 and compact per-scope memory overview. Top-level `results` remain the primary
 scope view unless the caller explicitly enables primary duplication in the
 workspace block.
+Targeted `search` calls can also opt into the same bounded workspace federation
+with `--workspaceKey`. Without `workspaceKey`, `search` keeps the legacy array
+response. With `workspaceKey`, it returns `{ kind: "workspace_search", results,
+workspace }`, where `results` are the primary-scope search view and
+`workspace.results` are bounded supplemental member-scope results with
+workspace provenance.
 Bootstrap also returns a separate `memoryMap` channel for progressive durable
 memory navigation. The map groups related active memories into compact clusters,
 chooses a canonical `consolidatedMemory` for each cluster, and includes an

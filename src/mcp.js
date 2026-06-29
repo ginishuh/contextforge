@@ -576,13 +576,20 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Search Memory',
       description:
-        'Search scoped ContextForge retrieval results. Results may include type=memory reviewed durable facts, type=checkpoint credible recent handoff state, and type=memory_candidate unreviewed promotion candidates. Pass repoPath or cwd to retrieve repo results for a checkout outside the MCP process cwd; repoPath takes precedence. Pass scopeKey to pin the canonical repo memory key.',
+        'Search scoped ContextForge retrieval results. Results may include type=memory reviewed durable facts, type=checkpoint credible recent handoff state, and type=memory_candidate unreviewed promotion candidates. Pass repoPath or cwd to retrieve repo results for a checkout outside the MCP process cwd; repoPath takes precedence. Pass scopeKey to pin the canonical repo memory key. Pass workspaceKey to add bounded workspace federation over existing scopes; workspace profiles do not change storage mode.',
       inputSchema: {
         ...scopedSchema,
         query: z.string(),
         limit: z.number().int().positive().optional(),
         searchScopes: z.enum(['scope', 'repo', 'shared', 'repo+shared', 'local']).optional(),
         sharedScopeKey: z.string().optional(),
+        workspaceKey: z.string().optional(),
+        workspaceMode: workspaceModeSchema.optional(),
+        workspaceResultLimit: z.number().int().positive().optional(),
+        workspacePerScopeLimit: z.number().int().positive().optional(),
+        includeWorkspaceHandoffs: z.boolean().optional(),
+        includePrimaryInWorkspaceResults: z.boolean().optional(),
+        consultReason: consultReasonSchema.optional(),
       },
       annotations: {
         title: 'Search Memory',

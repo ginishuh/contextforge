@@ -1051,6 +1051,34 @@ function workspaceBootstrapResult(result, member, workspaceKey, query) {
   };
 }
 
+function workspaceSearchResult(result, member, workspaceKey, query) {
+  const summary = bootstrapResultSummary(result);
+  const scope = {
+    scope: member.scopeType,
+    scopeType: member.scopeType,
+    scopeKey: member.scopeKey,
+    workspaceKey,
+    memberName: member.memberName,
+    role: member.role,
+  };
+  return {
+    ...result,
+    key: summary.key,
+    category: summary.category,
+    content: summary.content,
+    trust: bootstrapTrustForType(result.type),
+    verificationRequired: result.type !== 'memory' ? true : requiresLiveStateVerification(result),
+    whyUse: bootstrapUseHint(result),
+    scope,
+    source: {
+      ...(result.source || {}),
+      ...scope,
+    },
+    includedBecause: member.includedBecause || [],
+    workspaceRank: workspaceResultSortScore(result, member, query),
+  };
+}
+
 function buildWorkspaceMemoryMap({ workspaceKey, scopePlan, results }) {
   const byScope = new Map();
   for (const scope of scopePlan.includedScopes || []) {
@@ -3278,6 +3306,130 @@ export function createContextForge(options = {}) {
       const [queryEmbedding] = await embeddingProvider.embed([options.query]);
       return searchStoreWithScope(store, scope, options, queryEmbedding);
     });
+  }
+
+  function workspaceSearchBlock(store, scope, options, queryEmbedding = null) {
+    const workspaceKey = normalizeWorkspaceKey(options.workspaceKey);
+    const workspaceMode = normalizeWorkspaceMode(options.workspaceMode || options.mode || 'auto');
+    const workspaceResultLimit = positiveInteger(
+      options.workspaceResultLimit == null ? 8 : Number(options.workspaceResultLimit),
+      'workspaceResultLimit',
+    );
+    const workspacePerScopeLimit = positiveInteger(
+      options.workspacePerScopeLimit == null ? 4 : Number(options.workspacePerScopeLimit),
+      'workspacePerScopeLimit',
+    );
+    const includeWorkspaceHandoffs = truthyOption(options.includeWorkspaceHandoffs);
+    const includePrimaryInWorkspaceResults = truthyOption(options.includePrimaryInWorkspaceResults);
+    const sharedScopeKey = options.sharedScopeKey || config.defaultSharedScopeKey;
+    const consultReason = normalizeConsultReason(options.consultReason || 'targeted_search');
+    const workspaceProfile = store.getWorkspaceProfileByKey({ workspaceKey, includeInactive: true });
+    const workspaceMembers = workspaceProfile ? store.listWorkspaceMembers({ workspaceKey }) : [];
+    const workspaceRoutingRules = workspaceProfile
+      ? store.listWorkspaceRoutingRules({ workspaceKey, status: 'all' })
+      : [];
+    const scopePlan = resolveWorkspaceScopePlan({
+      workspace: workspaceProfile,
+      members: workspaceMembers,
+      routingRules: workspaceRoutingRules,
+      primaryScope: scope.scopeType,
+      primaryScopeKey: scope.scopeKey,
+      query: options.query,
+      consultReason,
+      mode: workspaceMode,
+      includeShared: false,
+    });
+    const workspaceWarnings = [...(scopePlan.warnings || [])];
+    let workspaceResults = [];
+    if (scopePlan.enabled) {
+      const primaryIdentity = scopeIdentity(scope.scopeType, scope.scopeKey);
+      const searchMembers = (scopePlan.includedScopes || [])
+        .map((includedScope) => workspaceSearchMemberFromScope(includedScope))
+        .filter(
+          (member) =>
+            includePrimaryInWorkspaceResults || scopeIdentity(member.scopeType, member.scopeKey) !== primaryIdentity,
+        );
+      const seenSearchScopes = new Set();
+      for (const member of searchMembers) {
+        const identity = scopeIdentity(member.scopeType, member.scopeKey);
+        if (seenSearchScopes.has(identity)) {
+          continue;
+        }
+        seenSearchScopes.add(identity);
+        const scopedResults = searchStoreWithScope(
+          store,
+          {
+            scopeType: member.scopeType,
+            scopeKey: member.scopeKey,
+          },
+          {
+            query: options.query,
+            limit: workspacePerScopeLimit,
+            sharedScopeKey,
+          },
+          queryEmbedding,
+        )
+          .filter((result) => includeWorkspaceHandoffs || result.type !== 'checkpoint')
+          .map((result) => workspaceSearchResult(result, member, workspaceKey, options.query));
+        workspaceResults.push(...scopedResults);
+      }
+      if (scopePlan.includeShared) {
+        if (!sharedScopeKey) {
+          workspaceWarnings.push({
+            code: 'missing_shared_scope_key',
+            message: 'Workspace scope plan requested shared scope, but no shared scope key is configured.',
+          });
+        } else {
+          const sharedMember = {
+            scopeType: 'shared',
+            scopeKey: sharedScopeKey,
+            memberName: null,
+            role: 'shared',
+            priority: 0,
+            includedBecause: ['include_shared'],
+          };
+          const sharedWorkspaceResults = searchStoreWithScope(
+            store,
+            {
+              scopeType: 'shared',
+              scopeKey: sharedScopeKey,
+            },
+            {
+              query: options.query,
+              limit: workspacePerScopeLimit,
+              sharedScopeKey,
+            },
+            queryEmbedding,
+          )
+            .filter((result) => includeWorkspaceHandoffs || result.type !== 'checkpoint')
+            .map((result) => workspaceSearchResult(result, sharedMember, workspaceKey, options.query));
+          workspaceResults.push(...sharedWorkspaceResults);
+        }
+      }
+      workspaceResults = workspaceResults
+        .sort(
+          (a, b) =>
+            workspaceTypeTier(b.type) - workspaceTypeTier(a.type) ||
+            b.workspaceRank - a.workspaceRank ||
+            String(a.scope?.scopeKey || '').localeCompare(String(b.scope?.scopeKey || '')) ||
+            String(a.key || '').localeCompare(String(b.key || '')),
+        )
+        .slice(0, workspaceResultLimit);
+    }
+    return {
+      enabled: Boolean(scopePlan.enabled),
+      scopePlan,
+      results: workspaceResults,
+      memoryMap: buildWorkspaceMemoryMap({ workspaceKey, scopePlan, results: workspaceResults }),
+      warnings: workspaceWarnings,
+      limits: {
+        resultLimit: workspaceResultLimit,
+        perScopeLimit: workspacePerScopeLimit,
+        includeWorkspaceHandoffs,
+        includePrimaryInWorkspaceResults,
+      },
+      summary: workspaceBlockSummary(scopePlan, workspaceResults),
+    };
   }
 
   async function memoryVectorRelations(store, scope, seeds, storage, limit = 50) {
@@ -6102,6 +6254,32 @@ export function createContextForge(options = {}) {
     search(options) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.query, 'query');
+      const workspaceRequested = options.workspaceKey != null && options.workspaceKey !== '';
+      if (workspaceRequested) {
+        if (!embeddingProvider) {
+          return useStore((store) => {
+            const results = searchStoreWithScope(store, scope, options);
+            return {
+              kind: 'workspace_search',
+              scope,
+              query: options.query,
+              results,
+              workspace: workspaceSearchBlock(store, scope, options),
+            };
+          });
+        }
+        return useStore(async (store) => {
+          const [queryEmbedding] = await embeddingProvider.embed([options.query]);
+          const results = searchStoreWithScope(store, scope, options, queryEmbedding);
+          return {
+            kind: 'workspace_search',
+            scope,
+            query: options.query,
+            results,
+            workspace: workspaceSearchBlock(store, scope, options, queryEmbedding),
+          };
+        });
+      }
       return searchWithScope(scope, options);
     },
 

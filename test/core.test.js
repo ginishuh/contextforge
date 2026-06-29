@@ -11234,6 +11234,204 @@ test('bootstrapContext ignores workspace-only limits when workspaceKey is absent
   assert.equal(Object.prototype.hasOwnProperty.call(bootstrap, 'workspace'), false);
 });
 
+test('search keeps the legacy array shape unless workspaceKey is provided', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    key: 'backend-openapi-contract',
+    content: 'Backend owns the OpenAPI permission contract.',
+    category: 'contract',
+  });
+
+  const results = await app.search({
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    query: 'OpenAPI permission',
+  });
+
+  assert.equal(Array.isArray(results), true);
+  assert.equal(results[0].memory.key, 'backend-openapi-contract');
+});
+
+test('search adds bounded supplemental workspace results when workspaceKey is provided', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+  app.upsertWorkspaceProfile({
+    workspaceKey: 'search-workspace',
+    displayName: 'Search Workspace',
+    canonicalScope: 'repo',
+    canonicalScopeKey: 'github.com/example/suite',
+  });
+  app.upsertWorkspaceMember({
+    workspaceKey: 'search-workspace',
+    name: 'suite',
+    scope: 'repo',
+    scopeKey: 'github.com/example/suite',
+    role: 'cross-repo-contract',
+    priority: 100,
+    includeByDefault: true,
+  });
+  app.upsertWorkspaceMember({
+    workspaceKey: 'search-workspace',
+    name: 'backend',
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    role: 'api-domain-ssot',
+    priority: 90,
+  });
+  app.upsertWorkspaceMember({
+    workspaceKey: 'search-workspace',
+    name: 'web',
+    scope: 'repo',
+    scopeKey: 'github.com/example/web',
+    role: 'desktop-web-consumer',
+    priority: 60,
+  });
+  app.upsertWorkspaceMember({
+    workspaceKey: 'search-workspace',
+    name: 'ops',
+    scope: 'repo',
+    scopeKey: 'github.com/example/ops',
+    role: 'ops',
+    priority: 10,
+  });
+  app.upsertWorkspaceRoutingRule({
+    workspaceKey: 'search-workspace',
+    ruleKey: 'contract_terms',
+    priority: 100,
+    match: { termsAny: ['OpenAPI', 'contract', 'frontend'] },
+    include: { roles: ['cross-repo-contract', 'api-domain-ssot', 'desktop-web-consumer'] },
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    key: 'backend-openapi-contract',
+    content: 'Backend owns the OpenAPI permission contract.',
+    category: 'contract',
+    importance: 8,
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'github.com/example/suite',
+    key: 'suite-openapi-contract',
+    content: 'Suite records the cross-repo OpenAPI frontend contract.',
+    category: 'contract',
+    importance: 8,
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'github.com/example/web',
+    key: 'web-openapi-consumer',
+    content: 'Web frontend consumes the OpenAPI contract.',
+    category: 'consumer',
+    importance: 5,
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'github.com/example/ops',
+    key: 'ops-openapi-note',
+    content: 'Ops mentions the OpenAPI frontend contract but is not a workspace routing match.',
+    category: 'ops',
+    importance: 10,
+  });
+
+  const search = await app.search({
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    query: 'OpenAPI frontend contract',
+    workspaceKey: 'search-workspace',
+    workspaceResultLimit: 2,
+    workspacePerScopeLimit: 1,
+  });
+
+  assert.equal(search.kind, 'workspace_search');
+  assert.equal(search.scope.scopeKey, 'github.com/example/backend');
+  assert.equal(search.results.some((result) => result.memory.key === 'backend-openapi-contract'), true);
+  assert.equal(search.workspace.enabled, true);
+  assert.equal(search.workspace.scopePlan.primaryScope.memberName, 'backend');
+  assert.deepEqual(
+    search.workspace.scopePlan.includedScopes.map((scope) => scope.memberName),
+    ['suite', 'backend', 'web'],
+  );
+  assert.equal(
+    search.workspace.scopePlan.excludedScopes.some((scope) => scope.memberName === 'ops'),
+    true,
+  );
+  assert.equal(search.workspace.results.length, 2);
+  assert.equal(search.workspace.results.some((result) => result.key === 'backend-openapi-contract'), false);
+  assert.equal(search.workspace.results.some((result) => result.key === 'ops-openapi-note'), false);
+  assert.deepEqual(
+    search.workspace.results.map((result) => result.scope.memberName),
+    ['suite', 'web'],
+  );
+  assert.equal(search.workspace.results[0].scope.workspaceKey, 'search-workspace');
+  assert.deepEqual(search.workspace.results[0].includedBecause, [
+    'include_by_default',
+    'canonical_scope',
+    'routing_rule:contract_terms',
+  ]);
+  assert.equal(search.workspace.memoryMap.kind, 'workspace_memory_map');
+  assert.equal(search.workspace.limits.includePrimaryInWorkspaceResults, false);
+});
+
+test('search workspace shared retrieval stays routing-rule opt-in', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_SHARED_SCOPE_KEY: 'team-shared',
+    },
+    cwd: process.cwd(),
+  });
+  app.upsertWorkspaceProfile({
+    workspaceKey: 'search-shared-workspace',
+    canonicalScope: 'repo',
+    canonicalScopeKey: 'github.com/example/backend',
+  });
+  app.upsertWorkspaceMember({
+    workspaceKey: 'search-shared-workspace',
+    name: 'backend',
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    role: 'api-domain-ssot',
+  });
+  app.upsertWorkspaceRoutingRule({
+    workspaceKey: 'search-shared-workspace',
+    ruleKey: 'shared_terms',
+    match: { termsAny: ['policy'] },
+    include: { roles: ['api-domain-ssot'] },
+    includeShared: true,
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    key: 'backend-policy',
+    content: 'Backend policy memory.',
+  });
+  app.remember({
+    scope: 'shared',
+    scopeKey: 'team-shared',
+    key: 'shared-policy',
+    content: 'Shared policy memory for workspace search.',
+  });
+
+  const search = await app.search({
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    query: 'policy',
+    workspaceKey: 'search-shared-workspace',
+  });
+  assert.equal(search.workspace.scopePlan.includeShared, true);
+  assert.equal(search.workspace.results.some((result) => result.scope.scopeType === 'shared'), true);
+  assert.equal(
+    search.workspace.results.find((result) => result.scope.scopeType === 'shared').scope.workspaceKey,
+    'search-shared-workspace',
+  );
+});
+
 test('evalRetrieval passes for the synthetic workspace fixture', async () => {
   const result = await execFileAsync('node', [
     'src/cli.js',
@@ -11866,6 +12064,13 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.ok(bootstrapTool.description.includes('Does not create a session'));
     assert.ok(bootstrapTool.description.includes('latest checkpoint handoff'));
     assert.ok(bootstrapTool.description.includes('memoryMap'));
+    const searchTool = toolList.tools.find((tool) => tool.name === 'search');
+    assert.ok(searchTool.inputSchema.properties.workspaceKey);
+    assert.ok(searchTool.inputSchema.properties.workspaceMode);
+    assert.ok(searchTool.inputSchema.properties.workspaceResultLimit);
+    assert.ok(searchTool.inputSchema.properties.workspacePerScopeLimit);
+    assert.ok(searchTool.inputSchema.properties.includePrimaryInWorkspaceResults);
+    assert.ok(searchTool.description.includes('workspace federation'));
     const expandClusterTool = toolList.tools.find((tool) => tool.name === 'expand_memory_cluster');
     assert.ok(expandClusterTool.inputSchema.properties.clusterId);
     assert.ok(expandClusterTool.inputSchema.properties.includeProvenance);
