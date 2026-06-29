@@ -11227,6 +11227,7 @@ test('bootstrapContext ignores workspace-only limits when workspaceKey is absent
     scopeKey: 'github.com/example/backend',
     query: 'policy',
     consultReason: 'startup',
+    workspaceKey: '   ',
     workspaceResultLimit: 0,
     workspacePerScopeLimit: 0,
   });
@@ -11254,6 +11255,15 @@ test('search keeps the legacy array shape unless workspaceKey is provided', asyn
 
   assert.equal(Array.isArray(results), true);
   assert.equal(results[0].memory.key, 'backend-openapi-contract');
+
+  const blankWorkspaceKey = await app.search({
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    query: 'OpenAPI permission',
+    workspaceKey: '   ',
+  });
+  assert.equal(Array.isArray(blankWorkspaceKey), true);
+  assert.equal(blankWorkspaceKey[0].memory.key, 'backend-openapi-contract');
 });
 
 test('search adds bounded supplemental workspace results when workspaceKey is provided', async () => {
@@ -11375,6 +11385,42 @@ test('search adds bounded supplemental workspace results when workspaceKey is pr
   ]);
   assert.equal(search.workspace.memoryMap.kind, 'workspace_memory_map');
   assert.equal(search.workspace.limits.includePrimaryInWorkspaceResults, false);
+
+  const withPrimary = await app.search({
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    query: 'OpenAPI frontend contract',
+    workspaceKey: 'search-workspace',
+    workspaceResultLimit: 3,
+    workspacePerScopeLimit: 1,
+    includePrimaryInWorkspaceResults: true,
+  });
+  assert.equal(withPrimary.workspace.limits.includePrimaryInWorkspaceResults, true);
+  assert.equal(withPrimary.workspace.results.some((result) => result.key === 'backend-openapi-contract'), true);
+});
+
+test('search reports a workspace warning when a requested profile is missing', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    key: 'backend-policy',
+    content: 'Backend policy memory remains searchable without workspace profile state.',
+  });
+
+  const search = await app.search({
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    query: 'policy',
+    workspaceKey: 'missing-workspace',
+  });
+
+  assert.equal(search.kind, 'workspace_search');
+  assert.equal(search.results[0].memory.key, 'backend-policy');
+  assert.equal(search.workspace.enabled, false);
+  assert.equal(search.workspace.results.length, 0);
+  assert.equal(search.workspace.warnings[0].code, 'workspace_not_found');
 });
 
 test('search workspace shared retrieval stays routing-rule opt-in', async () => {
@@ -11397,6 +11443,14 @@ test('search workspace shared retrieval stays routing-rule opt-in', async () => 
     scope: 'repo',
     scopeKey: 'github.com/example/backend',
     role: 'api-domain-ssot',
+  });
+  app.upsertWorkspaceMember({
+    workspaceKey: 'search-shared-workspace',
+    name: 'team',
+    scope: 'shared',
+    scopeKey: 'team-shared',
+    role: 'shared-policy',
+    includeByDefault: true,
   });
   app.upsertWorkspaceRoutingRule({
     workspaceKey: 'search-shared-workspace',
@@ -11429,6 +11483,14 @@ test('search workspace shared retrieval stays routing-rule opt-in', async () => 
   assert.equal(
     search.workspace.results.find((result) => result.scope.scopeType === 'shared').scope.workspaceKey,
     'search-shared-workspace',
+  );
+  assert.equal(
+    search.workspace.results.filter((result) => result.key === 'shared-policy').length,
+    1,
+  );
+  assert.equal(
+    search.workspace.warnings.some((warning) => warning.code === 'shared_scope_already_included'),
+    true,
   );
 });
 

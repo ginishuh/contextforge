@@ -1079,6 +1079,10 @@ function workspaceSearchResult(result, member, workspaceKey, query) {
   };
 }
 
+function workspaceKeyRequested(value) {
+  return String(value ?? '').trim() !== '';
+}
+
 function buildWorkspaceMemoryMap({ workspaceKey, scopePlan, results }) {
   const byScope = new Map();
   for (const scope of scopePlan.includedScopes || []) {
@@ -3308,7 +3312,12 @@ export function createContextForge(options = {}) {
     });
   }
 
-  function workspaceSearchBlock(store, scope, options, queryEmbedding = null) {
+  function buildWorkspaceFederationBlock(
+    store,
+    scope,
+    options,
+    { queryEmbedding = null, consultReason = null, resultMapper } = {},
+  ) {
     const workspaceKey = normalizeWorkspaceKey(options.workspaceKey);
     const workspaceMode = normalizeWorkspaceMode(options.workspaceMode || options.mode || 'auto');
     const workspaceResultLimit = positiveInteger(
@@ -3322,7 +3331,7 @@ export function createContextForge(options = {}) {
     const includeWorkspaceHandoffs = truthyOption(options.includeWorkspaceHandoffs);
     const includePrimaryInWorkspaceResults = truthyOption(options.includePrimaryInWorkspaceResults);
     const sharedScopeKey = options.sharedScopeKey || config.defaultSharedScopeKey;
-    const consultReason = normalizeConsultReason(options.consultReason || 'targeted_search');
+    const normalizedConsultReason = normalizeConsultReason(consultReason || options.consultReason || 'targeted_search');
     const workspaceProfile = store.getWorkspaceProfileByKey({ workspaceKey, includeInactive: true });
     const workspaceMembers = workspaceProfile ? store.listWorkspaceMembers({ workspaceKey }) : [];
     const workspaceRoutingRules = workspaceProfile
@@ -3335,7 +3344,7 @@ export function createContextForge(options = {}) {
       primaryScope: scope.scopeType,
       primaryScopeKey: scope.scopeKey,
       query: options.query,
-      consultReason,
+      consultReason: normalizedConsultReason,
       mode: workspaceMode,
       includeShared: false,
     });
@@ -3370,7 +3379,7 @@ export function createContextForge(options = {}) {
           queryEmbedding,
         )
           .filter((result) => includeWorkspaceHandoffs || result.type !== 'checkpoint')
-          .map((result) => workspaceSearchResult(result, member, workspaceKey, options.query));
+          .map((result) => resultMapper(result, member, workspaceKey, options.query));
         workspaceResults.push(...scopedResults);
       }
       if (scopePlan.includeShared) {
@@ -3380,6 +3389,16 @@ export function createContextForge(options = {}) {
             message: 'Workspace scope plan requested shared scope, but no shared scope key is configured.',
           });
         } else {
+          const sharedIdentity = scopeIdentity('shared', sharedScopeKey);
+          const sharedAlreadyIncluded = seenSearchScopes.has(sharedIdentity);
+          if (sharedAlreadyIncluded) {
+            workspaceWarnings.push({
+              code: 'shared_scope_already_included',
+              message: 'Workspace shared scope was already included as a member scope.',
+            });
+          } else {
+            seenSearchScopes.add(sharedIdentity);
+          }
           const sharedMember = {
             scopeType: 'shared',
             scopeKey: sharedScopeKey,
@@ -3388,22 +3407,24 @@ export function createContextForge(options = {}) {
             priority: 0,
             includedBecause: ['include_shared'],
           };
-          const sharedWorkspaceResults = searchStoreWithScope(
-            store,
-            {
-              scopeType: 'shared',
-              scopeKey: sharedScopeKey,
-            },
-            {
-              query: options.query,
-              limit: workspacePerScopeLimit,
-              sharedScopeKey,
-            },
-            queryEmbedding,
-          )
-            .filter((result) => includeWorkspaceHandoffs || result.type !== 'checkpoint')
-            .map((result) => workspaceSearchResult(result, sharedMember, workspaceKey, options.query));
-          workspaceResults.push(...sharedWorkspaceResults);
+          if (!sharedAlreadyIncluded) {
+            const sharedWorkspaceResults = searchStoreWithScope(
+              store,
+              {
+                scopeType: 'shared',
+                scopeKey: sharedScopeKey,
+              },
+              {
+                query: options.query,
+                limit: workspacePerScopeLimit,
+                sharedScopeKey,
+              },
+              queryEmbedding,
+            )
+              .filter((result) => includeWorkspaceHandoffs || result.type !== 'checkpoint')
+              .map((result) => resultMapper(result, sharedMember, workspaceKey, options.query));
+            workspaceResults.push(...sharedWorkspaceResults);
+          }
         }
       }
       workspaceResults = workspaceResults
@@ -3804,7 +3825,7 @@ export function createContextForge(options = {}) {
         : null;
       const mapLimit = memoryMapLimit(options.memoryMapLimit, 5, 'memoryMapLimit');
       const mapClusterSize = memoryMapLimit(options.memoryMapClusterSize, 6, 'memoryMapClusterSize');
-      const workspaceRequested = options.workspaceKey != null && options.workspaceKey !== '';
+      const workspaceRequested = workspaceKeyRequested(options.workspaceKey);
       return useStore(async (store) => {
         const info = buildDbInfo(store);
         const storage = storageBootstrapInfo(config, info);
@@ -3848,125 +3869,11 @@ export function createContextForge(options = {}) {
         ];
         let workspaceBlock = null;
         if (workspaceRequested) {
-          const workspaceKey = normalizeWorkspaceKey(options.workspaceKey);
-          const workspaceMode = normalizeWorkspaceMode(options.workspaceMode || options.mode || 'auto');
-          const workspaceResultLimit = positiveInteger(
-            options.workspaceResultLimit == null ? 8 : Number(options.workspaceResultLimit),
-            'workspaceResultLimit',
-          );
-          const workspacePerScopeLimit = positiveInteger(
-            options.workspacePerScopeLimit == null ? 4 : Number(options.workspacePerScopeLimit),
-            'workspacePerScopeLimit',
-          );
-          const includeWorkspaceHandoffs = truthyOption(options.includeWorkspaceHandoffs);
-          const includePrimaryInWorkspaceResults = truthyOption(options.includePrimaryInWorkspaceResults);
-          const workspaceProfile = store.getWorkspaceProfileByKey({ workspaceKey, includeInactive: true });
-          const workspaceMembers = workspaceProfile ? store.listWorkspaceMembers({ workspaceKey }) : [];
-          const workspaceRoutingRules = workspaceProfile
-            ? store.listWorkspaceRoutingRules({ workspaceKey, status: 'all' })
-            : [];
-          const scopePlan = resolveWorkspaceScopePlan({
-            workspace: workspaceProfile,
-            members: workspaceMembers,
-            routingRules: workspaceRoutingRules,
-            primaryScope: scope.scopeType,
-            primaryScopeKey: scope.scopeKey,
-            query: options.query,
+          workspaceBlock = buildWorkspaceFederationBlock(store, scope, options, {
+            queryEmbedding,
             consultReason,
-            mode: workspaceMode,
-            includeShared: false,
+            resultMapper: workspaceBootstrapResult,
           });
-          const workspaceWarnings = [...(scopePlan.warnings || [])];
-          let workspaceResults = [];
-          if (scopePlan.enabled) {
-            const primaryIdentity = scopeIdentity(scope.scopeType, scope.scopeKey);
-            const searchMembers = (scopePlan.includedScopes || [])
-              .map((includedScope) => workspaceSearchMemberFromScope(includedScope))
-              .filter(
-                (member) =>
-                  includePrimaryInWorkspaceResults || scopeIdentity(member.scopeType, member.scopeKey) !== primaryIdentity,
-              );
-            const seenSearchScopes = new Set();
-            for (const member of searchMembers) {
-              const identity = scopeIdentity(member.scopeType, member.scopeKey);
-              if (seenSearchScopes.has(identity)) {
-                continue;
-              }
-              seenSearchScopes.add(identity);
-              const scopedResults = searchStoreWithScope(
-                store,
-                {
-                  scopeType: member.scopeType,
-                  scopeKey: member.scopeKey,
-                },
-                {
-                  query: options.query,
-                  limit: workspacePerScopeLimit,
-                  sharedScopeKey,
-                },
-                queryEmbedding,
-              )
-                .filter((result) => includeWorkspaceHandoffs || result.type !== 'checkpoint')
-                .map((result) => workspaceBootstrapResult(result, member, workspaceKey, options.query));
-              workspaceResults.push(...scopedResults);
-            }
-            if (scopePlan.includeShared) {
-              if (!sharedScopeKey) {
-                workspaceWarnings.push({
-                  code: 'missing_shared_scope_key',
-                  message: 'Workspace scope plan requested shared scope, but no shared scope key is configured.',
-                });
-              } else {
-                const sharedMember = {
-                  scopeType: 'shared',
-                  scopeKey: sharedScopeKey,
-                  memberName: null,
-                  role: 'shared',
-                  priority: 0,
-                  includedBecause: ['include_shared'],
-                };
-                const sharedWorkspaceResults = searchStoreWithScope(
-                  store,
-                  {
-                    scopeType: 'shared',
-                    scopeKey: sharedScopeKey,
-                  },
-                  {
-                    query: options.query,
-                    limit: workspacePerScopeLimit,
-                    sharedScopeKey,
-                  },
-                  queryEmbedding,
-                )
-                  .filter((result) => includeWorkspaceHandoffs || result.type !== 'checkpoint')
-                  .map((result) => workspaceBootstrapResult(result, sharedMember, workspaceKey, options.query));
-                workspaceResults.push(...sharedWorkspaceResults);
-              }
-            }
-            workspaceResults = workspaceResults
-              .sort(
-                (a, b) =>
-                  workspaceTypeTier(b.type) - workspaceTypeTier(a.type) ||
-                  b.workspaceRank - a.workspaceRank ||
-                  String(a.scope?.scopeKey || '').localeCompare(String(b.scope?.scopeKey || '')) ||
-                  String(a.key || '').localeCompare(String(b.key || '')),
-              )
-              .slice(0, workspaceResultLimit);
-          }
-          workspaceBlock = {
-            enabled: Boolean(scopePlan.enabled),
-            scopePlan,
-            results: workspaceResults,
-            memoryMap: buildWorkspaceMemoryMap({ workspaceKey, scopePlan, results: workspaceResults }),
-            warnings: workspaceWarnings,
-            limits: {
-              resultLimit: workspaceResultLimit,
-              perScopeLimit: workspacePerScopeLimit,
-              includeWorkspaceHandoffs,
-              includePrimaryInWorkspaceResults,
-            },
-            summary: workspaceBlockSummary(scopePlan, workspaceResults),
-          };
         }
         const memoryMapSeeds = repoResults
           .filter((result) => result.type === 'memory' && result.memory)
@@ -6254,7 +6161,7 @@ export function createContextForge(options = {}) {
     search(options) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.query, 'query');
-      const workspaceRequested = options.workspaceKey != null && options.workspaceKey !== '';
+      const workspaceRequested = workspaceKeyRequested(options.workspaceKey);
       if (workspaceRequested) {
         if (!embeddingProvider) {
           return useStore((store) => {
@@ -6264,7 +6171,9 @@ export function createContextForge(options = {}) {
               scope,
               query: options.query,
               results,
-              workspace: workspaceSearchBlock(store, scope, options),
+              workspace: buildWorkspaceFederationBlock(store, scope, options, {
+                resultMapper: workspaceSearchResult,
+              }),
             };
           });
         }
@@ -6276,7 +6185,10 @@ export function createContextForge(options = {}) {
             scope,
             query: options.query,
             results,
-            workspace: workspaceSearchBlock(store, scope, options, queryEmbedding),
+            workspace: buildWorkspaceFederationBlock(store, scope, options, {
+              queryEmbedding,
+              resultMapper: workspaceSearchResult,
+            }),
           };
         });
       }
