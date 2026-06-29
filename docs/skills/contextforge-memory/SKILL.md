@@ -52,6 +52,12 @@ remote canonical server. There is no silent local/project-local fallback.
 Workspace profiles should store canonical scope identity only, not local
 `repoPath`, tokens, raw transcripts, or machine-private paths.
 
+Treat `includeByDefault` as scope-plan inclusion only. It does not justify
+unbounded retrieval from that scope; future workspace retrieval must still obey
+per-scope and total result limits. Workspace profile deactivation is soft
+delete: the profile becomes inactive and can be reactivated by upserting the
+same key.
+
 For renamed or transferred repositories, treat the new repository identity as
 the canonical `scopeKey`. ContextForge may be configured with
 `CONTEXTFORGE_SCOPE_ALIASES` so future reads and writes using an old repo key

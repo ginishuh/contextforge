@@ -252,6 +252,7 @@ async function main() {
     workspaceGet: (app, coreOptions) => app.getWorkspaceProfile(coreOptions),
     workspaceUpsert: (app, coreOptions) => app.upsertWorkspaceProfile(coreOptions),
     workspaceDelete: (app, coreOptions) => app.deleteWorkspaceProfile(coreOptions),
+    workspaceDeactivate: (app, coreOptions) => app.deactivateWorkspaceProfile(coreOptions),
     workspaceMemberUpsert: (app, coreOptions) => app.upsertWorkspaceMember(coreOptions),
     workspaceMemberRemove: (app, coreOptions) => app.removeWorkspaceMember(coreOptions),
     workspaceRuleUpsert: (app, coreOptions) => app.upsertWorkspaceRoutingRule(coreOptions),

@@ -277,19 +277,40 @@ function addIncluded(included, member, reason) {
   }
 }
 
-function removeIncluded(included, member, reason) {
+function addExcluded(excluded, member, reason) {
   const key = memberIdentity(member);
-  const entry = included.get(key);
-  if (!entry) {
-    return;
+  if (!excluded.has(key)) {
+    excluded.set(key, { member, reasons: [] });
   }
-  if (!entry.reasons.includes('primary_scope')) {
-    included.delete(key);
-    return;
-  }
+  const entry = excluded.get(key);
   if (!entry.reasons.includes(reason)) {
     entry.reasons.push(reason);
   }
+}
+
+function removeIncluded(included, excluded, member, reason, warnings) {
+  const key = memberIdentity(member);
+  const entry = included.get(key);
+  addExcluded(excluded, member, reason);
+  if (!entry) {
+    return;
+  }
+  if (entry.reasons.includes('primary_scope')) {
+    warnings.push({
+      code: 'primary_scope_matched_exclude_rule',
+      message: 'Primary scope matched a workspace exclude rule but remains included because primary scope wins.',
+      scope: {
+        scope: member.scopeType,
+        scopeType: member.scopeType,
+        scopeKey: member.scopeKey,
+        memberName: member.name,
+        role: member.role,
+      },
+      reason,
+    });
+    return;
+  }
+  included.delete(key);
 }
 
 function noOpPlan({ workspaceKey = null, mode, warnings = [] }) {
@@ -358,6 +379,7 @@ export function resolveWorkspaceScopePlan({
   }
 
   const included = new Map();
+  const excluded = new Map();
   addIncluded(included, primary, 'primary_scope');
   for (const member of activeMembers) {
     if (member.includeByDefault) {
@@ -408,7 +430,9 @@ export function resolveWorkspaceScopePlan({
     }
     for (const member of activeMembers) {
       if (memberMatchesSpec(member, rule.exclude)) {
-        removeIncluded(included, member, `excluded_by_rule:${rule.ruleKey}`);
+        // Primary membership is never removed. Explicit exclude rules win over
+        // canonical/default/routing includes for every other member.
+        removeIncluded(included, excluded, member, `excluded_by_rule:${rule.ruleKey}`, warnings);
       }
     }
   }
@@ -420,7 +444,7 @@ export function resolveWorkspaceScopePlan({
   const excludedScopes = activeMembers
     .filter((member) => !includedKeys.has(memberIdentity(member)))
     .sort((a, b) => b.priority - a.priority || a.name.localeCompare(b.name))
-    .map((member) => excludedMemberOutput(member, ['no_query_signal']));
+    .map((member) => excludedMemberOutput(member, excluded.get(memberIdentity(member))?.reasons || ['no_query_signal']));
 
   return {
     kind: 'workspace_scope_plan',

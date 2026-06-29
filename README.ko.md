@@ -112,6 +112,12 @@ node src/cli.js workspaceResolve \
 rule, warning을 반환한다. `bootstrap_context`에서 workspace federation을 실제로
 검색에 붙이는 작업은 별도 단계이며, 기본 동작은 계속 단일 repo bootstrap이다.
 
+`includeByDefault`는 보통 canonical suite나 contract repo에만 신중하게 쓴다. 이
+값은 scope-plan 포함 여부만 바꾸며, 이후 workspace retrieval은 여전히 per-scope와
+전체 result limit를 지켜야 한다. `workspaceDeactivate`는 profile을 hard delete하지
+않고 inactive로 표시한다. 같은 key로 `workspaceUpsert`를 다시 호출하면 기존 profile
+id를 유지한 채 재활성화한다.
+
 ## Multi-Agent Ingest
 
 현재 built-in adapter는 5종이다.

@@ -154,6 +154,12 @@ node src/cli.js workspaceResolve \
 federation is intentionally a follow-up layer: single-repo bootstrap remains
 the default behavior until a caller opts into workspace use.
 
+Use `includeByDefault` sparingly, usually for a canonical suite or contract
+repo. It only affects scope-plan inclusion; future workspace retrieval still
+must respect bounded per-scope and total result limits. `workspaceDeactivate`
+soft-deletes a profile by marking it inactive, and a later `workspaceUpsert`
+with the same key reactivates the existing profile.
+
 ## Distillation
 
 ContextForge assumes useful checkpoints need an LLM. The runtime should support

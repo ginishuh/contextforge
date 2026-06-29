@@ -158,6 +158,13 @@ member, included and excluded scopes, `includedBecause`, matched rules or
 matched terms, and warnings such as `primary_scope_not_workspace_member` or
 `canonical_scope_not_member`.
 
+`include_by_default` is a scope-plan convenience, not permission to retrieve an
+unbounded amount of memory. Use it sparingly, usually for the canonical suite or
+contract repo, and keep future workspace retrieval bounded by per-scope and
+total limits. Deactivating a workspace profile is a soft delete that marks the
+profile inactive; upserting the same `workspaceKey` later reactivates the
+existing profile.
+
 ## Retrieval Quality
 
 Durable memory remains canonical in the `memories` table. SQLite FTS5 is a

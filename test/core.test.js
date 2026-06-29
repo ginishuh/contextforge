@@ -10505,6 +10505,7 @@ test('REMOTE_METHODS exposes resume, suggestion, auto-promotion, and reconciliat
   assert.ok(REMOTE_METHODS.includes('getWorkspaceProfile'));
   assert.ok(REMOTE_METHODS.includes('listWorkspaceProfiles'));
   assert.ok(REMOTE_METHODS.includes('deleteWorkspaceProfile'));
+  assert.ok(REMOTE_METHODS.includes('deactivateWorkspaceProfile'));
   assert.ok(REMOTE_METHODS.includes('upsertWorkspaceMember'));
   assert.ok(REMOTE_METHODS.includes('removeWorkspaceMember'));
   assert.ok(REMOTE_METHODS.includes('upsertWorkspaceRoutingRule'));
@@ -10605,13 +10606,21 @@ test('workspace profiles persist members and resolve explainable scope plans', a
     ruleKey: 'contract_terms',
     priority: 100,
     matchJson: '{"termsAny":["contract","OpenAPI","permission","E2E","frontend"]}',
-    includeJson: '{"roles":["cross-repo-contract","api-domain-ssot","desktop-web-consumer"]}',
+    includeJson: '{"roles":["cross-repo-contract","api-domain-ssot","desktop-web-consumer","docs"]}',
+    excludeJson: '{"roles":["docs"]}',
     includeShared: false,
+  });
+  app.upsertWorkspaceRoutingRule({
+    workspaceKey: 'synthetic-product',
+    ruleKey: 'primary_exclude_attempt',
+    priority: 90,
+    match: { termsAny: ['OpenAPI'] },
+    exclude: { members: ['backend'] },
   });
 
   const fetched = app.getWorkspaceProfile({ workspaceKey: 'synthetic-product' });
   assert.equal(fetched.members.length, 4);
-  assert.equal(fetched.routingRules.length, 1);
+  assert.equal(fetched.routingRules.length, 2);
   assert.equal(JSON.stringify(fetched).includes('/private/should-not-persist'), false);
 
   const plan = app.resolveWorkspace({
@@ -10629,6 +10638,9 @@ test('workspace profiles persist members and resolve explainable scope plans', a
   );
   assert.equal(plan.includeShared, false);
   assert.deepEqual(plan.excludedScopes.map((scope) => scope.memberName), ['docs']);
+  assert.deepEqual(plan.excludedScopes[0].excludedBecause, ['excluded_by_rule:contract_terms']);
+  assert.equal(plan.includedScopes.find((scope) => scope.memberName === 'backend').includedBecause.includes('excluded_by_rule:primary_exclude_attempt'), false);
+  assert.equal(plan.warnings.find((warning) => warning.code === 'primary_scope_matched_exclude_rule').reason, 'excluded_by_rule:primary_exclude_attempt');
   assert.equal(plan.matchedRules[0].ruleKey, 'contract_terms');
   assert.deepEqual(plan.matchedRules[0].matchedTerms, ['contract', 'OpenAPI', 'permission', 'frontend']);
 
@@ -10642,6 +10654,23 @@ test('workspace profiles persist members and resolve explainable scope plans', a
     quietPlan.includedScopes.map((scope) => scope.memberName),
     ['suite', 'backend'],
   );
+
+  const offPlan = app.resolveWorkspace({
+    workspaceKey: 'synthetic-product',
+    workspaceMode: 'off',
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+  });
+  assert.equal(offPlan.enabled, false);
+  assert.equal(offPlan.warnings[0].code, 'workspace_mode_off');
+
+  const missingPlan = app.resolveWorkspace({
+    workspaceKey: 'missing-workspace',
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+  });
+  assert.equal(missingPlan.enabled, false);
+  assert.equal(missingPlan.warnings[0].code, 'workspace_not_found');
 
   const outsideAuto = app.resolveWorkspace({
     workspaceKey: 'synthetic-product',
@@ -10662,6 +10691,13 @@ test('workspace profiles persist members and resolve explainable scope plans', a
 
   const inactive = app.deleteWorkspaceProfile({ workspaceKey: 'synthetic-product' });
   assert.equal(inactive.status, 'inactive');
+  const inactivePlan = app.resolveWorkspace({
+    workspaceKey: 'synthetic-product',
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+  });
+  assert.equal(inactivePlan.enabled, false);
+  assert.equal(inactivePlan.warnings[0].code, 'workspace_inactive');
   const reactivated = app.upsertWorkspaceProfile({
     workspaceKey: 'synthetic-product',
     displayName: 'Synthetic Product Reactivated',
@@ -11057,6 +11093,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'correct_memory',
       'db_info',
       'deactivate_memory',
+      'deactivate_workspace_profile',
       'distill_checkpoint',
       'distill_usage',
       'expand_memory_cluster',
@@ -11088,6 +11125,8 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'reject_memory_candidate',
       'reject_memory_update_candidate',
       'remember',
+      'remove_workspace_member',
+      'remove_workspace_routing_rule',
       'resolve_workspace',
       'search',
       'session_status',

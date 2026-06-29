@@ -218,6 +218,24 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
   );
 
   server.registerTool(
+    'deactivate_workspace_profile',
+    {
+      title: 'Deactivate Workspace Profile',
+      description:
+        'Soft-delete a ContextForge workspace profile by marking it inactive. Workspace profiles do not change storage mode. They define which existing scopes are consulted together.',
+      inputSchema: {
+        workspaceKey: z.string(),
+      },
+      annotations: {
+        title: 'Deactivate Workspace Profile',
+        readOnlyHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.deactivateWorkspaceProfile(args)),
+  );
+
+  server.registerTool(
     'upsert_workspace_member',
     {
       title: 'Upsert Workspace Member',
@@ -245,6 +263,29 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
   );
 
   server.registerTool(
+    'remove_workspace_member',
+    {
+      title: 'Remove Workspace Member',
+      description:
+        'Remove one member scope from a ContextForge workspace profile. Workspace profiles do not change storage mode. They define which existing scopes are consulted together.',
+      inputSchema: {
+        workspaceKey: z.string(),
+        name: z.string().optional(),
+        memberName: z.string().optional(),
+        scope: scopeSchema.optional(),
+        scopeType: scopeSchema.optional(),
+        scopeKey: z.string().optional(),
+      },
+      annotations: {
+        title: 'Remove Workspace Member',
+        readOnlyHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.removeWorkspaceMember(args)),
+  );
+
+  server.registerTool(
     'upsert_workspace_routing_rule',
     {
       title: 'Upsert Workspace Routing Rule',
@@ -268,6 +309,25 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
       },
     },
     async (args) => jsonResult(await app.upsertWorkspaceRoutingRule(args)),
+  );
+
+  server.registerTool(
+    'remove_workspace_routing_rule',
+    {
+      title: 'Remove Workspace Routing Rule',
+      description:
+        'Remove one routing rule from a ContextForge workspace profile. Workspace profiles do not change storage mode. They define which existing scopes are consulted together.',
+      inputSchema: {
+        workspaceKey: z.string(),
+        ruleKey: z.string(),
+      },
+      annotations: {
+        title: 'Remove Workspace Routing Rule',
+        readOnlyHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.removeWorkspaceRoutingRule(args)),
   );
 
   server.registerTool(

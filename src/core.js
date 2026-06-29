@@ -3241,6 +3241,10 @@ export function createContextForge(options = {}) {
       });
     },
 
+    deactivateWorkspaceProfile(options = {}) {
+      return this.deleteWorkspaceProfile(options);
+    },
+
     upsertWorkspaceMember(options = {}) {
       const member = normalizeWorkspaceMemberInput(options);
       return useStore((store) => store.upsertWorkspaceMember(member));
