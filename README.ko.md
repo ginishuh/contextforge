@@ -210,6 +210,18 @@ node src/cli.js ingestAgentRoutedSessions \
 경우 router는 해당 checkout의 Git `origin` remote를 읽어 registry `scopeKey`와
 비교한다. path와 Git remote 둘 다 맞지 않는 세션만 unmatched로 건너뛴다.
 
+Workspace retrieval 품질은 public-safe synthetic fixture로 확인할 수 있다.
+
+```bash
+node src/cli.js evalRetrieval \
+  --fixture docs/examples/workspace-eval/wastelite.synthetic.json
+```
+
+이 CLI 명령은 호출자가 평소 project-local이나 remote mode를 쓰더라도 항상 격리된
+임시 local store에 fixture 데이터만 심고 실행한다. top primary/workspace result
+window에서 필수 term이나 기대 scope role이 빠지면 JSON detail을 출력한 뒤 non-zero로
+종료한다.
+
 systemd user service로는 통합 router 하나를 설치하는 것이 기본 권장 형태다.
 
 ```bash

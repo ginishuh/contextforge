@@ -20,6 +20,7 @@ import {
   listAgentAdapters,
   watchAgentRoutedSessions,
 } from './ingest/agents.js';
+import { runRetrievalEval } from './eval/retrieval.js';
 import { startContextForgeServer } from './server.js';
 
 function parseArgs(argv) {
@@ -185,6 +186,7 @@ function toCoreOptions(options) {
     minCheckpoints: options.minCheckpoints == null ? undefined : Number(options.minCheckpoints),
     ttlDays: options.ttlDays == null ? undefined : Number(options.ttlDays),
     file: options.file,
+    fixture: options.fixture,
     repoRegistry: options.repoRegistry || options.registry || options.repoRegistryFile,
     agent: options.agent,
     adapter: options.adapter,
@@ -313,6 +315,7 @@ async function main() {
     search: (app, coreOptions) => app.search(coreOptions),
     rebuildEmbeddings: (app, coreOptions) => app.rebuildEmbeddings(coreOptions),
     processEmbeddingJobs: (app, coreOptions) => app.processEmbeddingJobs(coreOptions),
+    evalRetrieval: (_app, coreOptions) => runRetrievalEval(coreOptions),
     listEmbeddingJobs: (app, coreOptions) => app.listEmbeddingJobs(coreOptions),
     listScopeKeys: (app, coreOptions) => app.listScopeKeys(coreOptions),
     getMemory: (app, coreOptions) => app.getMemory(coreOptions),
@@ -401,7 +404,11 @@ async function main() {
   if (!handler) {
     throw new Error(`Unknown command: ${command}`);
   }
-  printJson(await handler(app, coreOptions, options));
+  const result = await handler(app, coreOptions, options);
+  printJson(result);
+  if (result?.kind === 'retrieval_eval' && Number(result.failed || 0) > 0) {
+    process.exitCode = 1;
+  }
 }
 
 main().catch((error) => {
