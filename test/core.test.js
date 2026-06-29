@@ -11234,6 +11234,66 @@ test('bootstrapContext ignores workspace-only limits when workspaceKey is absent
   assert.equal(Object.prototype.hasOwnProperty.call(bootstrap, 'workspace'), false);
 });
 
+test('evalRetrieval passes for the synthetic workspace fixture', async () => {
+  const result = await execFileAsync('node', [
+    'src/cli.js',
+    'evalRetrieval',
+    '--fixture',
+    'docs/examples/workspace-eval/wastelite.synthetic.json',
+  ]);
+  const evalResult = JSON.parse(result.stdout);
+  assert.equal(evalResult.kind, 'retrieval_eval');
+  assert.equal(evalResult.queries, 3);
+  assert.equal(evalResult.failed, 0);
+  assert.equal(evalResult.passed, 3);
+  assert.equal(evalResult.details.every((detail) => detail.passed), true);
+  assert.ok(evalResult.details.every((detail) => detail.resultWindow.primary >= 0));
+  assert.ok(evalResult.details.every((detail) => detail.resultWindow.workspace >= 0));
+});
+
+test('evalRetrieval fails with useful missing term and role details', async () => {
+  const dataDir = await makeTempDir();
+  const fixturePath = path.join(dataDir, 'failing-eval.json');
+  const fixture = JSON.parse(await fs.readFile('docs/examples/workspace-eval/wastelite.synthetic.json', 'utf8'));
+  fixture.queries = [
+    {
+      query: 'OpenAPI mirror frontend can edit?',
+      primaryScopeKey: 'github.com/example/wastelite_frontend_react',
+      expected: {
+        mustContain: ['missing required phrase'],
+        expectedScopeRoles: ['missing-role'],
+      },
+    },
+  ];
+  await fs.writeFile(fixturePath, JSON.stringify(fixture, null, 2));
+
+  await assert.rejects(
+    async () => execFileAsync('node', ['src/cli.js', 'evalRetrieval', '--fixture', fixturePath]),
+    (error) => {
+      const evalResult = JSON.parse(error.stdout);
+      assert.equal(evalResult.kind, 'retrieval_eval');
+      assert.equal(evalResult.failed, 1);
+      assert.deepEqual(evalResult.details[0].missingRequiredTerms, ['missing required phrase']);
+      assert.deepEqual(evalResult.details[0].missingScopeRoles, ['missing-role']);
+      return true;
+    },
+  );
+});
+
+test('evalRetrieval reports fixture parse errors with the fixture path', async () => {
+  const dataDir = await makeTempDir();
+  const fixturePath = path.join(dataDir, 'invalid-eval.json');
+  await fs.writeFile(fixturePath, '{not valid json');
+
+  await assert.rejects(
+    async () => execFileAsync('node', ['src/cli.js', 'evalRetrieval', '--fixture', fixturePath]),
+    (error) => {
+      assert.match(error.stderr, new RegExp(`Invalid eval fixture ${fixturePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+      return true;
+    },
+  );
+});
+
 test('agentStart is adapter-neutral and forwards workspaceKey to bootstrapContext', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });

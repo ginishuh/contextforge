@@ -186,6 +186,18 @@ bounded per-scope and total result limits. `workspaceDeactivate` soft-deletes a
 profile by marking it inactive, and a later `workspaceUpsert` with the same key
 reactivates the existing profile.
 
+Workspace retrieval can be checked with a public-safe synthetic eval fixture:
+
+```bash
+node src/cli.js evalRetrieval \
+  --fixture docs/examples/workspace-eval/wastelite.synthetic.json
+```
+
+The CLI command always runs against an isolated temporary local store, even when
+the caller normally uses project-local or remote mode. It seeds only the fixture
+data and exits non-zero when required terms or expected scope roles are missing
+from the top primary/workspace result windows.
+
 ## Distillation
 
 ContextForge assumes useful checkpoints need an LLM. The runtime should support

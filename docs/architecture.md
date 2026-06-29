@@ -205,6 +205,16 @@ retrieval metadata such as the FTS rank and method. This keeps better ranking
 debuggable and leaves room for future vector search as another retrieval
 surface, not canonical storage.
 
+Workspace retrieval evals use synthetic fixtures and, in the CLI path, an
+isolated temporary local store even when the caller normally uses project-local
+or remote mode. They seed workspace profiles, members, routing rules, and
+durable memories, then run `bootstrapContext` queries and check expected terms
+and scope roles in the top primary/workspace result windows. Evals must not
+depend on private repositories, network access, raw transcripts, or the caller's
+configured live storage mode. Library callers may still inject an app for
+specialized harnesses, but should avoid writing synthetic fixtures to a live
+canonical store.
+
 ## Memory Layers
 
 ContextForge separates memory into layers.

@@ -1,0 +1,170 @@
+{
+  "name": "synthetic-wastelite",
+  "workspaceKey": "synthetic-wastelite",
+  "displayName": "Synthetic WasteLite",
+  "primaryScope": "repo",
+  "primaryScopeKey": "github.com/example/wastelite",
+  "workspaceResultLimit": 6,
+  "workspacePerScopeLimit": 3,
+  "topN": 8,
+  "workspace": {
+    "workspaceKey": "synthetic-wastelite",
+    "displayName": "Synthetic WasteLite",
+    "canonicalScope": "repo",
+    "canonicalScopeKey": "github.com/example/wastelite-suite"
+  },
+  "members": [
+    {
+      "name": "suite",
+      "scope": "repo",
+      "scopeKey": "github.com/example/wastelite-suite",
+      "role": "cross-repo-contract",
+      "priority": 100,
+      "includeByDefault": true
+    },
+    {
+      "name": "backend",
+      "scope": "repo",
+      "scopeKey": "github.com/example/wastelite",
+      "role": "api-domain-ssot",
+      "priority": 90
+    },
+    {
+      "name": "react",
+      "scope": "repo",
+      "scopeKey": "github.com/example/wastelite_frontend_react",
+      "role": "desktop-web-consumer",
+      "priority": 60
+    },
+    {
+      "name": "flutter",
+      "scope": "repo",
+      "scopeKey": "github.com/example/wastelite_frontend",
+      "role": "mobile-consumer",
+      "priority": 60
+    }
+  ],
+  "routingRules": [
+    {
+      "ruleKey": "contract_terms",
+      "priority": 100,
+      "match": {
+        "termsAny": [
+          "contract",
+          "RFC",
+          "OpenAPI",
+          "permission",
+          "E2E",
+          "frontend",
+          "consumer",
+          "migration",
+          "release gate",
+          "schema",
+          "generated",
+          "browser test",
+          "monthly closing",
+          "export"
+        ]
+      },
+      "include": {
+        "roles": [
+          "cross-repo-contract",
+          "api-domain-ssot",
+          "desktop-web-consumer",
+          "mobile-consumer"
+        ]
+      }
+    }
+  ],
+  "memories": [
+    {
+      "scope": "repo",
+      "scopeKey": "github.com/example/wastelite-suite",
+      "key": "openapi-mirror-contract",
+      "category": "contract",
+      "content": "Synthetic contract: OpenAPI mirror files are backend-owned mirror artifacts. Frontend consumers must not hand-edit generated schema files; do not hand-edit the backend source of truth.",
+      "tags": ["OpenAPI", "frontend", "generated", "contract"],
+      "importance": 8
+    },
+    {
+      "scope": "repo",
+      "scopeKey": "github.com/example/wastelite",
+      "key": "backend-openapi-source",
+      "category": "contract",
+      "content": "Backend is the api-domain-ssot for OpenAPI endpoint schema and permission migration behavior.",
+      "tags": ["OpenAPI", "schema", "permission"],
+      "importance": 8
+    },
+    {
+      "scope": "repo",
+      "scopeKey": "github.com/example/wastelite_frontend_react",
+      "key": "react-openapi-consumer",
+      "category": "consumer",
+      "content": "React desktop client consumes generated OpenAPI mirror files and should not hand-edit the generated contract.",
+      "tags": ["react", "OpenAPI", "consumer"],
+      "importance": 6
+    },
+    {
+      "scope": "repo",
+      "scopeKey": "github.com/example/wastelite-suite",
+      "key": "monthly-closing-tier-contract",
+      "category": "contract",
+      "content": "Synthetic monthly closing permission contract: small customers are Stable, mid customers are Beta, and live preview requires accounting.view_live_preview.",
+      "tags": ["monthly closing", "permission", "tier", "contract"],
+      "importance": 8
+    },
+    {
+      "scope": "repo",
+      "scopeKey": "github.com/example/wastelite",
+      "key": "monthly-closing-permission-source",
+      "category": "contract",
+      "content": "Backend permission source maps monthly closing small to Stable and mid to Beta with accounting.view_live_preview enforced by the API.",
+      "tags": ["monthly closing", "permission", "api"],
+      "importance": 8
+    },
+    {
+      "scope": "repo",
+      "scopeKey": "github.com/example/wastelite_frontend_react",
+      "key": "export-download-browser-test",
+      "category": "e2e",
+      "content": "Browser test for export download must open downloaded file bytes and verify the response is not SPA index.html and not 404.",
+      "tags": ["export", "download", "browser test"],
+      "importance": 7
+    },
+    {
+      "scope": "repo",
+      "scopeKey": "github.com/example/wastelite-suite",
+      "key": "export-release-gate",
+      "category": "contract",
+      "content": "Release gate for export download checks browser test evidence: open downloaded file, not SPA index.html, and not 404.",
+      "tags": ["export", "release gate", "browser test"],
+      "importance": 7
+    }
+  ],
+  "queries": [
+    {
+      "query": "OpenAPI mirror frontend can edit?",
+      "primaryScopeKey": "github.com/example/wastelite_frontend_react",
+      "expected": {
+        "mustContain": ["backend-owned mirror", "do not hand-edit"],
+        "expectedScopeRoles": ["api-domain-ssot", "desktop-web-consumer"]
+      }
+    },
+    {
+      "query": "monthly closing permission tier beta stable",
+      "primaryScopeKey": "github.com/example/wastelite",
+      "expected": {
+        "mustContain": ["small", "Stable", "mid", "Beta", "accounting.view_live_preview"],
+        "expectedScopeRoles": ["cross-repo-contract", "api-domain-ssot"]
+      }
+    },
+    {
+      "query": "export download browser test",
+      "primaryScopeKey": "github.com/example/wastelite_frontend_react",
+      "expected": {
+        "mustContain": ["open downloaded file", "not SPA index.html", "not 404"],
+        "expectedScopeRoles": ["desktop-web-consumer", "cross-repo-contract"]
+      }
+    }
+  ]
+}
