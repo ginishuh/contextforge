@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { createContextForge } from './core.js';
 
 const scopeSchema = z.enum(['shared', 'repo', 'local']);
+const workspaceModeSchema = z.enum(['off', 'auto', 'strict']);
 const consultReasonSchema = z.enum([
   'startup',
   'resume',
@@ -17,6 +18,7 @@ const consultReasonSchema = z.enum([
 ]);
 const metadataSchema = z.record(z.string(), z.unknown());
 const optionalTags = z.array(z.string()).optional();
+const workspaceRuleJsonSchema = z.record(z.string(), z.array(z.string()));
 
 const scopedSchema = {
   scope: scopeSchema.optional(),
@@ -123,6 +125,209 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
       },
     },
     async () => jsonResult(await app.getRuntimeSettings()),
+  );
+
+  server.registerTool(
+    'list_workspaces',
+    {
+      title: 'List Workspaces',
+      description:
+        'List ContextForge workspace profiles. Workspace profiles do not change storage mode. They define which existing scopes are consulted together.',
+      inputSchema: {
+        status: z.enum(['active', 'inactive', 'all']).optional(),
+        limit: z.number().int().positive().optional(),
+      },
+      annotations: {
+        title: 'List Workspaces',
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.listWorkspaceProfiles(args)),
+  );
+
+  server.registerTool(
+    'get_workspace',
+    {
+      title: 'Get Workspace',
+      description:
+        'Read one ContextForge workspace profile with members and routing rules. Workspace profiles do not change storage mode. They define which existing scopes are consulted together.',
+      inputSchema: {
+        workspaceKey: z.string(),
+        includeInactive: z.boolean().optional(),
+      },
+      annotations: {
+        title: 'Get Workspace',
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.getWorkspaceProfile(args)),
+  );
+
+  server.registerTool(
+    'resolve_workspace',
+    {
+      title: 'Resolve Workspace',
+      description:
+        'Resolve a workspace scope plan for a primary scope and query. Workspace profiles do not change storage mode. They define which existing scopes are consulted together.',
+      inputSchema: {
+        workspaceKey: z.string(),
+        workspaceMode: workspaceModeSchema.optional(),
+        mode: workspaceModeSchema.optional(),
+        primaryScope: scopeSchema.optional(),
+        primaryScopeType: scopeSchema.optional(),
+        primaryScopeKey: z.string().optional(),
+        scope: scopeSchema.optional(),
+        scopeKey: z.string().optional(),
+        query: z.string().optional(),
+        consultReason: consultReasonSchema.optional(),
+        includeShared: z.boolean().optional(),
+      },
+      annotations: {
+        title: 'Resolve Workspace',
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.resolveWorkspace(args)),
+  );
+
+  server.registerTool(
+    'upsert_workspace_profile',
+    {
+      title: 'Upsert Workspace Profile',
+      description:
+        'Create, update, or reactivate a ContextForge workspace profile. Workspace profiles do not change storage mode. They define which existing scopes are consulted together.',
+      inputSchema: {
+        workspaceKey: z.string(),
+        displayName: z.string().optional(),
+        canonicalScope: scopeSchema.optional(),
+        canonicalScopeType: scopeSchema.optional(),
+        canonicalScopeKey: z.string().optional(),
+        status: z.enum(['active', 'inactive']).optional(),
+        metadata: metadataSchema.optional(),
+      },
+      annotations: {
+        title: 'Upsert Workspace Profile',
+        readOnlyHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.upsertWorkspaceProfile(args)),
+  );
+
+  server.registerTool(
+    'deactivate_workspace_profile',
+    {
+      title: 'Deactivate Workspace Profile',
+      description:
+        'Soft-delete a ContextForge workspace profile by marking it inactive. Workspace profiles do not change storage mode. They define which existing scopes are consulted together.',
+      inputSchema: {
+        workspaceKey: z.string(),
+      },
+      annotations: {
+        title: 'Deactivate Workspace Profile',
+        readOnlyHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.deactivateWorkspaceProfile(args)),
+  );
+
+  server.registerTool(
+    'upsert_workspace_member',
+    {
+      title: 'Upsert Workspace Member',
+      description:
+        'Create or update a member scope in a ContextForge workspace profile. Workspace profiles do not change storage mode. They define which existing scopes are consulted together.',
+      inputSchema: {
+        workspaceKey: z.string(),
+        name: z.string(),
+        scope: scopeSchema.optional(),
+        scopeType: scopeSchema.optional(),
+        scopeKey: z.string(),
+        role: z.string().optional(),
+        priority: z.number().int().optional(),
+        includeByDefault: z.boolean().optional(),
+        allowLocal: z.boolean().optional(),
+        metadata: metadataSchema.optional(),
+      },
+      annotations: {
+        title: 'Upsert Workspace Member',
+        readOnlyHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.upsertWorkspaceMember(args)),
+  );
+
+  server.registerTool(
+    'remove_workspace_member',
+    {
+      title: 'Remove Workspace Member',
+      description:
+        'Remove one member scope from a ContextForge workspace profile. Workspace profiles do not change storage mode. They define which existing scopes are consulted together.',
+      inputSchema: {
+        workspaceKey: z.string(),
+        name: z.string().optional(),
+        memberName: z.string().optional(),
+        scope: scopeSchema.optional(),
+        scopeType: scopeSchema.optional(),
+        scopeKey: z.string().optional(),
+      },
+      annotations: {
+        title: 'Remove Workspace Member',
+        readOnlyHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.removeWorkspaceMember(args)),
+  );
+
+  server.registerTool(
+    'upsert_workspace_routing_rule',
+    {
+      title: 'Upsert Workspace Routing Rule',
+      description:
+        'Create or update a routing rule for a ContextForge workspace profile. Workspace profiles do not change storage mode. They define which existing scopes are consulted together.',
+      inputSchema: {
+        workspaceKey: z.string(),
+        ruleKey: z.string(),
+        priority: z.number().int().optional(),
+        match: workspaceRuleJsonSchema.optional(),
+        include: workspaceRuleJsonSchema.optional(),
+        exclude: workspaceRuleJsonSchema.optional(),
+        includeShared: z.boolean().optional(),
+        status: z.enum(['active', 'inactive']).optional(),
+        metadata: metadataSchema.optional(),
+      },
+      annotations: {
+        title: 'Upsert Workspace Routing Rule',
+        readOnlyHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.upsertWorkspaceRoutingRule(args)),
+  );
+
+  server.registerTool(
+    'remove_workspace_routing_rule',
+    {
+      title: 'Remove Workspace Routing Rule',
+      description:
+        'Remove one routing rule from a ContextForge workspace profile. Workspace profiles do not change storage mode. They define which existing scopes are consulted together.',
+      inputSchema: {
+        workspaceKey: z.string(),
+        ruleKey: z.string(),
+      },
+      annotations: {
+        title: 'Remove Workspace Routing Rule',
+        readOnlyHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.removeWorkspaceRoutingRule(args)),
   );
 
   server.registerTool(

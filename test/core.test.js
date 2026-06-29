@@ -10501,6 +10501,16 @@ test('REMOTE_METHODS exposes resume, suggestion, auto-promotion, and reconciliat
   assert.ok(REMOTE_METHODS.includes('getRuntimeSettings'));
   assert.ok(REMOTE_METHODS.includes('updateRuntimeSettings'));
   assert.ok(REMOTE_METHODS.includes('checkDistillProvider'));
+  assert.ok(REMOTE_METHODS.includes('upsertWorkspaceProfile'));
+  assert.ok(REMOTE_METHODS.includes('getWorkspaceProfile'));
+  assert.ok(REMOTE_METHODS.includes('listWorkspaceProfiles'));
+  assert.ok(REMOTE_METHODS.includes('deleteWorkspaceProfile'));
+  assert.ok(REMOTE_METHODS.includes('deactivateWorkspaceProfile'));
+  assert.ok(REMOTE_METHODS.includes('upsertWorkspaceMember'));
+  assert.ok(REMOTE_METHODS.includes('removeWorkspaceMember'));
+  assert.ok(REMOTE_METHODS.includes('upsertWorkspaceRoutingRule'));
+  assert.ok(REMOTE_METHODS.includes('removeWorkspaceRoutingRule'));
+  assert.ok(REMOTE_METHODS.includes('resolveWorkspace'));
   assert.ok(REMOTE_METHODS.includes('listScopeKeys'));
   assert.ok(REMOTE_METHODS.includes('listRecentDistillRuns'));
   assert.ok(REMOTE_METHODS.includes('expandMemoryCluster'));
@@ -10524,6 +10534,356 @@ test('REMOTE_METHODS exposes resume, suggestion, auto-promotion, and reconciliat
   assert.ok(REMOTE_METHODS.includes('listCheckpoints'));
   assert.ok(REMOTE_METHODS.includes('getSessionWorkingContext'));
   assert.ok(REMOTE_METHODS.includes('upsertSessionWorkingContext'));
+});
+
+test('workspace profiles persist members and resolve explainable scope plans', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+
+  const profile = app.upsertWorkspaceProfile({
+    workspaceKey: 'synthetic-product',
+    displayName: 'Synthetic Product',
+    canonicalScope: 'repo',
+    canonicalScopeKey: 'github.com/example/suite',
+    repoPath: '/private/should-not-persist',
+  });
+  assert.equal(profile.workspaceKey, 'synthetic-product');
+  assert.equal(profile.status, 'active');
+
+  app.upsertWorkspaceMember({
+    workspaceKey: 'synthetic-product',
+    name: 'suite',
+    scope: 'repo',
+    scopeKey: 'github.com/example/suite',
+    role: 'cross-repo-contract',
+    priority: 100,
+    includeByDefault: true,
+  });
+  app.upsertWorkspaceMember({
+    workspaceKey: 'synthetic-product',
+    name: 'backend',
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    role: 'api-domain-ssot',
+    priority: 90,
+  });
+  app.upsertWorkspaceMember({
+    workspaceKey: 'synthetic-product',
+    name: 'web',
+    scope: 'repo',
+    scopeKey: 'github.com/example/web',
+    role: 'desktop-web-consumer',
+    priority: 60,
+  });
+  app.upsertWorkspaceMember({
+    workspaceKey: 'synthetic-product',
+    name: 'docs',
+    scope: 'repo',
+    scopeKey: 'github.com/example/docs',
+    role: 'docs',
+    priority: 10,
+  });
+  assert.throws(() =>
+    app.upsertWorkspaceMember({
+      workspaceKey: 'synthetic-product',
+      name: 'duplicate-suite',
+      scope: 'repo',
+      scopeKey: 'github.com/example/suite',
+      role: 'docs',
+    }),
+  );
+  assert.throws(() =>
+    app.upsertWorkspaceMember({
+      workspaceKey: 'synthetic-product',
+      name: 'local-machine',
+      scope: 'local',
+      scopeKey: 'machine-only',
+    }),
+  );
+
+  app.upsertWorkspaceRoutingRule({
+    workspaceKey: 'synthetic-product',
+    ruleKey: 'contract_terms',
+    priority: 100,
+    matchJson: '{"termsAny":["contract","OpenAPI","permission","E2E","frontend"]}',
+    includeJson: '{"roles":["cross-repo-contract","api-domain-ssot","desktop-web-consumer","docs"]}',
+    excludeJson: '{"roles":["docs"]}',
+    includeShared: false,
+  });
+  app.upsertWorkspaceRoutingRule({
+    workspaceKey: 'synthetic-product',
+    ruleKey: 'primary_exclude_attempt',
+    priority: 90,
+    match: { termsAny: ['OpenAPI'] },
+    exclude: { members: ['backend'] },
+  });
+
+  const fetched = app.getWorkspaceProfile({ workspaceKey: 'synthetic-product' });
+  assert.equal(fetched.members.length, 4);
+  assert.equal(fetched.routingRules.length, 2);
+  assert.equal(JSON.stringify(fetched).includes('/private/should-not-persist'), false);
+
+  const plan = app.resolveWorkspace({
+    workspaceKey: 'synthetic-product',
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    query: 'OpenAPI permission frontend contract',
+    consultReason: 'startup',
+  });
+  assert.equal(plan.enabled, true);
+  assert.equal(plan.primaryScope.memberName, 'backend');
+  assert.deepEqual(
+    plan.includedScopes.map((scope) => scope.memberName),
+    ['suite', 'backend', 'web'],
+  );
+  assert.equal(plan.includeShared, false);
+  assert.deepEqual(plan.excludedScopes.map((scope) => scope.memberName), ['docs']);
+  assert.deepEqual(plan.excludedScopes[0].excludedBecause, ['excluded_by_rule:contract_terms']);
+  assert.equal(plan.includedScopes.find((scope) => scope.memberName === 'backend').includedBecause.includes('excluded_by_rule:primary_exclude_attempt'), false);
+  assert.equal(plan.warnings.find((warning) => warning.code === 'primary_scope_matched_exclude_rule').reason, 'excluded_by_rule:primary_exclude_attempt');
+  assert.equal(plan.matchedRules[0].ruleKey, 'contract_terms');
+  assert.deepEqual(plan.matchedRules[0].matchedTerms, ['contract', 'OpenAPI', 'permission', 'frontend']);
+
+  const quietPlan = app.resolveWorkspace({
+    workspaceKey: 'synthetic-product',
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    query: 'ordinary backend task',
+  });
+  assert.deepEqual(
+    quietPlan.includedScopes.map((scope) => scope.memberName),
+    ['suite', 'backend'],
+  );
+
+  const offPlan = app.resolveWorkspace({
+    workspaceKey: 'synthetic-product',
+    workspaceMode: 'off',
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+  });
+  assert.equal(offPlan.enabled, false);
+  assert.equal(offPlan.warnings[0].code, 'workspace_mode_off');
+
+  const missingPlan = app.resolveWorkspace({
+    workspaceKey: 'missing-workspace',
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+  });
+  assert.equal(missingPlan.enabled, false);
+  assert.equal(missingPlan.warnings[0].code, 'workspace_not_found');
+
+  const outsideAuto = app.resolveWorkspace({
+    workspaceKey: 'synthetic-product',
+    scope: 'repo',
+    scopeKey: 'github.com/example/other',
+    query: 'OpenAPI',
+  });
+  assert.equal(outsideAuto.enabled, false);
+  assert.equal(outsideAuto.warnings[0].code, 'primary_scope_not_workspace_member');
+  assert.throws(() =>
+    app.resolveWorkspace({
+      workspaceKey: 'synthetic-product',
+      workspaceMode: 'strict',
+      scope: 'repo',
+      scopeKey: 'github.com/example/other',
+    }),
+  );
+
+  const inactive = app.deleteWorkspaceProfile({ workspaceKey: 'synthetic-product' });
+  assert.equal(inactive.status, 'inactive');
+  const inactivePlan = app.resolveWorkspace({
+    workspaceKey: 'synthetic-product',
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+  });
+  assert.equal(inactivePlan.enabled, false);
+  assert.equal(inactivePlan.warnings[0].code, 'workspace_inactive');
+  const reactivated = app.upsertWorkspaceProfile({
+    workspaceKey: 'synthetic-product',
+    displayName: 'Synthetic Product Reactivated',
+    canonicalScope: 'repo',
+    canonicalScopeKey: 'github.com/example/suite',
+  });
+  assert.equal(reactivated.id, profile.id);
+  assert.equal(reactivated.status, 'active');
+});
+
+test('workspace resolver warns when canonical scope is not an active member', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+  app.upsertWorkspaceProfile({
+    workspaceKey: 'missing-canonical',
+    canonicalScope: 'repo',
+    canonicalScopeKey: 'github.com/example/suite',
+  });
+  app.upsertWorkspaceMember({
+    workspaceKey: 'missing-canonical',
+    name: 'backend',
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    role: 'api-domain-ssot',
+  });
+
+  const plan = app.resolveWorkspace({
+    workspaceKey: 'missing-canonical',
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    query: 'contract',
+  });
+  assert.equal(plan.enabled, true);
+  assert.equal(plan.warnings[0].code, 'canonical_scope_not_member');
+});
+
+test('workspace routing JSON validation rejects unsupported shapes', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+  app.upsertWorkspaceProfile({ workspaceKey: 'validation-demo' });
+  assert.throws(() =>
+    app.upsertWorkspaceRoutingRule({
+      workspaceKey: 'validation-demo',
+      ruleKey: 'bad_array',
+      matchJson: '[]',
+    }),
+  );
+  assert.throws(() =>
+    app.upsertWorkspaceRoutingRule({
+      workspaceKey: 'validation-demo',
+      ruleKey: 'bad_key',
+      matchJson: '{"regex":"nope"}',
+    }),
+  );
+  assert.throws(() =>
+    app.upsertWorkspaceRoutingRule({
+      workspaceKey: 'validation-demo',
+      ruleKey: 'too_many_terms',
+      match: { termsAny: Array.from({ length: 51 }, (_, index) => `term-${index}`) },
+    }),
+  );
+});
+
+test('remote workspace profile calls dispatch to the canonical server without scoped fallback', async () => {
+  const calls = [];
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_STORAGE_MODE: 'remote',
+      CONTEXTFORGE_REMOTE_URL: 'https://memory.example.test',
+    },
+    cwd: process.cwd(),
+    fetchImpl: async (url, init) => {
+      calls.push({ url: String(url), body: JSON.parse(init.body) });
+      return new Response(JSON.stringify({ result: { workspaceKey: 'remote-workspace', ok: true } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  });
+
+  const result = await app.upsertWorkspaceProfile({ workspaceKey: 'remote-workspace' });
+  assert.equal(result.workspaceKey, 'remote-workspace');
+  assert.equal(calls[0].url, 'https://memory.example.test/v0/upsertWorkspaceProfile');
+  assert.deepEqual(calls[0].body, { workspaceKey: 'remote-workspace' });
+});
+
+test('CLI supports workspace profile upsert member rule and resolve commands', async () => {
+  const dataDir = await makeTempDir();
+  const env = { ...process.env, CONTEXTFORGE_DATA_DIR: dataDir };
+
+  await execFileAsync(
+    'node',
+    [
+      'src/cli.js',
+      'workspaceUpsert',
+      '--workspaceKey',
+      'cli-workspace',
+      '--displayName',
+      'CLI Workspace',
+      '--canonicalScope',
+      'repo',
+      '--canonicalScopeKey',
+      'github.com/example/suite',
+    ],
+    { env },
+  );
+  await execFileAsync(
+    'node',
+    [
+      'src/cli.js',
+      'workspaceMemberUpsert',
+      '--workspaceKey',
+      'cli-workspace',
+      '--name',
+      'suite',
+      '--scope',
+      'repo',
+      '--scopeKey',
+      'github.com/example/suite',
+      '--role',
+      'cross-repo-contract',
+      '--priority',
+      '100',
+      '--includeByDefault',
+      'true',
+    ],
+    { env },
+  );
+  await execFileAsync(
+    'node',
+    [
+      'src/cli.js',
+      'workspaceMemberUpsert',
+      '--workspaceKey',
+      'cli-workspace',
+      '--name',
+      'backend',
+      '--scope',
+      'repo',
+      '--scopeKey',
+      'github.com/example/backend',
+      '--role',
+      'api-domain-ssot',
+      '--priority',
+      '90',
+    ],
+    { env },
+  );
+  await execFileAsync(
+    'node',
+    [
+      'src/cli.js',
+      'workspaceRuleUpsert',
+      '--workspaceKey',
+      'cli-workspace',
+      '--ruleKey',
+      'contract_terms',
+      '--matchJson',
+      '{"termsAny":["OpenAPI"]}',
+      '--includeJson',
+      '{"roles":["api-domain-ssot"]}',
+    ],
+    { env },
+  );
+  const resolved = await execFileAsync(
+    'node',
+    [
+      'src/cli.js',
+      'workspaceResolve',
+      '--workspaceKey',
+      'cli-workspace',
+      '--scope',
+      'repo',
+      '--scopeKey',
+      'github.com/example/backend',
+      '--query',
+      'OpenAPI',
+    ],
+    { env },
+  );
+  const plan = JSON.parse(resolved.stdout);
+  assert.equal(plan.enabled, true);
+  assert.deepEqual(
+    plan.includedScopes.map((scope) => scope.memberName),
+    ['suite', 'backend'],
+  );
 });
 
 test('CLI supports the v0 workflow with synthetic data', async () => {
@@ -10733,6 +11093,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'correct_memory',
       'db_info',
       'deactivate_memory',
+      'deactivate_workspace_profile',
       'distill_checkpoint',
       'distill_usage',
       'expand_memory_cluster',
@@ -10740,6 +11101,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'get_runtime_settings',
       'get_session_working_context',
       'get_working_summary',
+      'get_workspace',
       'list_checkpoints',
       'list_due_consolidations',
       'list_due_distill_sessions',
@@ -10749,6 +11111,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'list_memory_events',
       'list_memory_update_candidates',
       'list_preference_occurrences',
+      'list_workspaces',
       'llm_usage_rollup',
       'migrate_scope',
       'process_consolidations',
@@ -10762,12 +11125,18 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'reject_memory_candidate',
       'reject_memory_update_candidate',
       'remember',
+      'remove_workspace_member',
+      'remove_workspace_routing_rule',
+      'resolve_workspace',
       'search',
       'session_status',
       'skip_memory_update_candidate',
       'suggest_memory_promotions',
       'sync_resume_context',
       'upsert_session_working_context',
+      'upsert_workspace_member',
+      'upsert_workspace_profile',
+      'upsert_workspace_routing_rule',
     ]);
     const rememberTool = toolList.tools.find((tool) => tool.name === 'remember');
     assert.ok(rememberTool.inputSchema.properties.repoPath);
