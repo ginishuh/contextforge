@@ -42,6 +42,10 @@ enabled, read top-level `results` as the primary-scope view and
 `workspace.results` as bounded supplemental member-scope context. Top-level
 `includeShared=true` does not by itself enable workspace shared retrieval;
 workspace shared results require a workspace routing rule with `includeShared`.
+During active work, targeted `search` calls may also pass `workspaceKey` when a
+file/API/error/domain lookup needs cross-repo memory. Without `workspaceKey`,
+`search` keeps its ordinary scoped array response; with `workspaceKey`, inspect
+the separate `workspace` block for supplemental member-scope results.
 
 Do not call `bootstrap_context` just to re-confirm current intent inside the
 same uninterrupted active session. For active-session file/API/error/domain

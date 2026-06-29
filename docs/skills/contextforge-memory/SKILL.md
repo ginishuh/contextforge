@@ -150,7 +150,7 @@ At the start of non-trivial project work:
 8. When a workspace profile is configured and the task needs cross-repo context, pass `workspaceKey` to receive bounded supplemental workspace results in `workspace.results`.
 9. Set `includeShared: true` only for cross-repo/user-wide policy, credentials location, deployment, or recurring preference questions.
 10. Read the storage block and result trust roles.
-11. Use targeted `search` calls only when more detail is needed.
+11. Use targeted `search` calls only when more detail is needed. For active-session cross-repo lookups, pass `workspaceKey`; without it, `search` keeps the ordinary scoped array response.
 12. Use `get_memory` only when you already know the exact durable key.
 
 `bootstrap_context` does not create a session. It retrieves scoped context.

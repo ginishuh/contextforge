@@ -471,6 +471,12 @@ node src/cli.js bootstrapContext \
 - `workingSummary`: sessionId를 알 때 가져오는 현재 세션 resume state.
 - `rawTail`: 필요한 경우에만 요청하는 최근 raw event 꼬리.
 
+작업 중 targeted lookup에는 `search`에도 `--workspaceKey`를 넘길 수 있다.
+`workspaceKey`가 없으면 `search`는 기존 배열 응답을 유지한다. `workspaceKey`
+가 있으면 `{ kind: "workspace_search", results, workspace }`를 반환하며,
+`results`는 primary scope 검색 결과, `workspace.results`는 provenance가 붙은
+bounded supplemental member-scope 결과다.
+
 에이전트는 `handoff.latestHandoff`를 먼저 읽고, `liveState.verifyHints`로
 branch/PR/CI/worktree를 재검증한 뒤 durable memory와 검색 결과를 참고해야 한다.
 

@@ -175,6 +175,14 @@ overtaken by checkpoint handoff state when handoffs are explicitly included.
 Top-level `includeShared` belongs to the primary bootstrap view; workspace
 shared retrieval is enabled by workspace routing rules with `includeShared`.
 
+Standalone `search` can also opt into workspace federation with `workspaceKey`
+for active-session targeted lookup. It preserves the existing array response
+when `workspaceKey` is absent. When `workspaceKey` is present, it returns a
+`workspace_search` envelope with primary-scope `results` and a separate bounded
+`workspace` block. Search workspace federation uses the same scope plan,
+per-scope limits, provenance, shared opt-in, and raw-evidence-free retrieval
+policy as bootstrap.
+
 `include_by_default` is a scope-plan convenience, not permission to retrieve an
 unbounded amount of memory. Use it sparingly, usually for the canonical suite or
 contract repo, and keep workspace retrieval bounded by per-scope and total
