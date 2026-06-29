@@ -10498,6 +10498,8 @@ test('listScopeKeys returns real scopes from memories, candidates, and distill r
 test('REMOTE_METHODS exposes resume, suggestion, auto-promotion, and reconciliation wrappers', () => {
   assert.ok(REMOTE_METHODS.includes('migrateScope'));
   assert.ok(REMOTE_METHODS.includes('syncResumeContext'));
+  assert.ok(REMOTE_METHODS.includes('agentStart'));
+  assert.ok(REMOTE_METHODS.includes('agentCloseout'));
   assert.ok(REMOTE_METHODS.includes('getRuntimeSettings'));
   assert.ok(REMOTE_METHODS.includes('updateRuntimeSettings'));
   assert.ok(REMOTE_METHODS.includes('checkDistillProvider'));
@@ -10782,6 +10784,116 @@ test('remote workspace profile calls dispatch to the canonical server without sc
   assert.equal(result.workspaceKey, 'remote-workspace');
   assert.equal(calls[0].url, 'https://memory.example.test/v0/upsertWorkspaceProfile');
   assert.deepEqual(calls[0].body, { workspaceKey: 'remote-workspace' });
+});
+
+test('remote agentStart resolves local path hints before canonical server dispatch', async () => {
+  const calls = [];
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_STORAGE_MODE: 'remote',
+      CONTEXTFORGE_REMOTE_URL: 'https://memory.example.test',
+      CONTEXTFORGE_DEFAULT_SCOPE_KEY: 'github.com/example/backend',
+    },
+    cwd: process.cwd(),
+    fetchImpl: async (url, init) => {
+      const body = JSON.parse(init.body);
+      calls.push({ url: String(url), body });
+      return new Response(
+        JSON.stringify({
+          result: {
+            kind: 'agent_start_context',
+            agent: body.agent,
+            scope: { scopeType: body.scopeType, scopeKey: body.scopeKey },
+            context: {
+              scope: { scopeType: body.scopeType, scopeKey: body.scopeKey },
+              storage: {
+                mode: 'local',
+                authority: 'local',
+                connection: { mode: 'http-server', accessPath: 'in-process' },
+              },
+              results: [],
+            },
+            summary: {
+              storage: {
+                mode: 'local',
+                authority: 'local',
+              },
+            },
+          },
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      );
+    },
+  });
+
+  const result = await app.agentStart({
+    agent: 'codex',
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    repoPath: process.cwd(),
+    query: 'remote agent start',
+  });
+  assert.equal(calls[0].url, 'https://memory.example.test/v0/agentStart');
+  assert.equal(calls[0].body.repoPath, undefined);
+  assert.equal(calls[0].body.scopeKey, 'github.com/example/backend');
+  assert.equal(result.context.storage.mode, 'remote');
+  assert.equal(result.context.storage.authority, 'canonical');
+  assert.equal(result.context.storage.serverMode, 'local');
+});
+
+test('remote agentCloseout resolves local path hints and marks canonical storage', async () => {
+  const calls = [];
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_STORAGE_MODE: 'remote',
+      CONTEXTFORGE_REMOTE_URL: 'https://memory.example.test',
+      CONTEXTFORGE_DEFAULT_SCOPE_KEY: 'github.com/example/backend',
+    },
+    cwd: process.cwd(),
+    fetchImpl: async (url, init) => {
+      const body = JSON.parse(init.body);
+      calls.push({ url: String(url), body });
+      return new Response(
+        JSON.stringify({
+          result: {
+            kind: 'agent_closeout_review',
+            agent: body.agent,
+            scope: { scopeType: body.scopeType, scopeKey: body.scopeKey },
+            source: {
+              sessionId: body.sessionId,
+              checkpointId: body.checkpointId || null,
+              mode: 'session_pending_batch',
+            },
+            storage: {
+              mode: 'local',
+              authority: 'local',
+            },
+          },
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      );
+    },
+  });
+
+  const result = await app.agentCloseout({
+    agent: 'codex',
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    repoPath: process.cwd(),
+    sessionId: 'codex:remote-closeout-session',
+  });
+  assert.equal(calls[0].url, 'https://memory.example.test/v0/agentCloseout');
+  assert.equal(calls[0].body.repoPath, undefined);
+  assert.equal(calls[0].body.scopeKey, 'github.com/example/backend');
+  assert.equal(result.storage.mode, 'remote');
+  assert.equal(result.storage.authority, 'canonical');
+  assert.equal(result.storage.serverMode, 'local');
 });
 
 test('CLI supports workspace profile upsert member rule and resolve commands', async () => {
@@ -11120,6 +11232,273 @@ test('bootstrapContext ignores workspace-only limits when workspaceKey is absent
   });
 
   assert.equal(Object.prototype.hasOwnProperty.call(bootstrap, 'workspace'), false);
+});
+
+test('agentStart is adapter-neutral and forwards workspaceKey to bootstrapContext', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+  app.upsertWorkspaceProfile({
+    workspaceKey: 'agent-start-workspace',
+    canonicalScope: 'repo',
+    canonicalScopeKey: 'github.com/example/backend',
+  });
+  app.upsertWorkspaceMember({
+    workspaceKey: 'agent-start-workspace',
+    name: 'backend',
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    role: 'api-domain-ssot',
+  });
+
+  for (const adapter of listAgentAdapters()) {
+    const result = await app.agentStart({
+      agent: adapter.id,
+      scope: 'repo',
+      scopeKey: 'github.com/example/backend',
+      workspaceKey: 'agent-start-workspace',
+      query: 'OpenAPI startup context',
+      consultReason: 'startup',
+    });
+    assert.equal(result.kind, 'agent_start_context');
+    assert.equal(result.agent, adapter.id);
+    assert.equal(result.context.workspace.enabled, true);
+    assert.equal(result.summary.workspace.workspaceKey, 'agent-start-workspace');
+  }
+});
+
+test('agentCloseout rejects broad backlog review without sessionId or checkpointId', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+
+  await assert.rejects(
+    () =>
+      app.agentCloseout({
+        agent: 'codex',
+        scope: 'repo',
+        scopeKey: 'github.com/example/backend',
+      }),
+    /requires sessionId or checkpointId/,
+  );
+});
+
+test('agent lifecycle rejects a missing agent adapter value clearly', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+
+  await assert.rejects(
+    () =>
+      app.agentStart({
+        agent: true,
+        scope: 'repo',
+        scopeKey: 'github.com/example/backend',
+        query: 'startup',
+      }),
+    /require an agent adapter id value/,
+  );
+});
+
+test('agentCloseout distills, audits, suggests, and preserves adapter session id without promotion', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'agent_closeout_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      agent_closeout_provider: async () => ({
+        summaryShort: 'Agent closeout checkpoint.',
+        summaryText: 'Agent closeout should keep promotion review read-only by default.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'agent-closeout-runbook',
+            content: 'Agent closeout should review candidates without promoting them by default.',
+            category: 'runbook',
+            candidateType: 'runbook',
+            confidence: 0.95,
+            stability: 0.95,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+        ],
+      }),
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    sessionId: 'codex:agent-closeout-session',
+    role: 'assistant',
+    content: 'Close out this agent session with one durable candidate.',
+  });
+
+  const result = await app.agentCloseout({
+    agent: 'codex',
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    sessionId: 'codex:agent-closeout-session',
+    distill: 'always',
+    trigger: 'manual_closeout',
+    audit: true,
+    suggest: true,
+  });
+
+  assert.equal(result.kind, 'agent_closeout_review');
+  assert.equal(result.agent, 'codex');
+  assert.equal(result.dryRun, true);
+  assert.equal(result.source.sessionId, 'codex:agent-closeout-session');
+  assert.equal(result.checkpoint.sessionId, 'codex:agent-closeout-session');
+  assert.equal(result.checkpoint.memoryCandidateCount, 1);
+  assert.equal(result.audit.kind, 'memory_candidate_audit_suggestions');
+  assert.equal(result.suggestions.kind, 'memory_promotion_suggestions');
+  assert.equal(result.summary.suggestions.proposalCount, 1);
+  assert.equal(
+    app.listMemories({
+      scope: 'repo',
+      scopeKey: 'github.com/example/backend',
+    }).length,
+    0,
+  );
+});
+
+test('agentCloseout supports checkpointId-only closeout review without distilling', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'agent_checkpoint_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      agent_checkpoint_provider: async () => ({
+        summaryShort: 'Checkpoint-only closeout.',
+        summaryText: 'Checkpoint-only closeout should review existing candidates.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'checkpoint-only-runbook',
+            content: 'Checkpoint-only closeout should not require the original session id.',
+            category: 'runbook',
+            candidateType: 'runbook',
+            confidence: 0.9,
+            stability: 0.9,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+        ],
+      }),
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    sessionId: 'claude_code:checkpoint-only-session',
+    role: 'assistant',
+    content: 'Create a checkpoint candidate for checkpoint-only closeout.',
+  });
+  const checkpoint = await app.distillCheckpoint({
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    sessionId: 'claude_code:checkpoint-only-session',
+  });
+
+  const result = await app.agentCloseout({
+    agent: 'claude_code',
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    checkpointId: checkpoint.id,
+    trigger: 'manual_closeout',
+    audit: false,
+    suggest: false,
+  });
+
+  assert.equal(result.source.sessionId, null);
+  assert.equal(result.source.checkpointId, checkpoint.id);
+  assert.equal(result.source.mode, 'provided_checkpoint');
+  assert.equal(result.distill.executed, false);
+  assert.equal(result.distill.skippedReason, 'checkpoint_only_source');
+  assert.equal(result.audit, null);
+  assert.equal(result.suggestions, null);
+});
+
+test('CLI supports agentStart and dry-run agentCloseout commands', async () => {
+  const dataDir = await makeTempDir();
+  const env = { ...process.env, CONTEXTFORGE_DATA_DIR: dataDir };
+
+  const start = await execFileAsync(
+    'node',
+    [
+      'src/cli.js',
+      'agentStart',
+      '--agent',
+      'claude_code',
+      '--scope',
+      'repo',
+      '--scopeKey',
+      'github.com/example/backend',
+      '--query',
+      'startup handoff',
+    ],
+    { env },
+  );
+  const startResult = JSON.parse(start.stdout);
+  assert.equal(startResult.kind, 'agent_start_context');
+  assert.equal(startResult.agent, 'claude_code');
+
+  await execFileAsync(
+    'node',
+    [
+      'src/cli.js',
+      'appendRaw',
+      '--scope',
+      'repo',
+      '--scopeKey',
+      'github.com/example/backend',
+      '--sessionId',
+      'codex:cli-agent-closeout',
+      '--role',
+      'assistant',
+      '--content',
+      'CLI closeout should preserve adapter-prefixed session id.',
+    ],
+    { env },
+  );
+
+  const closeout = await execFileAsync(
+    'node',
+    [
+      'src/cli.js',
+      'agentCloseout',
+      '--agent',
+      'codex',
+      '--scope',
+      'repo',
+      '--scopeKey',
+      'github.com/example/backend',
+      '--sessionId',
+      'codex:cli-agent-closeout',
+      '--distill',
+      'never',
+      '--audit',
+      '0',
+      '--suggest',
+      'no',
+      '--dryRun',
+      '1',
+    ],
+    { env },
+  );
+  const closeoutResult = JSON.parse(closeout.stdout);
+  assert.equal(closeoutResult.kind, 'agent_closeout_review');
+  assert.equal(closeoutResult.dryRun, true);
+  assert.equal(closeoutResult.audit, null);
+  assert.equal(closeoutResult.suggestions, null);
+  assert.equal(closeoutResult.source.sessionId, 'codex:cli-agent-closeout');
 });
 
 test('CLI supports the v0 workflow with synthetic data', async () => {

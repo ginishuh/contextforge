@@ -103,6 +103,14 @@ Workspace bootstrap result provenance should preserve `workspaceKey`,
 `memberName`, `role`, and `includedBecause`; checkpoint results from member
 repos require live-state verification before action.
 
+For CLI-driven agent lifecycle, use `agentStart` and `agentCloseout` as
+agent-neutral convenience wrappers. `agentStart` calls `bootstrapContext` with
+the selected adapter id and optional `workspaceKey`. `agentCloseout` requires
+`sessionId` or `checkpointId`, preserves adapter-prefixed session ids such as
+`codex:<id>` and `claude_code:<id>`, defaults to `dryRun=true`, and must not
+review broad scope backlog unless an explicit lower-level closeout command is
+used for that purpose.
+
 Read `handoff.latestCheckpoints` before durable memory for recent work status,
 recent decisions, open todos, branch/PR/CI flow, and next actions. Treat
 `handoff.latestConsolidation` as optional thread/repo period context when

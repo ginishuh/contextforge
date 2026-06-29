@@ -56,6 +56,12 @@ remote canonical server. There is no silent local/project-local fallback.
 Workspace profiles should store canonical scope identity only, not local
 `repoPath`, tokens, raw transcripts, or machine-private paths.
 
+CLI users may use `agentStart` and `agentCloseout` as agent-neutral lifecycle
+wrappers. `agentStart` is a bootstrap convenience and may pass `workspaceKey`.
+`agentCloseout` requires `sessionId` or `checkpointId`, preserves
+adapter-prefixed ids, defaults to `dryRun=true`, and does not scan broad scope
+backlog by default.
+
 Treat `includeByDefault` as scope-plan inclusion only. It does not justify
 unbounded retrieval from that scope; workspace retrieval must still obey
 per-scope and total result limits. Workspace profile deactivation is soft
@@ -198,6 +204,11 @@ Adapter-ingested stream:
 1. Preserve or recover the adapter session ID, for example `codex:<id>` or `claude_code:<id>`.
 2. Use that ID for `session_status`, `distill_checkpoint`, and closeout.
 3. Do not replace it with a new `cf_...` session.
+
+For CLI closeout, `agentCloseout --agent <adapter> --sessionId <adapter:id>`
+wraps `sessionStatus`, optional `distillCheckpoint`, `auditMemoryCandidates`,
+and `suggestMemoryPromotions`. It defaults to dry-run and does not promote
+durable memory by itself.
 
 ## Distillation
 
