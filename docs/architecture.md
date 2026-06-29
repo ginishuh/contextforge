@@ -120,6 +120,44 @@ defaults to the current git checkout: common GitHub origin remotes normalize to
 `github.com/owner/repo`, and directories without a usable git remote fall back
 to a deterministic `path:<hash>:<name>` key.
 
+## Workspace Profiles
+
+Workspace profiles are retrieval topology, not storage authority.
+
+```text
+Storage modes answer where memory is authoritative.
+Workspace profiles answer which existing scopes are consulted together.
+They are independent.
+```
+
+The MVP keeps the existing `shared`, `repo`, and `local` scope types. It does
+not add `scopeType=workspace` and it does not add `storageMode=workspace`.
+Instead, a workspace profile stores:
+
+- a `workspaceKey`
+- an optional canonical scope, usually a suite or contract repo
+- member scopes, usually repo scope keys
+- routing rules that select members for a query
+
+This lets a backend repo task consult a suite contract repo or frontend
+consumer repo when the query contains contract signals such as `OpenAPI`,
+`permission`, `E2E`, `frontend`, or `release`.
+
+`repoPath` is not part of the canonical workspace profile. It is a machine-local
+hint used to infer a repo `scopeKey` before a request is made. Workspace
+profiles store scope identity, not local filesystem identity.
+
+In remote mode, workspace profile reads, writes, and resolution go through the
+remote canonical server. There is no local/project-local fallback for workspace
+profile state. A single-repo user can ignore workspace profiles entirely; the
+default retrieval behavior remains one explicit primary scope unless a caller
+opts into workspace resolution.
+
+Resolver output must stay explainable. A scope plan should include the primary
+member, included and excluded scopes, `includedBecause`, matched rules or
+matched terms, and warnings such as `primary_scope_not_workspace_member` or
+`canonical_scope_not_member`.
+
 ## Retrieval Quality
 
 Durable memory remains canonical in the `memories` table. SQLite FTS5 is a

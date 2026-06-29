@@ -37,6 +37,21 @@ Always set scope intentionally:
 - `shared`: cross-repo/user-wide conventions. Include only when it may matter.
 - `local`: machine-specific context; opt in only when appropriate.
 
+Workspace profiles are retrieval topology, not storage authority. Storage modes
+answer where memory is authoritative; workspace profiles answer which existing
+scopes are consulted together. They are independent.
+
+For multi-repo products, call `resolve_workspace` when a workspace profile is
+configured and the task may involve cross-repo contracts, frontend consumers,
+E2E, release gates, or shared API/domain decisions. Read the scope plan before
+using cross-repo context. Treat `includedBecause`, matched rules, and warnings
+as part of the retrieval explanation.
+
+In remote mode, workspace profile reads/writes/resolve calls must hit the
+remote canonical server. There is no silent local/project-local fallback.
+Workspace profiles should store canonical scope identity only, not local
+`repoPath`, tokens, raw transcripts, or machine-private paths.
+
 For renamed or transferred repositories, treat the new repository identity as
 the canonical `scopeKey`. ContextForge may be configured with
 `CONTEXTFORGE_SCOPE_ALIASES` so future reads and writes using an old repo key

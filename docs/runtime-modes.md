@@ -162,12 +162,21 @@ Meaning:
 - The client delegates core calls to `CONTEXTFORGE_REMOTE_URL`.
 - The remote server owns reads and writes for `shared`, `repo`, and `local`
   scopes.
+- Workspace profiles are also server-owned in remote mode. Workspace profile
+  read/write/resolve calls must hit the remote canonical server; they must not
+  silently fall back to local or project-local storage.
 - There is no automatic offline cache or fallback write. If the remote is
   unavailable, the operation should fail visibly.
 - Distillation runs server-side in remote mode, so distillation and embedding
   provider configuration usually belong on the server.
 - `repoPath` and `cwd` are still useful locally because they help resolve the
   right repo scope key before sending the request.
+
+Workspace profiles are independent from runtime mode. A profile only decides
+which existing scopes are consulted together; storage mode still decides where
+those scopes are authoritative. Remote mode plus workspace profiles is the
+recommended topology for users who work across several machines and several
+repositories.
 
 Useful checks:
 

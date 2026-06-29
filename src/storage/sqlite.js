@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 
-export const SCHEMA_VERSION = 17;
+export const SCHEMA_VERSION = 18;
 
 function nowIso() {
   return new Date().toISOString();
@@ -236,6 +236,56 @@ function hydrateMemoryCandidate(row) {
     reviewMetadata: parseJson(row.review_metadata_json, {}),
     promotedMemoryId: row.promoted_memory_id,
     createdAt: row.created_at,
+  };
+}
+
+function hydrateWorkspaceProfile(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    workspaceKey: row.workspace_key,
+    displayName: row.display_name,
+    canonicalScopeType: row.canonical_scope_type,
+    canonicalScopeKey: row.canonical_scope_key,
+    status: row.status || 'active',
+    metadata: parseJson(row.metadata_json, {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function hydrateWorkspaceMember(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    name: row.name,
+    scopeType: row.scope_type,
+    scopeKey: row.scope_key,
+    role: row.role,
+    priority: row.priority,
+    includeByDefault: Boolean(row.include_by_default),
+    metadata: parseJson(row.metadata_json, {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function hydrateWorkspaceRoutingRule(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    ruleKey: row.rule_key,
+    priority: row.priority,
+    match: parseJson(row.match_json, {}),
+    include: parseJson(row.include_json, {}),
+    exclude: parseJson(row.exclude_json, {}),
+    includeShared: Boolean(row.include_shared),
+    status: row.status || 'active',
+    metadata: parseJson(row.metadata_json, {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -815,6 +865,50 @@ export class ContextForgeStore {
         FOREIGN KEY (applied_memory_id) REFERENCES memories(id) ON DELETE SET NULL
       );
 
+      CREATE TABLE IF NOT EXISTS workspace_profiles (
+        id TEXT PRIMARY KEY,
+        workspace_key TEXT NOT NULL UNIQUE,
+        display_name TEXT,
+        canonical_scope_type TEXT NOT NULL DEFAULT 'repo' CHECK (canonical_scope_type IN ('shared', 'repo', 'local')),
+        canonical_scope_key TEXT,
+        status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS workspace_members (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL REFERENCES workspace_profiles(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        scope_type TEXT NOT NULL DEFAULT 'repo' CHECK (scope_type IN ('shared', 'repo', 'local')),
+        scope_key TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'member',
+        priority INTEGER NOT NULL DEFAULT 0,
+        include_by_default INTEGER NOT NULL DEFAULT 0 CHECK (include_by_default IN (0, 1)),
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(workspace_id, scope_type, scope_key),
+        UNIQUE(workspace_id, name)
+      );
+
+      CREATE TABLE IF NOT EXISTS workspace_routing_rules (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL REFERENCES workspace_profiles(id) ON DELETE CASCADE,
+        rule_key TEXT NOT NULL,
+        priority INTEGER NOT NULL DEFAULT 0,
+        match_json TEXT NOT NULL DEFAULT '{}',
+        include_json TEXT NOT NULL DEFAULT '{}',
+        exclude_json TEXT NOT NULL DEFAULT '{}',
+        include_shared INTEGER NOT NULL DEFAULT 0 CHECK (include_shared IN (0, 1)),
+        status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(workspace_id, rule_key)
+      );
+
       CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
         memory_id UNINDEXED,
         scope_type UNINDEXED,
@@ -859,6 +953,12 @@ export class ContextForgeStore {
         ON embedding_jobs(scope_type, scope_key, status);
       CREATE INDEX IF NOT EXISTS idx_memory_update_candidates_scope
         ON memory_update_candidates(scope_type, scope_key, status, created_at);
+      CREATE INDEX IF NOT EXISTS idx_workspace_profiles_status
+        ON workspace_profiles(status, updated_at);
+      CREATE INDEX IF NOT EXISTS idx_workspace_members_scope
+        ON workspace_members(scope_type, scope_key);
+      CREATE INDEX IF NOT EXISTS idx_workspace_routing_rules_status
+        ON workspace_routing_rules(workspace_id, status, priority);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_checkpoints_consolidation_unique
         ON checkpoints(
           scope_type,
@@ -940,6 +1040,9 @@ export class ContextForgeStore {
         memoryCandidates: count('memory_candidate_index'),
         preferenceOccurrences: count('preference_occurrences'),
         memoryUpdateCandidates: count('memory_update_candidates'),
+        workspaceProfiles: count('workspace_profiles'),
+        workspaceMembers: count('workspace_members'),
+        workspaceRoutingRules: count('workspace_routing_rules'),
         embeddingJobs: count('embedding_jobs'),
         embeddings: embeddingIndexExists ? count('embedding_index') : 0,
       },
@@ -3622,6 +3725,259 @@ export class ContextForgeStore {
         checkpoints: Number(row.checkpoints || 0),
         lastTouchedAt: row.last_touched_at,
       }));
+  }
+
+  upsertWorkspaceProfile({
+    workspaceKey,
+    displayName = null,
+    canonicalScopeType = 'repo',
+    canonicalScopeKey = null,
+    status = 'active',
+    metadata = {},
+  }) {
+    if (!workspaceKey) throw new Error('workspaceKey is required.');
+    const timestamp = nowIso();
+    const row = this.db
+      .prepare(`
+        INSERT INTO workspace_profiles (
+          id, workspace_key, display_name, canonical_scope_type, canonical_scope_key,
+          status, metadata_json, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(workspace_key) DO UPDATE SET
+          display_name = excluded.display_name,
+          canonical_scope_type = excluded.canonical_scope_type,
+          canonical_scope_key = excluded.canonical_scope_key,
+          status = excluded.status,
+          metadata_json = excluded.metadata_json,
+          updated_at = excluded.updated_at
+        RETURNING *
+      `)
+      .get(
+        randomUUID(),
+        workspaceKey,
+        displayName,
+        canonicalScopeType,
+        canonicalScopeKey,
+        status,
+        json(metadata, {}),
+        timestamp,
+        timestamp,
+      );
+    return hydrateWorkspaceProfile(row);
+  }
+
+  getWorkspaceProfileByKey({ workspaceKey, includeInactive = false }) {
+    const filters = ['workspace_key = ?'];
+    const values = [workspaceKey];
+    if (!includeInactive) {
+      filters.push("status = 'active'");
+    }
+    const row = this.db
+      .prepare(`
+        SELECT * FROM workspace_profiles
+        WHERE ${filters.join(' AND ')}
+      `)
+      .get(...values);
+    return hydrateWorkspaceProfile(row);
+  }
+
+  listWorkspaceProfiles({ status = 'active', limit = null } = {}) {
+    const filters = [];
+    const values = [];
+    if (status && status !== 'all') {
+      filters.push('status = ?');
+      values.push(status);
+    }
+    const parsedLimit = limit == null ? null : Number(limit);
+    const limitClause = Number.isInteger(parsedLimit) && parsedLimit > 0 ? 'LIMIT ?' : '';
+    if (limitClause) values.push(parsedLimit);
+    const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+    return this.db
+      .prepare(`
+        SELECT * FROM workspace_profiles
+        ${where}
+        ORDER BY updated_at DESC, workspace_key ASC
+        ${limitClause}
+      `)
+      .all(...values)
+      .map(hydrateWorkspaceProfile);
+  }
+
+  setWorkspaceProfileStatus({ workspaceKey, status }) {
+    const row = this.db
+      .prepare(`
+        UPDATE workspace_profiles
+        SET status = ?, updated_at = ?
+        WHERE workspace_key = ?
+        RETURNING *
+      `)
+      .get(status, nowIso(), workspaceKey);
+    return hydrateWorkspaceProfile(row);
+  }
+
+  upsertWorkspaceMember({
+    workspaceKey,
+    name,
+    scopeType = 'repo',
+    scopeKey,
+    role = 'member',
+    priority = 0,
+    includeByDefault = false,
+    metadata = {},
+  }) {
+    const profile = this.getWorkspaceProfileByKey({ workspaceKey, includeInactive: true });
+    if (!profile) {
+      throw new Error(`Workspace profile not found: ${workspaceKey}`);
+    }
+    const timestamp = nowIso();
+    const row = this.db
+      .prepare(`
+        INSERT INTO workspace_members (
+          id, workspace_id, name, scope_type, scope_key, role, priority,
+          include_by_default, metadata_json, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(workspace_id, name) DO UPDATE SET
+          scope_type = excluded.scope_type,
+          scope_key = excluded.scope_key,
+          role = excluded.role,
+          priority = excluded.priority,
+          include_by_default = excluded.include_by_default,
+          metadata_json = excluded.metadata_json,
+          updated_at = excluded.updated_at
+        RETURNING *
+      `)
+      .get(
+        randomUUID(),
+        profile.id,
+        name,
+        scopeType,
+        scopeKey,
+        role,
+        Number(priority),
+        includeByDefault ? 1 : 0,
+        json(metadata, {}),
+        timestamp,
+        timestamp,
+      );
+    return hydrateWorkspaceMember(row);
+  }
+
+  listWorkspaceMembers({ workspaceKey }) {
+    const profile = this.getWorkspaceProfileByKey({ workspaceKey, includeInactive: true });
+    if (!profile) {
+      return [];
+    }
+    return this.db
+      .prepare(`
+        SELECT * FROM workspace_members
+        WHERE workspace_id = ?
+        ORDER BY priority DESC, name ASC
+      `)
+      .all(profile.id)
+      .map(hydrateWorkspaceMember);
+  }
+
+  removeWorkspaceMember({ workspaceKey, name = null, scopeType = null, scopeKey = null }) {
+    const profile = this.getWorkspaceProfileByKey({ workspaceKey, includeInactive: true });
+    if (!profile) {
+      return { removed: false, changes: 0 };
+    }
+    let result;
+    if (name) {
+      result = this.db.prepare('DELETE FROM workspace_members WHERE workspace_id = ? AND name = ?').run(profile.id, name);
+    } else if (scopeType && scopeKey) {
+      result = this.db
+        .prepare('DELETE FROM workspace_members WHERE workspace_id = ? AND scope_type = ? AND scope_key = ?')
+        .run(profile.id, scopeType, scopeKey);
+    } else {
+      throw new Error('removeWorkspaceMember requires memberName/name or scope plus scopeKey.');
+    }
+    return { removed: result.changes > 0, changes: result.changes };
+  }
+
+  upsertWorkspaceRoutingRule({
+    workspaceKey,
+    ruleKey,
+    priority = 0,
+    match = {},
+    include = {},
+    exclude = {},
+    includeShared = false,
+    status = 'active',
+    metadata = {},
+  }) {
+    const profile = this.getWorkspaceProfileByKey({ workspaceKey, includeInactive: true });
+    if (!profile) {
+      throw new Error(`Workspace profile not found: ${workspaceKey}`);
+    }
+    const timestamp = nowIso();
+    const row = this.db
+      .prepare(`
+        INSERT INTO workspace_routing_rules (
+          id, workspace_id, rule_key, priority, match_json, include_json,
+          exclude_json, include_shared, status, metadata_json, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(workspace_id, rule_key) DO UPDATE SET
+          priority = excluded.priority,
+          match_json = excluded.match_json,
+          include_json = excluded.include_json,
+          exclude_json = excluded.exclude_json,
+          include_shared = excluded.include_shared,
+          status = excluded.status,
+          metadata_json = excluded.metadata_json,
+          updated_at = excluded.updated_at
+        RETURNING *
+      `)
+      .get(
+        randomUUID(),
+        profile.id,
+        ruleKey,
+        Number(priority),
+        json(match, {}),
+        json(include, {}),
+        json(exclude, {}),
+        includeShared ? 1 : 0,
+        status,
+        json(metadata, {}),
+        timestamp,
+        timestamp,
+      );
+    return hydrateWorkspaceRoutingRule(row);
+  }
+
+  listWorkspaceRoutingRules({ workspaceKey, status = 'active' }) {
+    const profile = this.getWorkspaceProfileByKey({ workspaceKey, includeInactive: true });
+    if (!profile) {
+      return [];
+    }
+    const filters = ['workspace_id = ?'];
+    const values = [profile.id];
+    if (status && status !== 'all') {
+      filters.push('status = ?');
+      values.push(status);
+    }
+    return this.db
+      .prepare(`
+        SELECT * FROM workspace_routing_rules
+        WHERE ${filters.join(' AND ')}
+        ORDER BY priority DESC, rule_key ASC
+      `)
+      .all(...values)
+      .map(hydrateWorkspaceRoutingRule);
+  }
+
+  removeWorkspaceRoutingRule({ workspaceKey, ruleKey }) {
+    const profile = this.getWorkspaceProfileByKey({ workspaceKey, includeInactive: true });
+    if (!profile) {
+      return { removed: false, changes: 0 };
+    }
+    const result = this.db
+      .prepare('DELETE FROM workspace_routing_rules WHERE workspace_id = ? AND rule_key = ?')
+      .run(profile.id, ruleKey);
+    return { removed: result.changes > 0, changes: result.changes };
   }
 
   countScopeRows({ scopeType, scopeKey }) {

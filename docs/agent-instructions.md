@@ -32,6 +32,12 @@ canonical scope key `github.com/example/repo`, and an explicit
 `agent_switch`. Include shared memory only when cross-repo or user-wide policy
 may matter.
 
+If the repository belongs to a configured multi-repo workspace, use
+`resolve_workspace` first to inspect the scope plan. Workspace profiles do not
+change storage mode; they only define which existing scopes are consulted
+together. Keep ordinary single-repo bootstrap as the default unless the task
+needs cross-repo context.
+
 Do not call `bootstrap_context` just to re-confirm current intent inside the
 same uninterrupted active session. For active-session file/API/error/domain
 lookups, use targeted `search`. For runtime, DB, git, GitHub, CI, health, or
@@ -81,6 +87,12 @@ At task start, after context compaction, or when resuming prior work, call
 `resume`, `compaction_recovery`, or `agent_switch`. Include shared scope only
 for user-wide policy, deployment, credential-location, or cross-repo
 conventions.
+
+For multi-repo products, a workspace profile may define a federation plan for
+related repo scopes. In remote mode, workspace profile reads/writes/resolve
+calls must go to the remote canonical server and must not fall back to local
+state. Use `resolve_workspace` to see included/excluded scopes and routing
+reasons before relying on cross-repo context.
 
 Read `handoff.latestCheckpoints` before durable memory for recent work status,
 recent decisions, open todos, branch/PR/CI flow, and next actions. Treat

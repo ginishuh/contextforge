@@ -103,6 +103,57 @@ See [docs/architecture.md](docs/architecture.md) for the full product model and
 operator-facing distinction between local all-in-one, HTTP server, and external
 remote client roles, see [ContextForge Runtime Modes](docs/runtime-modes.md).
 
+## Workspace Profiles
+
+Workspace profiles are optional retrieval topology. They do not change storage
+mode and they do not introduce a `workspace` scope type.
+
+```text
+storage mode       -> where memory is authoritative
+workspace profile  -> which existing scopes are consulted together
+agent provenance   -> which adapter/session produced evidence
+```
+
+A profile can group several existing scopes, usually repo scope keys such as
+`github.com/example/backend`, `github.com/example/web`, and
+`github.com/example/suite`. Routing rules explain why a member scope belongs in
+a plan for a query. This is useful for multi-repo products where API contracts,
+frontend consumers, E2E tests, and release gates live in separate repositories.
+
+Remote mode plus workspace profiles is the recommended setup when several
+machines or agents should share one canonical memory store. Workspace profile
+reads and writes go through the same remote canonical server in remote mode; the
+client must not silently fall back to local or project-local storage.
+
+Example:
+
+```bash
+node src/cli.js workspaceUpsert \
+  --workspaceKey synthetic-product \
+  --displayName "Synthetic Product" \
+  --canonicalScope repo \
+  --canonicalScopeKey github.com/example/suite
+
+node src/cli.js workspaceMemberUpsert \
+  --workspaceKey synthetic-product \
+  --name backend \
+  --scope repo \
+  --scopeKey github.com/example/backend \
+  --role api-domain-ssot \
+  --priority 100
+
+node src/cli.js workspaceResolve \
+  --workspaceKey synthetic-product \
+  --scope repo \
+  --scopeKey github.com/example/backend \
+  --query "OpenAPI permission frontend contract"
+```
+
+`resolveWorkspace` returns a scope plan with included/excluded members,
+`includedBecause`, matched routing rules, and warnings. `bootstrap_context`
+federation is intentionally a follow-up layer: single-repo bootstrap remains
+the default behavior until a caller opts into workspace use.
+
 ## Distillation
 
 ContextForge assumes useful checkpoints need an LLM. The runtime should support

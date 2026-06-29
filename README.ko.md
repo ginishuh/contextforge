@@ -63,6 +63,55 @@ Codex / Claude Code / OpenCode / Grok / Cursor CLI
 
 단일 머신에서만 쓸 때는 `project-local` 또는 `local` storage로 충분하다.
 
+## Workspace Profile
+
+Workspace profile은 선택적인 retrieval topology다. storage mode를 바꾸지 않고,
+새 `workspace` scope type을 만들지도 않는다.
+
+```text
+storage mode       -> memory authority 위치
+workspace profile  -> 함께 조회할 기존 scope 묶음
+agent provenance   -> evidence/checkpoint를 만든 adapter/session 출처
+```
+
+예를 들어 하나의 제품이 backend, web, mobile, suite repo로 나뉘어 있으면
+workspace profile은 이 repo scope들을 멤버로 묶고, query의 `OpenAPI`,
+`permission`, `contract`, `E2E`, `frontend` 같은 신호에 따라 어떤 scope를 함께
+볼지 `scopePlan`으로 설명한다.
+
+여러 머신이나 여러 agent가 같은 기억을 봐야 한다면 remote mode와 workspace
+profile을 함께 쓰는 구성이 권장된다. remote mode에서는 workspace profile
+read/write/resolve도 remote canonical server로 가야 하며, local 또는
+project-local로 조용히 fallback하면 안 된다.
+
+예시:
+
+```bash
+node src/cli.js workspaceUpsert \
+  --workspaceKey synthetic-product \
+  --displayName "Synthetic Product" \
+  --canonicalScope repo \
+  --canonicalScopeKey github.com/example/suite
+
+node src/cli.js workspaceMemberUpsert \
+  --workspaceKey synthetic-product \
+  --name backend \
+  --scope repo \
+  --scopeKey github.com/example/backend \
+  --role api-domain-ssot \
+  --priority 100
+
+node src/cli.js workspaceResolve \
+  --workspaceKey synthetic-product \
+  --scope repo \
+  --scopeKey github.com/example/backend \
+  --query "OpenAPI permission frontend contract"
+```
+
+`resolveWorkspace`는 included/excluded member, `includedBecause`, matched routing
+rule, warning을 반환한다. `bootstrap_context`에서 workspace federation을 실제로
+검색에 붙이는 작업은 별도 단계이며, 기본 동작은 계속 단일 repo bootstrap이다.
+
 ## Multi-Agent Ingest
 
 현재 built-in adapter는 5종이다.
