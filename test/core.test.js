@@ -10886,6 +10886,242 @@ test('CLI supports workspace profile upsert member rule and resolve commands', a
   );
 });
 
+test('bootstrapContext adds bounded supplemental workspace results when workspaceKey is provided', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+  app.upsertWorkspaceProfile({
+    workspaceKey: 'bootstrap-workspace',
+    displayName: 'Bootstrap Workspace',
+    canonicalScope: 'repo',
+    canonicalScopeKey: 'github.com/example/suite',
+  });
+  app.upsertWorkspaceMember({
+    workspaceKey: 'bootstrap-workspace',
+    name: 'suite',
+    scope: 'repo',
+    scopeKey: 'github.com/example/suite',
+    role: 'cross-repo-contract',
+    priority: 100,
+    includeByDefault: true,
+  });
+  app.upsertWorkspaceMember({
+    workspaceKey: 'bootstrap-workspace',
+    name: 'backend',
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    role: 'api-domain-ssot',
+    priority: 90,
+  });
+  app.upsertWorkspaceMember({
+    workspaceKey: 'bootstrap-workspace',
+    name: 'web',
+    scope: 'repo',
+    scopeKey: 'github.com/example/web',
+    role: 'desktop-web-consumer',
+    priority: 60,
+  });
+  app.upsertWorkspaceRoutingRule({
+    workspaceKey: 'bootstrap-workspace',
+    ruleKey: 'contract_terms',
+    priority: 100,
+    match: { termsAny: ['OpenAPI', 'contract', 'frontend'] },
+    include: { roles: ['cross-repo-contract', 'api-domain-ssot', 'desktop-web-consumer'] },
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    key: 'backend-openapi-contract',
+    content: 'Backend owns the OpenAPI permission contract.',
+    category: 'contract',
+    importance: 8,
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'github.com/example/suite',
+    key: 'suite-openapi-contract',
+    content: 'Suite records the cross-repo OpenAPI frontend contract.',
+    category: 'contract',
+    importance: 8,
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'github.com/example/web',
+    key: 'web-openapi-consumer',
+    content: 'Web frontend consumes the OpenAPI contract.',
+    category: 'consumer',
+    importance: 5,
+  });
+
+  const withoutWorkspace = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    query: 'OpenAPI frontend contract',
+    consultReason: 'startup',
+  });
+  assert.equal(Object.prototype.hasOwnProperty.call(withoutWorkspace, 'workspace'), false);
+
+  const bootstrap = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    query: 'OpenAPI frontend contract',
+    consultReason: 'startup',
+    workspaceKey: 'bootstrap-workspace',
+    workspaceResultLimit: 2,
+    workspacePerScopeLimit: 1,
+  });
+
+  assert.equal(bootstrap.workspace.enabled, true);
+  assert.equal(bootstrap.workspace.scopePlan.primaryScope.memberName, 'backend');
+  assert.deepEqual(
+    bootstrap.workspace.scopePlan.includedScopes.map((scope) => scope.memberName),
+    ['suite', 'backend', 'web'],
+  );
+  assert.equal(bootstrap.results.some((result) => result.key === 'backend-openapi-contract'), true);
+  assert.equal(bootstrap.workspace.results.length, 2);
+  assert.equal(bootstrap.workspace.results.some((result) => result.key === 'backend-openapi-contract'), false);
+  assert.deepEqual(
+    bootstrap.workspace.results.map((result) => result.scope.memberName),
+    ['suite', 'web'],
+  );
+  assert.deepEqual(bootstrap.workspace.results[0].includedBecause, ['include_by_default', 'canonical_scope', 'routing_rule:contract_terms']);
+  assert.equal(bootstrap.workspace.results[0].scope.workspaceKey, 'bootstrap-workspace');
+  assert.equal(bootstrap.workspace.memoryMap.kind, 'workspace_memory_map');
+  assert.equal(
+    bootstrap.workspace.memoryMap.scopes.find((scope) => scope.memberName === 'backend').resultCount,
+    0,
+  );
+  assert.equal(bootstrap.workspace.limits.includeWorkspaceHandoffs, false);
+});
+
+test('bootstrapContext workspace shared retrieval is opt-in and provenance tagged', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_SHARED_SCOPE_KEY: 'team-shared',
+    },
+    cwd: process.cwd(),
+  });
+  app.upsertWorkspaceProfile({
+    workspaceKey: 'shared-workspace',
+    canonicalScope: 'repo',
+    canonicalScopeKey: 'github.com/example/backend',
+  });
+  app.upsertWorkspaceMember({
+    workspaceKey: 'shared-workspace',
+    name: 'backend',
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    role: 'api-domain-ssot',
+  });
+  app.upsertWorkspaceRoutingRule({
+    workspaceKey: 'shared-workspace',
+    ruleKey: 'shared_terms',
+    match: { termsAny: ['policy'] },
+    include: { roles: ['api-domain-ssot'] },
+    includeShared: true,
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    key: 'backend-policy',
+    content: 'Backend policy memory.',
+  });
+  app.remember({
+    scope: 'shared',
+    scopeKey: 'team-shared',
+    key: 'shared-policy',
+    content: 'Shared policy memory for workspace retrieval.',
+  });
+
+  const ordinary = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    query: 'policy',
+    consultReason: 'startup',
+    workspaceKey: 'shared-workspace',
+  });
+  assert.equal(ordinary.workspace.scopePlan.includeShared, true);
+  assert.equal(ordinary.workspace.results.some((result) => result.scope.scopeType === 'shared'), true);
+  assert.equal(ordinary.workspace.results.find((result) => result.scope.scopeType === 'shared').scope.workspaceKey, 'shared-workspace');
+
+  const off = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    query: 'policy',
+    consultReason: 'startup',
+    workspaceKey: 'shared-workspace',
+    workspaceMode: 'off',
+  });
+  assert.equal(off.workspace.enabled, false);
+  assert.equal(off.workspace.results.length, 0);
+  assert.equal(off.workspace.scopePlan.warnings[0].code, 'workspace_mode_off');
+});
+
+test('bootstrapContext does not let primary includeShared enable workspace shared retrieval', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_SHARED_SCOPE_KEY: 'team-shared',
+    },
+    cwd: process.cwd(),
+  });
+  app.upsertWorkspaceProfile({
+    workspaceKey: 'primary-shared-workspace',
+    canonicalScope: 'repo',
+    canonicalScopeKey: 'github.com/example/backend',
+  });
+  app.upsertWorkspaceMember({
+    workspaceKey: 'primary-shared-workspace',
+    name: 'backend',
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    role: 'api-domain-ssot',
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    key: 'backend-policy',
+    content: 'Backend policy memory.',
+  });
+  app.remember({
+    scope: 'shared',
+    scopeKey: 'team-shared',
+    key: 'shared-policy',
+    content: 'Shared policy memory should stay in top-level shared results only.',
+  });
+
+  const bootstrap = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    query: 'policy',
+    consultReason: 'startup',
+    includeShared: true,
+    workspaceKey: 'primary-shared-workspace',
+  });
+
+  assert.equal(bootstrap.results.some((result) => result.group === 'shared' && result.key === 'shared-policy'), true);
+  assert.equal(bootstrap.workspace.scopePlan.includeShared, false);
+  assert.equal(bootstrap.workspace.results.some((result) => result.scope.scopeType === 'shared'), false);
+});
+
+test('bootstrapContext ignores workspace-only limits when workspaceKey is absent', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+
+  const bootstrap = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'github.com/example/backend',
+    query: 'policy',
+    consultReason: 'startup',
+    workspaceResultLimit: 0,
+    workspacePerScopeLimit: 0,
+  });
+
+  assert.equal(Object.prototype.hasOwnProperty.call(bootstrap, 'workspace'), false);
+});
+
 test('CLI supports the v0 workflow with synthetic data', async () => {
   const dataDir = await makeTempDir();
   const env = { ...process.env, CONTEXTFORGE_DATA_DIR: dataDir };

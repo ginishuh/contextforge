@@ -963,6 +963,169 @@ function bootstrapSummary(results) {
   return `Found ${results.length} relevant ContextForge result(s): ${parts}. Treat them as context candidates and verify live state before acting.`;
 }
 
+function scopeIdentity(scopeType, scopeKey) {
+  return `${scopeType}:${scopeKey}`;
+}
+
+function queryContainsAny(query, terms) {
+  const text = String(query || '').toLowerCase();
+  return terms.some((term) => text.includes(term));
+}
+
+function workspaceRoleBoost(role, query) {
+  if (
+    role === 'api-domain-ssot' &&
+    queryContainsAny(query, ['endpoint', 'schema', 'permission', 'migration', 'openapi'])
+  ) {
+    return 350;
+  }
+  if (
+    role === 'cross-repo-contract' &&
+    queryContainsAny(query, ['rfc', 'e2e', 'contract', 'release', 'consumer'])
+  ) {
+    return 320;
+  }
+  if (
+    ['consumer', 'mobile-consumer', 'desktop-web-consumer'].includes(role) &&
+    queryContainsAny(query, ['frontend', 'mobile', 'desktop', 'flutter', 'react', 'electron', 'client'])
+  ) {
+    return 220;
+  }
+  return 0;
+}
+
+function workspaceTypeBoost(type) {
+  if (type === 'memory') return 600;
+  if (type === 'checkpoint') return 120;
+  if (type === 'memory_candidate') return 60;
+  return 0;
+}
+
+function workspaceTypeTier(type) {
+  if (type === 'memory') return 3;
+  if (type === 'checkpoint') return 2;
+  if (type === 'memory_candidate') return 1;
+  return 0;
+}
+
+function workspaceResultSortScore(result, member, query) {
+  return (
+    workspaceTypeBoost(result.type) +
+    workspaceRoleBoost(member.role, query) +
+    Number(member.priority || 0) +
+    Math.min(500, Number(result.score || 0))
+  );
+}
+
+function workspaceSearchMemberFromScope(scope) {
+  return {
+    scopeType: scope.scopeType || scope.scope,
+    scopeKey: scope.scopeKey,
+    memberName: scope.memberName || null,
+    role: scope.role || 'member',
+    priority: Number(scope.priority || 0),
+    includedBecause: scope.includedBecause || [],
+  };
+}
+
+function workspaceBootstrapResult(result, member, workspaceKey, query) {
+  const compact = bootstrapResult(result, 'workspace');
+  const scope = {
+    scope: member.scopeType,
+    scopeType: member.scopeType,
+    scopeKey: member.scopeKey,
+    workspaceKey,
+    memberName: member.memberName,
+    role: member.role,
+  };
+  return {
+    ...compact,
+    scope,
+    source: {
+      ...(compact.source || {}),
+      ...scope,
+    },
+    includedBecause: member.includedBecause || [],
+    workspaceRank: workspaceResultSortScore(result, member, query),
+  };
+}
+
+function buildWorkspaceMemoryMap({ workspaceKey, scopePlan, results }) {
+  const byScope = new Map();
+  for (const scope of scopePlan.includedScopes || []) {
+    byScope.set(scopeIdentity(scope.scopeType, scope.scopeKey), {
+      scope: scope.scopeType,
+      scopeType: scope.scopeType,
+      scopeKey: scope.scopeKey,
+      memberName: scope.memberName,
+      role: scope.role,
+      includedBecause: scope.includedBecause || [],
+      resultCount: 0,
+      topResults: [],
+    });
+  }
+  for (const result of results) {
+    const key = scopeIdentity(result.scope?.scopeType, result.scope?.scopeKey);
+    let entry = byScope.get(key);
+    if (!entry && result.scope?.scopeType && result.scope?.scopeKey) {
+      entry = {
+        scope: result.scope.scopeType,
+        scopeType: result.scope.scopeType,
+        scopeKey: result.scope.scopeKey,
+        memberName: result.scope.memberName || null,
+        role: result.scope.role || 'member',
+        includedBecause: result.includedBecause || [],
+        resultCount: 0,
+        topResults: [],
+      };
+      byScope.set(key, entry);
+    }
+    if (!entry) continue;
+    entry.resultCount += 1;
+    if (entry.topResults.length < 3) {
+      entry.topResults.push({
+        type: result.type,
+        key: result.key,
+        category: result.category,
+        trust: result.trust,
+        verificationRequired: result.verificationRequired,
+      });
+    }
+  }
+  return {
+    kind: 'workspace_memory_map',
+    workspaceKey,
+    policy: {
+      navigation: 'scope_plan_first_expand_on_demand',
+      detail:
+        'Use primary repo results first, then workspace contract and member summaries; expand per-scope details only when needed.',
+    },
+    scopes: [...byScope.values()],
+  };
+}
+
+function workspaceSummary(results) {
+  if (!results.length) {
+    return 'No supplemental workspace results found for this query.';
+  }
+  const counts = results.reduce((acc, result) => {
+    acc[result.type] = (acc[result.type] || 0) + 1;
+    return acc;
+  }, {});
+  const parts = Object.entries(counts)
+    .map(([type, count]) => `${count} ${type}`)
+    .join(', ');
+  return `Found ${results.length} supplemental workspace result(s): ${parts}. Use scope provenance before acting.`;
+}
+
+function workspaceBlockSummary(scopePlan, results) {
+  if (!scopePlan.enabled) {
+    const warning = scopePlan.warnings?.[0];
+    return warning?.message || 'Workspace federation is disabled for this request.';
+  }
+  return workspaceSummary(results);
+}
+
 function storageBootstrapInfo(config, info) {
   const vectorReady = Boolean(info.vector?.sqliteVecAvailable && info.embeddings?.enabled);
   const staleSources = Number(info.embeddings?.coverage?.staleSources || 0);
@@ -3387,6 +3550,7 @@ export function createContextForge(options = {}) {
         : null;
       const mapLimit = memoryMapLimit(options.memoryMapLimit, 5, 'memoryMapLimit');
       const mapClusterSize = memoryMapLimit(options.memoryMapClusterSize, 6, 'memoryMapClusterSize');
+      const workspaceRequested = options.workspaceKey != null && options.workspaceKey !== '';
       return useStore(async (store) => {
         const info = buildDbInfo(store);
         const storage = storageBootstrapInfo(config, info);
@@ -3428,6 +3592,128 @@ export function createContextForge(options = {}) {
           ...repoResults.map((result) => bootstrapResult(result, 'primary')),
           ...sharedResults.map((result) => bootstrapResult(result, 'shared')),
         ];
+        let workspaceBlock = null;
+        if (workspaceRequested) {
+          const workspaceKey = normalizeWorkspaceKey(options.workspaceKey);
+          const workspaceMode = normalizeWorkspaceMode(options.workspaceMode || options.mode || 'auto');
+          const workspaceResultLimit = positiveInteger(
+            options.workspaceResultLimit == null ? 8 : Number(options.workspaceResultLimit),
+            'workspaceResultLimit',
+          );
+          const workspacePerScopeLimit = positiveInteger(
+            options.workspacePerScopeLimit == null ? 4 : Number(options.workspacePerScopeLimit),
+            'workspacePerScopeLimit',
+          );
+          const includeWorkspaceHandoffs = truthyOption(options.includeWorkspaceHandoffs);
+          const includePrimaryInWorkspaceResults = truthyOption(options.includePrimaryInWorkspaceResults);
+          const workspaceProfile = store.getWorkspaceProfileByKey({ workspaceKey, includeInactive: true });
+          const workspaceMembers = workspaceProfile ? store.listWorkspaceMembers({ workspaceKey }) : [];
+          const workspaceRoutingRules = workspaceProfile
+            ? store.listWorkspaceRoutingRules({ workspaceKey, status: 'all' })
+            : [];
+          const scopePlan = resolveWorkspaceScopePlan({
+            workspace: workspaceProfile,
+            members: workspaceMembers,
+            routingRules: workspaceRoutingRules,
+            primaryScope: scope.scopeType,
+            primaryScopeKey: scope.scopeKey,
+            query: options.query,
+            consultReason,
+            mode: workspaceMode,
+            includeShared: false,
+          });
+          const workspaceWarnings = [...(scopePlan.warnings || [])];
+          let workspaceResults = [];
+          if (scopePlan.enabled) {
+            const primaryIdentity = scopeIdentity(scope.scopeType, scope.scopeKey);
+            const searchMembers = (scopePlan.includedScopes || [])
+              .map((includedScope) => workspaceSearchMemberFromScope(includedScope))
+              .filter(
+                (member) =>
+                  includePrimaryInWorkspaceResults || scopeIdentity(member.scopeType, member.scopeKey) !== primaryIdentity,
+              );
+            const seenSearchScopes = new Set();
+            for (const member of searchMembers) {
+              const identity = scopeIdentity(member.scopeType, member.scopeKey);
+              if (seenSearchScopes.has(identity)) {
+                continue;
+              }
+              seenSearchScopes.add(identity);
+              const scopedResults = searchStoreWithScope(
+                store,
+                {
+                  scopeType: member.scopeType,
+                  scopeKey: member.scopeKey,
+                },
+                {
+                  query: options.query,
+                  limit: workspacePerScopeLimit,
+                  sharedScopeKey,
+                },
+                queryEmbedding,
+              )
+                .filter((result) => includeWorkspaceHandoffs || result.type !== 'checkpoint')
+                .map((result) => workspaceBootstrapResult(result, member, workspaceKey, options.query));
+              workspaceResults.push(...scopedResults);
+            }
+            if (scopePlan.includeShared) {
+              if (!sharedScopeKey) {
+                workspaceWarnings.push({
+                  code: 'missing_shared_scope_key',
+                  message: 'Workspace scope plan requested shared scope, but no shared scope key is configured.',
+                });
+              } else {
+                const sharedMember = {
+                  scopeType: 'shared',
+                  scopeKey: sharedScopeKey,
+                  memberName: null,
+                  role: 'shared',
+                  priority: 0,
+                  includedBecause: ['include_shared'],
+                };
+                const sharedWorkspaceResults = searchStoreWithScope(
+                  store,
+                  {
+                    scopeType: 'shared',
+                    scopeKey: sharedScopeKey,
+                  },
+                  {
+                    query: options.query,
+                    limit: workspacePerScopeLimit,
+                    sharedScopeKey,
+                  },
+                  queryEmbedding,
+                )
+                  .filter((result) => includeWorkspaceHandoffs || result.type !== 'checkpoint')
+                  .map((result) => workspaceBootstrapResult(result, sharedMember, workspaceKey, options.query));
+                workspaceResults.push(...sharedWorkspaceResults);
+              }
+            }
+            workspaceResults = workspaceResults
+              .sort(
+                (a, b) =>
+                  workspaceTypeTier(b.type) - workspaceTypeTier(a.type) ||
+                  b.workspaceRank - a.workspaceRank ||
+                  String(a.scope?.scopeKey || '').localeCompare(String(b.scope?.scopeKey || '')) ||
+                  String(a.key || '').localeCompare(String(b.key || '')),
+              )
+              .slice(0, workspaceResultLimit);
+          }
+          workspaceBlock = {
+            enabled: Boolean(scopePlan.enabled),
+            scopePlan,
+            results: workspaceResults,
+            memoryMap: buildWorkspaceMemoryMap({ workspaceKey, scopePlan, results: workspaceResults }),
+            warnings: workspaceWarnings,
+            limits: {
+              resultLimit: workspaceResultLimit,
+              perScopeLimit: workspacePerScopeLimit,
+              includeWorkspaceHandoffs,
+              includePrimaryInWorkspaceResults,
+            },
+            summary: workspaceBlockSummary(scopePlan, workspaceResults),
+          };
+        }
         const memoryMapSeeds = repoResults
           .filter((result) => result.type === 'memory' && result.memory)
           .map((result) => result.memory);
@@ -3524,6 +3810,7 @@ export function createContextForge(options = {}) {
           memoryLifecycle: memoryLifecycleForScope(store, scope),
           ...(sessionId ? { sessionId, workingSummary, structuredWorkingContext, rawTail, rawTailLimit } : {}),
           ...(sharedSkippedReason ? { sharedSkippedReason } : {}),
+          ...(workspaceBlock ? { workspace: workspaceBlock } : {}),
           memoryMap,
           summary: bootstrapSummary(results),
           results,

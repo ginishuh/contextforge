@@ -158,10 +158,27 @@ member, included and excluded scopes, `includedBecause`, matched rules or
 matched terms, and warnings such as `primary_scope_not_workspace_member` or
 `canonical_scope_not_member`.
 
+`bootstrap_context` can opt into workspace federation with `workspaceKey`.
+Workspace bootstrap keeps ordinary top-level `results` focused on the primary
+scope and returns supplemental cross-repo retrieval in a separate `workspace`
+block. `workspace.results` defaults to supplemental member scopes only; callers
+can opt into duplicating the primary scope with
+`includePrimaryInWorkspaceResults=true`.
+
+Workspace retrieval is bounded and explainable. The default total limit is
+`workspaceResultLimit=8`; the default per-member limit is
+`workspacePerScopeLimit=4`. Result provenance includes `workspaceKey`,
+`memberName`, `role`, and `includedBecause`. Checkpoint and memory-candidate
+results remain lower-trust material and carry verification or review hints.
+Workspace ranking keeps result type as the first tier, so durable memory is not
+overtaken by checkpoint handoff state when handoffs are explicitly included.
+Top-level `includeShared` belongs to the primary bootstrap view; workspace
+shared retrieval is enabled by workspace routing rules with `includeShared`.
+
 `include_by_default` is a scope-plan convenience, not permission to retrieve an
 unbounded amount of memory. Use it sparingly, usually for the canonical suite or
-contract repo, and keep future workspace retrieval bounded by per-scope and
-total limits. Deactivating a workspace profile is a soft delete that marks the
+contract repo, and keep workspace retrieval bounded by per-scope and total
+limits. Deactivating a workspace profile is a soft delete that marks the
 profile inactive; upserting the same `workspaceKey` later reactivates the
 existing profile.
 

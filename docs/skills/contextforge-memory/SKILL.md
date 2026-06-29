@@ -45,7 +45,11 @@ For multi-repo products, call `resolve_workspace` when a workspace profile is
 configured and the task may involve cross-repo contracts, frontend consumers,
 E2E, release gates, or shared API/domain decisions. Read the scope plan before
 using cross-repo context. Treat `includedBecause`, matched rules, and warnings
-as part of the retrieval explanation.
+as part of the retrieval explanation. During startup/resume, callers may pass
+`workspaceKey` to `bootstrap_context` to receive a separate `workspace` block
+with bounded supplemental member-scope results. Top-level `includeShared=true`
+adds shared memory to the primary bootstrap view only; workspace shared results
+require a workspace routing rule with `includeShared`.
 
 In remote mode, workspace profile reads/writes/resolve calls must hit the
 remote canonical server. There is no silent local/project-local fallback.
@@ -53,7 +57,7 @@ Workspace profiles should store canonical scope identity only, not local
 `repoPath`, tokens, raw transcripts, or machine-private paths.
 
 Treat `includeByDefault` as scope-plan inclusion only. It does not justify
-unbounded retrieval from that scope; future workspace retrieval must still obey
+unbounded retrieval from that scope; workspace retrieval must still obey
 per-scope and total result limits. Workspace profile deactivation is soft
 delete: the profile becomes inactive and can be reactivated by upserting the
 same key.
@@ -137,10 +141,11 @@ At the start of non-trivial project work:
    `latestCandidateAt`, `latestPromotedAt`, pending counts, and recent
    candidate/promotion counts.
 7. For multi-repo work, pass repo `relatedScopeKeys` for parent/suite/subrepo scopes whose latest handoff may matter. `latestCheckpointLimit` applies per scope.
-8. Set `includeShared: true` only for cross-repo/user-wide policy, credentials location, deployment, or recurring preference questions.
-9. Read the storage block and result trust roles.
-10. Use targeted `search` calls only when more detail is needed.
-11. Use `get_memory` only when you already know the exact durable key.
+8. When a workspace profile is configured and the task needs cross-repo context, pass `workspaceKey` to receive bounded supplemental workspace results in `workspace.results`.
+9. Set `includeShared: true` only for cross-repo/user-wide policy, credentials location, deployment, or recurring preference questions.
+10. Read the storage block and result trust roles.
+11. Use targeted `search` calls only when more detail is needed.
+12. Use `get_memory` only when you already know the exact durable key.
 
 `bootstrap_context` does not create a session. It retrieves scoped context.
 

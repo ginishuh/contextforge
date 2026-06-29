@@ -103,6 +103,11 @@ function toCoreOptions(options) {
     limit: options.limit == null ? 10 : Number(options.limit),
     memoryMapLimit: options.memoryMapLimit == null ? undefined : Number(options.memoryMapLimit),
     memoryMapClusterSize: options.memoryMapClusterSize == null ? undefined : Number(options.memoryMapClusterSize),
+    workspaceResultLimit: options.workspaceResultLimit == null ? undefined : Number(options.workspaceResultLimit),
+    workspacePerScopeLimit: options.workspacePerScopeLimit == null ? undefined : Number(options.workspacePerScopeLimit),
+    includeWorkspaceHandoffs: options.includeWorkspaceHandoffs === true || options.includeWorkspaceHandoffs === 'true',
+    includePrimaryInWorkspaceResults:
+      options.includePrimaryInWorkspaceResults === true || options.includePrimaryInWorkspaceResults === 'true',
     searchScopes: options.searchScopes,
     sharedScopeKey: options.sharedScopeKey,
     includeProvenance: options.includeProvenance === true || options.includeProvenance === 'true',

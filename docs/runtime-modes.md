@@ -178,6 +178,13 @@ those scopes are authoritative. Remote mode plus workspace profiles is the
 recommended topology for users who work across several machines and several
 repositories.
 
+When `bootstrap_context` is called with a `workspaceKey`, workspace resolution
+and supplemental retrieval must use the same storage authority as the caller.
+In remote client mode, the workspace profile, member scopes, routing rules, and
+retrieval all go through the remote canonical server. The response keeps
+primary-scope results at top level and returns bounded cross-repo results in a
+separate `workspace` block.
+
 Useful checks:
 
 ```bash

@@ -335,7 +335,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Bootstrap Context',
       description:
-        'Resolve scoped ContextForge memory for startup/resume/compaction recovery in one call. Includes query-independent latest checkpoint handoff (default 1, max 3) before search results, plus a compact memoryMap for progressive durable-memory navigation. Pass consultReason to distinguish startup/resume/compaction_recovery/agent_switch from active_session, targeted_search, or live_state_check. During active work, prefer search for file/API/error/domain lookups and live sources for mutable state. Does not create a session; pass a known Codex/Claude/ContextForge sessionId to load session working state. rawTailLimit defaults to 0; set a positive value to include raw tail.',
+        'Resolve scoped ContextForge memory for startup/resume/compaction recovery in one call. Includes query-independent latest checkpoint handoff (default 1, max 3) before search results, plus a compact memoryMap for progressive durable-memory navigation. Pass workspaceKey to add a separate bounded workspace federation block; workspace profiles define which existing scopes are consulted together and do not change storage mode. Pass consultReason to distinguish startup/resume/compaction_recovery/agent_switch from active_session, targeted_search, or live_state_check. During active work, prefer search for file/API/error/domain lookups and live sources for mutable state. Does not create a session; pass a known Codex/Claude/ContextForge sessionId to load session working state. rawTailLimit defaults to 0; set a positive value to include raw tail.',
       inputSchema: {
         ...scopedSchema,
         query: z.string(),
@@ -345,6 +345,12 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
         latestCheckpointLimit: z.number().int().min(0).max(3).optional(),
         relatedScopeKeys: z.array(z.string()).optional(),
         includeShared: z.boolean().optional(),
+        workspaceKey: z.string().optional(),
+        workspaceMode: workspaceModeSchema.optional(),
+        workspaceResultLimit: z.number().int().positive().optional(),
+        workspacePerScopeLimit: z.number().int().positive().optional(),
+        includeWorkspaceHandoffs: z.boolean().optional(),
+        includePrimaryInWorkspaceResults: z.boolean().optional(),
         limit: z.number().int().positive().optional(),
         memoryMapLimit: z.number().int().positive().max(20).optional(),
         memoryMapClusterSize: z.number().int().positive().max(20).optional(),
