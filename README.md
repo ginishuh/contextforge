@@ -151,14 +151,40 @@ node src/cli.js workspaceResolve \
 
 `resolveWorkspace` returns a scope plan with included/excluded members,
 `includedBecause`, matched routing rules, and warnings. `bootstrap_context`
-federation is intentionally a follow-up layer: single-repo bootstrap remains
-the default behavior until a caller opts into workspace use.
+and `bootstrapContext` can opt into that plan with `workspaceKey`. Without a
+workspace key, single-repo bootstrap remains unchanged.
+
+Workspace bootstrap returns a separate `workspace` block. Top-level `results`
+keep the existing primary-scope behavior; `workspace.results` defaults to
+supplemental member scopes only so the primary repo is not shown twice. Use
+`includePrimaryInWorkspaceResults=true` only when a merged workspace result view
+is explicitly useful. Cross-repo retrieval is bounded with
+`workspaceResultLimit` (default `8`) and `workspacePerScopeLimit` (default `4`).
+Workspace checkpoint handoffs are excluded by default; set
+`includeWorkspaceHandoffs=true` when the caller wants stale-prone recent
+handoff state from member repos. Top-level `includeShared=true` only adds
+shared results to the primary bootstrap view; workspace shared retrieval is
+enabled by workspace routing rules with `includeShared`.
+
+Example bootstrap:
+
+```bash
+node src/cli.js bootstrapContext \
+  --scope repo \
+  --scopeKey github.com/example/backend \
+  --query "OpenAPI permission frontend contract" \
+  --consultReason startup \
+  --workspaceKey synthetic-product \
+  --workspaceMode auto \
+  --workspaceResultLimit 8 \
+  --workspacePerScopeLimit 4
+```
 
 Use `includeByDefault` sparingly, usually for a canonical suite or contract
-repo. It only affects scope-plan inclusion; future workspace retrieval still
-must respect bounded per-scope and total result limits. `workspaceDeactivate`
-soft-deletes a profile by marking it inactive, and a later `workspaceUpsert`
-with the same key reactivates the existing profile.
+repo. It only affects scope-plan inclusion; workspace retrieval still respects
+bounded per-scope and total result limits. `workspaceDeactivate` soft-deletes a
+profile by marking it inactive, and a later `workspaceUpsert` with the same key
+reactivates the existing profile.
 
 ## Distillation
 
@@ -1193,6 +1219,11 @@ It also exposes `handoff.latestConsolidation.thread` and
 so agents can see a richer period summary without loading raw evidence by
 default. For multi-repo work, pass comma-separated repo `--relatedScopeKeys` so a
 subrepo can also receive the suite/root repo's latest handoff.
+For configured workspace profiles, pass `--workspaceKey` to add a separate
+`workspace` block with a scope plan, bounded supplemental member-scope results,
+and compact per-scope memory overview. Top-level `results` remain the primary
+scope view unless the caller explicitly enables primary duplication in the
+workspace block.
 Bootstrap also returns a separate `memoryMap` channel for progressive durable
 memory navigation. The map groups related active memories into compact clusters,
 chooses a canonical `consolidatedMemory` for each cluster, and includes an

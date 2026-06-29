@@ -33,10 +33,15 @@ canonical scope key `github.com/example/repo`, and an explicit
 may matter.
 
 If the repository belongs to a configured multi-repo workspace, use
-`resolve_workspace` first to inspect the scope plan. Workspace profiles do not
-change storage mode; they only define which existing scopes are consulted
-together. Keep ordinary single-repo bootstrap as the default unless the task
-needs cross-repo context.
+`resolve_workspace` first to inspect the scope plan, or pass `workspaceKey` to
+`bootstrap_context` when cross-repo context is needed during startup/resume.
+Workspace profiles do not change storage mode; they only define which existing
+scopes are consulted together. Keep ordinary single-repo bootstrap as the
+default unless the task needs cross-repo context. When workspace bootstrap is
+enabled, read top-level `results` as the primary-scope view and
+`workspace.results` as bounded supplemental member-scope context. Top-level
+`includeShared=true` does not by itself enable workspace shared retrieval;
+workspace shared results require a workspace routing rule with `includeShared`.
 
 Do not call `bootstrap_context` just to re-confirm current intent inside the
 same uninterrupted active session. For active-session file/API/error/domain
@@ -92,7 +97,11 @@ For multi-repo products, a workspace profile may define a federation plan for
 related repo scopes. In remote mode, workspace profile reads/writes/resolve
 calls must go to the remote canonical server and must not fall back to local
 state. Use `resolve_workspace` to see included/excluded scopes and routing
-reasons before relying on cross-repo context.
+reasons before relying on cross-repo context, or pass `workspaceKey` to
+`bootstrap_context` to retrieve bounded supplemental member-scope results.
+Workspace bootstrap result provenance should preserve `workspaceKey`,
+`memberName`, `role`, and `includedBecause`; checkpoint results from member
+repos require live-state verification before action.
 
 Read `handoff.latestCheckpoints` before durable memory for recent work status,
 recent decisions, open todos, branch/PR/CI flow, and next actions. Treat

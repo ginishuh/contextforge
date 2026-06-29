@@ -109,14 +109,40 @@ node src/cli.js workspaceResolve \
 ```
 
 `resolveWorkspace`는 included/excluded member, `includedBecause`, matched routing
-rule, warning을 반환한다. `bootstrap_context`에서 workspace federation을 실제로
-검색에 붙이는 작업은 별도 단계이며, 기본 동작은 계속 단일 repo bootstrap이다.
+rule, warning을 반환한다. `bootstrap_context`와 `bootstrapContext`는
+`workspaceKey`를 받으면 이 scope plan을 사용한다. `workspaceKey`가 없으면 기존
+단일 repo bootstrap 동작은 그대로 유지된다.
+
+Workspace bootstrap은 별도의 `workspace` block을 반환한다. top-level `results`는
+기존 primary scope 결과를 유지하고, `workspace.results`는 기본적으로 supplemental
+member scope만 담는다. 그래서 primary repo memory가 두 번 보이지 않는다. primary
+결과까지 workspace block에 넣고 싶을 때만 `includePrimaryInWorkspaceResults=true`를
+쓴다. Cross-repo retrieval은 `workspaceResultLimit` 기본 `8`,
+`workspacePerScopeLimit` 기본 `4`로 제한된다. 다른 repo의 checkpoint handoff는
+stale state가 섞일 수 있으므로 기본 제외이며, 필요할 때만
+`includeWorkspaceHandoffs=true`를 켠다. top-level `includeShared=true`는 primary
+bootstrap view에만 shared 결과를 추가한다. workspace shared retrieval은 workspace
+routing rule의 `includeShared`가 켤 때만 동작한다.
+
+Bootstrap 예시:
+
+```bash
+node src/cli.js bootstrapContext \
+  --scope repo \
+  --scopeKey github.com/example/backend \
+  --query "OpenAPI permission frontend contract" \
+  --consultReason startup \
+  --workspaceKey synthetic-product \
+  --workspaceMode auto \
+  --workspaceResultLimit 8 \
+  --workspacePerScopeLimit 4
+```
 
 `includeByDefault`는 보통 canonical suite나 contract repo에만 신중하게 쓴다. 이
-값은 scope-plan 포함 여부만 바꾸며, 이후 workspace retrieval은 여전히 per-scope와
-전체 result limit를 지켜야 한다. `workspaceDeactivate`는 profile을 hard delete하지
-않고 inactive로 표시한다. 같은 key로 `workspaceUpsert`를 다시 호출하면 기존 profile
-id를 유지한 채 재활성화한다.
+값은 scope-plan 포함 여부만 바꾸며, workspace retrieval은 여전히 per-scope와 전체
+result limit를 지킨다. `workspaceDeactivate`는 profile을 hard delete하지 않고
+inactive로 표시한다. 같은 key로 `workspaceUpsert`를 다시 호출하면 기존 profile id를
+유지한 채 재활성화한다.
 
 ## Multi-Agent Ingest
 
@@ -398,6 +424,9 @@ node src/cli.js bootstrapContext \
   최신 handoff를 구분해 볼 수 있다.
 - `handoff.latestCheckpoints`: 최근 checkpoint 목록.
 - `results`: durable memory, checkpoint, memory candidate 검색 결과.
+- `workspace`: `workspaceKey`를 넘겼을 때의 scope plan, bounded supplemental
+  member-scope 결과, compact workspace memory map. top-level `results`는 계속
+  primary scope view다.
 - `workingSummary`: sessionId를 알 때 가져오는 현재 세션 resume state.
 - `rawTail`: 필요한 경우에만 요청하는 최근 raw event 꼬리.
 
