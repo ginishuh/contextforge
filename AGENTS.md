@@ -95,6 +95,11 @@ search shared memory only when cross-repo or user-wide policy may matter. Use
 the inferred repo scope key, or an explicit `github.com/owner/repo` key when
 cross-machine continuity matters.
 
+When a configured workspace profile is relevant, use `resolve_workspace` or pass
+`workspaceKey` to `bootstrap_context` for bounded supplemental cross-repo
+retrieval. During uninterrupted active work, prefer targeted `search`; pass
+`workspaceKey` there only when the lookup genuinely needs cross-repo memory.
+
 Before relying on retrieval, distinguish storage authority. Remote
 ContextForge storage is canonical shared memory for the configured scope;
 local or project-local storage is machine/check-out local context unless the
