@@ -962,6 +962,36 @@ the available set:
 node src/cli.js listAgentAdapters
 ```
 
+Agent-neutral lifecycle helpers wrap existing ContextForge calls without
+changing their authority or review policy. `agentStart` calls
+`bootstrapContext` and can pass `workspaceKey`; `agentCloseout` checks the exact
+session/checkpoint source, optionally distills, runs read-only candidate audit
+and promotion suggestions, and defaults to `dryRun=true`.
+
+```bash
+node src/cli.js agentStart \
+  --agent codex \
+  --scope repo \
+  --scopeKey github.com/example/backend \
+  --workspaceKey synthetic-product \
+  --query "monthly closing export review" \
+  --consultReason startup
+
+node src/cli.js agentCloseout \
+  --agent codex \
+  --sessionId codex:00000000-0000-0000-0000-000000000000 \
+  --scope repo \
+  --scopeKey github.com/example/backend \
+  --trigger manual_closeout \
+  --distill auto \
+  --audit true \
+  --dryRun true
+```
+
+`agentCloseout` requires `sessionId` or `checkpointId`; it never scans the scope
+backlog by default. Durable promotion still requires the existing explicit
+promotion tools or intentional auto-promotion policy.
+
 For a bounded multi-agent routed scan, use `ingestAgentRoutedSessions`. Each
 adapter keeps its own source provenance and session id prefix while writing
 matched records into the same repo `scopeKey`.

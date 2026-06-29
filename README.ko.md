@@ -158,6 +158,35 @@ codex, claude_code, opencode, grok, cursor_cli
 node src/cli.js listAgentAdapters
 ```
 
+Agent-neutral lifecycle helper도 제공한다. `agentStart`는 기존
+`bootstrapContext`를 감싸고 `workspaceKey`를 그대로 넘길 수 있다.
+`agentCloseout`은 정확한 `sessionId` 또는 `checkpointId` 기준으로만 closeout
+review를 수행하며, 필요하면 distill을 실행하고 candidate audit/suggestion을 반환한다.
+기본값은 `dryRun=true`라 durable memory를 직접 승격하지 않는다.
+
+```bash
+node src/cli.js agentStart \
+  --agent codex \
+  --scope repo \
+  --scopeKey github.com/example/backend \
+  --workspaceKey synthetic-product \
+  --query "monthly closing export review" \
+  --consultReason startup
+
+node src/cli.js agentCloseout \
+  --agent codex \
+  --sessionId codex:00000000-0000-0000-0000-000000000000 \
+  --scope repo \
+  --scopeKey github.com/example/backend \
+  --trigger manual_closeout \
+  --distill auto \
+  --audit true \
+  --dryRun true
+```
+
+`agentCloseout`은 broad scope backlog를 기본으로 훑지 않는다. durable promotion은
+기존 explicit promote 도구나 의도적으로 켠 auto-promotion policy를 따른다.
+
 여러 에이전트 session store를 한 번에 repo registry로 라우팅할 수 있다.
 
 ```bash

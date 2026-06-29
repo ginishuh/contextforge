@@ -53,6 +53,19 @@ function parseArgs(argv) {
   return { command, options, positionals };
 }
 
+function cliBooleanOption(value, name) {
+  if (value == null) {
+    return undefined;
+  }
+  if (value === true || value === false) {
+    return value;
+  }
+  const text = String(value).trim().toLowerCase();
+  if (['true', '1', 'yes'].includes(text)) return true;
+  if (['false', '0', 'no'].includes(text)) return false;
+  throw new Error(`--${name} must be true, false, 1, 0, yes, or no.`);
+}
+
 function toCoreOptions(options) {
   const tags = options.tag || options.tags;
   let metadata = {};
@@ -134,7 +147,10 @@ function toCoreOptions(options) {
     candidateType: options.candidateType,
     promotionRecommendation: options.promotionRecommendation,
     trigger: options.trigger,
-    dryRun: options.dryRun == null ? undefined : options.dryRun === true || options.dryRun === 'true',
+    dryRun: cliBooleanOption(options.dryRun, 'dryRun'),
+    audit: cliBooleanOption(options.audit, 'audit'),
+    suggest: cliBooleanOption(options.suggest, 'suggest'),
+    autoPromote: cliBooleanOption(options.autoPromote, 'autoPromote'),
     minConfidence: options.minConfidence == null ? undefined : Number(options.minConfidence),
     minStability: options.minStability == null ? undefined : Number(options.minStability),
     minOverlap: options.minOverlap == null ? undefined : Number(options.minOverlap),
@@ -170,6 +186,8 @@ function toCoreOptions(options) {
     ttlDays: options.ttlDays == null ? undefined : Number(options.ttlDays),
     file: options.file,
     repoRegistry: options.repoRegistry || options.registry || options.repoRegistryFile,
+    agent: options.agent,
+    adapter: options.adapter,
     adapters: options.adapters || options.adapter,
     sessionsDir: options.sessionsDir,
     codexSessionsDir: options.codexSessionsDir,
@@ -264,6 +282,8 @@ async function main() {
     workspaceRuleRemove: (app, coreOptions) => app.removeWorkspaceRoutingRule(coreOptions),
     workspaceResolve: (app, coreOptions) => app.resolveWorkspace(coreOptions),
     bootstrapContext: (app, coreOptions) => app.bootstrapContext(coreOptions),
+    agentStart: (app, coreOptions) => app.agentStart(coreOptions),
+    agentCloseout: (app, coreOptions) => app.agentCloseout(coreOptions),
     expandMemoryCluster: (app, coreOptions) => app.expandMemoryCluster(coreOptions),
     doctorCodexExec: (app, coreOptions) => app.checkCodexExec(coreOptions),
     beginSession: (app, coreOptions) => app.beginSession(coreOptions),

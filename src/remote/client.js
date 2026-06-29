@@ -18,6 +18,8 @@ const REMOTE_METHODS = [
   'resolveWorkspace',
   'listScopeKeys',
   'bootstrapContext',
+  'agentStart',
+  'agentCloseout',
   'expandMemoryCluster',
   'syncResumeContext',
   'checkCodexExec',
@@ -238,6 +240,68 @@ export function createRemoteContextForge(config, options = {}) {
             serverAuthority: result.storage?.authority || null,
             note:
               'This bootstrap call used a remote ContextForge client. serverMode describes the server-owned store, not this checkout.',
+          },
+        };
+      };
+      continue;
+    }
+    if (method === 'agentStart') {
+      api[method] = async (callOptions = {}) => {
+        const { cwd, repoPath, ...remoteOptions } = callOptions;
+        const scope = normalizeScopeOptions(callOptions, config);
+        const result = await client.call(method, {
+          ...remoteOptions,
+          scope: scope.scopeType,
+          scopeType: scope.scopeType,
+          scopeKey: scope.scopeKey,
+        });
+        const context = result.context || {};
+        const storage = context.storage || {};
+        const adjustedStorage = {
+          ...storage,
+          mode: 'remote',
+          authority: 'canonical',
+          serverMode: storage.mode || null,
+          serverAuthority: storage.authority || null,
+          note:
+            'This agentStart call used a remote ContextForge client. serverMode describes the server-owned store, not this checkout.',
+        };
+        return {
+          ...result,
+          connection: remoteClientConnection(context.connection || storage.connection || null),
+          context: {
+            ...context,
+            storage: adjustedStorage,
+          },
+          summary: {
+            ...(result.summary || {}),
+            storage: adjustedStorage,
+          },
+        };
+      };
+      continue;
+    }
+    if (method === 'agentCloseout') {
+      api[method] = async (callOptions = {}) => {
+        const { cwd, repoPath, ...remoteOptions } = callOptions;
+        const scope = normalizeScopeOptions(callOptions, config);
+        const result = await client.call(method, {
+          ...remoteOptions,
+          scope: scope.scopeType,
+          scopeType: scope.scopeType,
+          scopeKey: scope.scopeKey,
+        });
+        return {
+          ...result,
+          connection: remoteClientConnection(result.connection || null),
+          storage: {
+            ...(result.storage || {}),
+            mode: 'remote',
+            authority: 'canonical',
+            serverMode: result.storage?.mode || null,
+            serverAuthority: result.storage?.authority || null,
+            note:
+              'This agentCloseout call used a remote ContextForge client. serverMode describes the server-owned store, not this checkout.',
           },
         };
       };

@@ -7,6 +7,7 @@ import { checkCodexExecProvider } from './distill/providers/codex_exec.js';
 import { checkOpenAiCompatibleProvider } from './distill/providers/openai_compatible.js';
 import { STRUCTURED_CHECKPOINT_SCHEMA_VERSION, validateDistillOutput } from './distill/validate.js';
 import { createEmbeddingProvider } from './embeddings/index.js';
+import { normalizeAgentAdapterIds } from './ingest/agents.js';
 import { createRemoteContextForge } from './remote/client.js';
 import { searchMemories } from './retrieval/search.js';
 import { normalizeScopeOptions } from './scopes/index.js';
@@ -1124,6 +1125,107 @@ function workspaceBlockSummary(scopePlan, results) {
     return warning?.message || 'Workspace federation is disabled for this request.';
   }
   return workspaceSummary(results);
+}
+
+function normalizeSingleAgent(value) {
+  requireOption(value, 'agent');
+  if (value === true) {
+    throw new Error('agentStart and agentCloseout require an agent adapter id value.');
+  }
+  const agents = normalizeAgentAdapterIds(value);
+  if (agents.length !== 1) {
+    throw new Error('agentStart and agentCloseout require exactly one agent adapter id.');
+  }
+  return agents[0];
+}
+
+function normalizeAgentDistillMode(value = 'auto') {
+  const mode = String(value || 'auto').trim().toLowerCase();
+  if (!['auto', 'always', 'never'].includes(mode)) {
+    throw new Error('distill must be auto, always, or never.');
+  }
+  return mode;
+}
+
+function compactAgentBootstrap(bootstrap) {
+  return {
+    scope: bootstrap.scope,
+    storage: bootstrap.storage,
+    consult: bootstrap.consult,
+    handoff: {
+      latestHandoffId: bootstrap.handoff?.latestHandoff?.id || null,
+      latestHandoffAt: bootstrap.handoff?.latestHandoff?.createdAt || null,
+      latestCheckpointCount: bootstrap.handoff?.latestCheckpoints?.length || 0,
+      latestByAgent: Object.fromEntries(
+        Object.entries(bootstrap.handoff?.latestByAgent || {}).map(([agent, checkpoint]) => [
+          agent,
+          {
+            id: checkpoint.id,
+            createdAt: checkpoint.createdAt,
+            sessionId: checkpoint.sessionId,
+          },
+        ]),
+      ),
+    },
+    resultCount: bootstrap.results?.length || 0,
+    memoryMapClusters: bootstrap.memoryMap?.clusters?.length || 0,
+    workspace: bootstrap.workspace
+      ? {
+          enabled: bootstrap.workspace.enabled,
+          workspaceKey: bootstrap.workspace.scopePlan?.workspace?.workspaceKey || null,
+          includedScopeCount: bootstrap.workspace.scopePlan?.includedScopes?.length || 0,
+          resultCount: bootstrap.workspace.results?.length || 0,
+          warnings: bootstrap.workspace.warnings || [],
+        }
+      : null,
+  };
+}
+
+function compactAgentCloseoutResult({ status, checkpoint, audit, suggestions, autoPromote }) {
+  return {
+    status: status
+      ? {
+          shouldDistill: status.shouldDistill,
+          reasons: status.reasons || [],
+          rawEventCount: status.rawEventCount,
+          eventsSinceLastCheckpoint: status.eventsSinceLastCheckpoint,
+          latestCheckpointId: status.latestCheckpointId,
+          latestCheckpointMemoryCandidateCount: status.latestCheckpointMemoryCandidateCount,
+        }
+      : null,
+    checkpoint: checkpoint
+      ? {
+          id: checkpoint.id,
+          createdAt: checkpoint.createdAt,
+          memoryCandidateCount: checkpoint.memoryCandidateCount,
+          candidateAudit: checkpoint.candidateAudit || null,
+        }
+      : null,
+    audit: audit
+      ? {
+          proposalCount: audit.proposals?.length || 0,
+          skippedCount: audit.skipped?.length || 0,
+          requestWarnings: audit.requestWarnings || [],
+          audit: audit.policy?.audit || null,
+        }
+      : null,
+    suggestions: suggestions
+      ? {
+          proposalCount: suggestions.proposals?.length || 0,
+          skippedCount: suggestions.skipped?.length || 0,
+          requestWarnings: suggestions.requestWarnings || [],
+          source: suggestions.source || null,
+        }
+      : null,
+    autoPromote: autoPromote
+      ? {
+          dryRun: autoPromote.dryRun,
+          promotedCount: autoPromote.promoted?.length || 0,
+          skippedCount: autoPromote.skipped?.length || 0,
+          requestWarnings: autoPromote.requestWarnings || [],
+        }
+      : null,
+  };
 }
 
 function storageBootstrapInfo(config, info) {
@@ -4004,6 +4106,147 @@ export function createContextForge(options = {}) {
           'Use checkpoint handoff actively for continuity, planning, prior intent, recent decisions, and unfinished work.',
           'Verify only mutable live state such as git, GitHub, CI, runtime, and migrations before acting.',
           'Do not propose memory promotions during resume sync.',
+        ],
+      };
+    },
+
+    async agentStart(options = {}) {
+      const agent = normalizeSingleAgent(options.agent || options.adapter);
+      requireOption(options.query, 'query');
+      const bootstrap = await this.bootstrapContext({
+        ...options,
+        consultReason: options.consultReason || 'startup',
+      });
+      return {
+        kind: 'agent_start_context',
+        agent,
+        scope: bootstrap.scope,
+        workspaceKey: options.workspaceKey || null,
+        query: bootstrap.query,
+        consultReason: bootstrap.consult?.reason || options.consultReason || 'startup',
+        context: bootstrap,
+        summary: compactAgentBootstrap(bootstrap),
+        nextActions: [
+          'Read handoff.latestHandoff and workspace.scopePlan before acting when present.',
+          'Verify mutable live state such as git, GitHub, CI, runtime, deployment, and migrations before final claims.',
+          'Use targeted search or expand_memory_cluster only when more detail is needed.',
+        ],
+      };
+    },
+
+    async agentCloseout(options = {}) {
+      const agent = normalizeSingleAgent(options.agent || options.adapter);
+      const trigger = options.trigger || 'manual_closeout';
+      if (!CLOSEOUT_TRIGGERS.has(trigger)) {
+        throw new Error('trigger must be a closeout trigger.');
+      }
+      const sessionId = options.sessionId || null;
+      const requestedCheckpointId = options.checkpointId || null;
+      if (!sessionId && !requestedCheckpointId) {
+        throw new Error('agentCloseout requires sessionId or checkpointId to avoid broad scope backlog review.');
+      }
+      const scope = normalizeScopeOptions(options, config);
+      const distillMode = normalizeAgentDistillMode(options.distill || 'auto');
+      const dryRun = options.dryRun == null ? true : truthyOption(options.dryRun);
+      const auditEnabled = options.audit == null ? true : truthyOption(options.audit);
+      const suggestEnabled = options.suggest == null ? true : truthyOption(options.suggest);
+      const autoPromoteEnabled = truthyOption(options.autoPromote);
+
+      let status = null;
+      if (sessionId) {
+        status = await this.sessionStatus({ ...options, sessionId });
+      }
+
+      let checkpoint = null;
+      const shouldDistill =
+        sessionId && distillMode !== 'never' && (distillMode === 'always' || status?.shouldDistill);
+      if (shouldDistill) {
+        checkpoint = await this.distillCheckpoint({
+          ...options,
+          sessionId,
+          auditTrigger: trigger,
+        });
+      }
+
+      const checkpointId = requestedCheckpointId || checkpoint?.id || status?.latestCheckpointId || null;
+      const closeoutSource = {
+        sessionId,
+        checkpointId,
+        mode: checkpoint?.id
+          ? 'new_checkpoint'
+          : requestedCheckpointId
+            ? 'provided_checkpoint'
+            : checkpointId
+              ? 'latest_checkpoint'
+              : 'session_pending_batch',
+      };
+      const sourceOptions = {
+        ...options,
+        trigger,
+        sessionId,
+        checkpointId,
+      };
+
+      let audit = null;
+      if (auditEnabled) {
+        audit = await this.auditMemoryCandidates(sourceOptions);
+      }
+
+      let suggestions = null;
+      if (suggestEnabled) {
+        suggestions = await this.suggestMemoryPromotions({
+          ...sourceOptions,
+          createUpdateCandidates: truthyOption(options.createUpdateCandidates),
+        });
+      }
+
+      let autoPromote = null;
+      if (autoPromoteEnabled) {
+        autoPromote = await this.autoPromoteMemoryCandidates({
+          ...sourceOptions,
+          dryRun,
+        });
+      }
+      const distillSkippedReason = checkpoint
+        ? null
+        : distillMode === 'never'
+          ? 'distill_never'
+          : !sessionId
+            ? 'checkpoint_only_source'
+            : !status?.shouldDistill && distillMode === 'auto'
+              ? 'below_threshold'
+              : shouldDistill
+                ? 'distill_returned_empty'
+                : 'not_requested';
+      const closeoutNextAction = dryRun
+        ? 'Review audit/suggestion output; no durable memory was promoted by agentCloseout dry-run.'
+        : autoPromote
+          ? 'Verify durable memory write policy before trusting any auto-promotion result.'
+          : 'No auto-promotion was requested; review audit/suggestion output and promote explicitly if appropriate.';
+
+      return {
+        kind: 'agent_closeout_review',
+        agent,
+        scope,
+        workspaceKey: options.workspaceKey || null,
+        trigger,
+        dryRun,
+        distill: {
+          mode: distillMode,
+          executed: Boolean(checkpoint),
+          skippedReason: distillSkippedReason,
+        },
+        source: closeoutSource,
+        status,
+        checkpoint,
+        audit,
+        suggestions,
+        autoPromote,
+        summary: compactAgentCloseoutResult({ status, checkpoint, audit, suggestions, autoPromote }),
+        nextActions: [
+          closeoutNextAction,
+          'Promote or reject candidates explicitly by candidateId after review.',
+          'Do not use scope fallback unless intentionally reviewing a manual closeout backlog.',
         ],
       };
     },

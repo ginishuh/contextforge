@@ -182,6 +182,16 @@ limits. Deactivating a workspace profile is a soft delete that marks the
 profile inactive; upserting the same `workspaceKey` later reactivates the
 existing profile.
 
+## Agent Lifecycle Helpers
+
+Agent lifecycle helpers are convenience wrappers over existing core operations,
+not a separate adapter-specific workflow. `agentStart` delegates to
+`bootstrapContext` and can include workspace federation. `agentCloseout`
+requires an exact `sessionId` or `checkpointId`, preserves adapter-prefixed
+session ids, optionally distills, runs closeout-scoped candidate audit and
+promotion suggestions, and defaults to `dryRun=true`. It must not use broad
+scope backlog fallback by default.
+
 ## Retrieval Quality
 
 Durable memory remains canonical in the `memories` table. SQLite FTS5 is a
