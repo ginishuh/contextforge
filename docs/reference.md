@@ -142,12 +142,13 @@ Workspace selection is explicit. ContextForge does not infer a workspace from
 the primary repo scope or workspace membership, and persisting a profile does
 not activate federation for agent calls. There is no process-global default
 workspace. The caller must pass `workspaceKey` to relevant MCP calls such as
-`resolve_workspace`, `bootstrap_context`, and `search`, or to core/CLI helpers
-such as `workspaceResolve`, `bootstrapContext`, and `agentStart`. For repeated
-use, put the key in repo-local agent instructions or adapter/wrapper
-configuration; one agent may work across several unrelated workspaces. Without
-`workspaceKey`, bootstrap and search retain their ordinary single-repo
-behavior.
+`resolve_workspace`, `bootstrap_context`, and `search`. Core callers use
+`resolveWorkspace`; the corresponding CLI command is `workspaceResolve`.
+`bootstrapContext`, `search`, and `agentStart` also accept the option on their
+core/CLI surfaces. For repeated use, put the key in repo-local agent
+instructions or adapter/wrapper configuration; one agent may work across
+several unrelated workspaces. Without `workspaceKey`, bootstrap and search
+retain their ordinary single-repo behavior.
 
 Example:
 

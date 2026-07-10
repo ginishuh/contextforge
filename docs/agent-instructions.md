@@ -39,9 +39,10 @@ ContextForge does not infer this key from the current repo or workspace
 membership. Creating the profile does not activate federation by itself, so
 repo-local instructions or an adapter/wrapper must supply the intended
 `workspaceKey` on each relevant `resolve_workspace`, `bootstrap_context`, or
-`search` call, or through `workspaceResolve`, `bootstrapContext`, or
-`agentStart`. There is no process-global default workspace. Without the key,
-retrieval remains single-repo.
+`search` call. Core callers use `resolveWorkspace`; the corresponding CLI
+command is `workspaceResolve`. `bootstrapContext`, `search`, and `agentStart`
+also accept the option on their core/CLI surfaces. There is no process-global
+default workspace. Without the key, retrieval remains single-repo.
 Workspace profiles do not change storage mode; they only define which existing
 scopes are consulted together. Keep ordinary single-repo bootstrap as the
 default unless the task needs cross-repo context. When workspace bootstrap is
