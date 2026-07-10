@@ -95,7 +95,6 @@ async function executeDistillationCase(item) {
   const providerOutput = item.output || {};
   const app = createContextForge({
     env: {
-      ...process.env,
       CONTEXTFORGE_DATA_DIR: dataDir,
       CONTEXTFORGE_STORAGE_MODE: 'local',
       CONTEXTFORGE_DISTILL_PROVIDER: 'quality_fixture',
@@ -164,16 +163,23 @@ async function executeDistillationCase(item) {
   }
 }
 
-async function evaluateDistillationCases(cases = []) {
+async function evaluateDistillationCases(cases = [], negativeCases = []) {
   const details = [];
   for (const item of cases) details.push(await executeDistillationCase(item));
+  const sensitivityDetails = [];
+  for (const item of negativeCases) {
+    const detail = await executeDistillationCase(item);
+    sensitivityDetails.push({ ...detail, detected: !detail.passed });
+  }
   const claims = details.flatMap((detail) => detail.claims);
   const expectedFacts = details.reduce((sum, detail) => sum + detail.expectedFacts, 0);
   const matchedFacts = details.reduce((sum, detail) => sum + detail.matchedFacts, 0);
   return {
     cases: details.length,
     passed: details.filter((detail) => detail.passed).length,
-    failed: details.filter((detail) => !detail.passed).length,
+    failed:
+      details.filter((detail) => !detail.passed).length +
+      sensitivityDetails.filter((detail) => !detail.detected).length,
     metrics: {
       preservationRate: expectedFacts ? matchedFacts / expectedFacts : 1,
       supportedClaimRate: claims.length ? claims.filter((claim) => claim.supported).length / claims.length : 1,
@@ -183,8 +189,15 @@ async function evaluateDistillationCases(cases = []) {
       ),
       liveStateWarningAccuracy: average(details.map((detail) => (detail.missingWarnings.length ? 0 : 1))),
       retrievalHookPreservation: average(details.map((detail) => (detail.missingHooks.length ? 0 : 1))),
+      sensitivityDetectionRate: average(sensitivityDetails.map((detail) => (detail.detected ? 1 : 0))),
     },
     details,
+    sensitivity: {
+      cases: sensitivityDetails.length,
+      detected: sensitivityDetails.filter((detail) => detail.detected).length,
+      missed: sensitivityDetails.filter((detail) => !detail.detected).length,
+      details: sensitivityDetails,
+    },
   };
 }
 
@@ -196,7 +209,6 @@ async function executeCandidateCase(item) {
   const dataDir = await mkdtemp(path.join(tmpdir(), 'contextforge-quality-candidate-'));
   const app = createContextForge({
     env: {
-      ...process.env,
       CONTEXTFORGE_DATA_DIR: dataDir,
       CONTEXTFORGE_STORAGE_MODE: 'local',
       CONTEXTFORGE_DISTILL_PROVIDER: 'quality_fixture',
@@ -249,7 +261,7 @@ async function executeCandidateCase(item) {
     const actualClassification = normalizedClassification(
       proposal?.promotionAssessment?.classification ||
         skipped?.promotionAssessment?.classification ||
-        update?.reason?.match(/classified candidate as ([a-z_]+)/i)?.[1] ||
+        update?.promotionAssessment?.classification ||
         (proposal ? 'new' : null),
     );
     const actualAction = proposal
@@ -284,36 +296,105 @@ async function evaluateTrustOrderingCases(cases = []) {
   const dataDir = await mkdtemp(path.join(tmpdir(), 'contextforge-quality-trust-'));
   const app = createContextForge({
     env: {
-      ...process.env,
       CONTEXTFORGE_DATA_DIR: dataDir,
       CONTEXTFORGE_STORAGE_MODE: 'local',
+      CONTEXTFORGE_DISTILL_PROVIDER: 'quality_trust_fixture',
       CONTEXTFORGE_EMBEDDINGS_PROVIDER: 'none',
       CONTEXTFORGE_AUTO_PROMOTE_AUDIT_ENABLED: 'false',
     },
     cwd: process.cwd(),
+    distillProviders: {
+      quality_trust_fixture: async () => ({
+        summaryShort: 'Synthetic stale mutable-state handoff.',
+        summaryText: 'The synthetic deployment state was observed previously and requires live verification.',
+        decisions: [],
+        todos: ['Verify the deployment against live sources.'],
+        openQuestions: [],
+        structured: {
+          schemaVersion: 'contextforge.structured_checkpoint.v1',
+          work: {
+            intent: 'Evaluate stale checkpoint safety.',
+            status: 'in_progress',
+            outcome: 'Mutable state remains unverified.',
+          },
+          liveState: {
+            deploymentStatus: 'healthy-at-observation-time',
+            observedAt: '2020-01-01T00:00:00.000Z',
+            verificationRequired: true,
+            staleReasons: ['deployment status changes after observation'],
+            verifyHints: ['check the live readiness endpoint'],
+          },
+          changes: [],
+          verification: [],
+          risks: [],
+          nextActions: [],
+        },
+        memoryCandidates: [
+          {
+            key: 'synthetic-trust-candidate',
+            content: 'Unreviewed synthetic trust material.',
+            category: 'runbook',
+            confidence: 0.9,
+            stability: 0.9,
+            promotionRecommendation: 'promote',
+          },
+        ],
+        sourceEventCount: 1,
+        provider: 'quality_trust_fixture',
+        metadata: { synthetic: true },
+      }),
+    },
   });
   try {
+    const scope = { scope: 'repo', scopeKey: 'quality-trust-order' };
+    app.remember({
+      ...scope,
+      key: 'synthetic-durable-trust-rule',
+      content: 'Synthetic trust evaluation requires live verification for mutable deployment state.',
+      category: 'runbook',
+    });
+    app.appendRaw({
+      ...scope,
+      sessionId: 'quality-trust-session',
+      role: 'assistant',
+      content: 'Synthetic trust evaluation handoff evidence.',
+      metadata: { synthetic: true },
+    });
+    await app.distillCheckpoint({ ...scope, sessionId: 'quality-trust-session' });
     const bootstrap = await app.bootstrapContext({
-      scope: 'repo',
-      scopeKey: 'quality-trust-order',
-      query: 'synthetic trust ordering',
-      limit: 1,
+      ...scope,
+      query: 'synthetic trust evaluation live verification mutable deployment state',
+      consultReason: 'resume',
+      limit: 5,
     });
     const baseOrder = bootstrap.handoff?.trustOrder || [];
     return cases.map((item) => {
-      const maxCheckpointAgeHours = Number(item.maxCheckpointAgeHours || 24);
-      const sources = (item.sources || []).map((source) => ({
-        ...source,
-        stale: source.type === 'recent_checkpoint' && Number(source.ageHours || 0) > maxCheckpointAgeHours,
-      }));
+      if (item.mode === 'stale_checkpoint_safety') {
+        const handoff = bootstrap.handoff?.latestHandoff || {};
+        const durable = bootstrap.results?.find((result) => result.key === 'synthetic-durable-trust-rule') || {};
+        const warningCodes = (handoff.structuredWarnings || []).map((warning) => warning.code);
+        const violations = [];
+        if (handoff.trust !== item.expectedCheckpointTrust) violations.push('checkpoint_trust');
+        if (handoff.verificationRequired !== true) violations.push('checkpoint_verification_required');
+        if (!warningCodes.includes(item.expectedWarningCode)) violations.push('stale_warning');
+        if (durable.trust !== item.expectedDurableTrust) violations.push('durable_trust');
+        return {
+          id: item.id,
+          actual: {
+            checkpointTrust: handoff.trust || null,
+            checkpointVerificationRequired: handoff.verificationRequired === true,
+            warningCodes,
+            durableTrust: durable.trust || null,
+          },
+          violations,
+          passed: violations.length === 0,
+        };
+      }
+      const sources = item.sources || [];
       const missingTrustTypes = [...new Set(sources.map((source) => source.type))].filter(
         (type) => !baseOrder.includes(type),
       );
       const rank = (source) => {
-        if (source.stale) {
-          const durableRank = baseOrder.indexOf('durable_memory');
-          return durableRank === -1 ? Number.POSITIVE_INFINITY : durableRank + 0.5;
-        }
         const index = baseOrder.indexOf(source.type);
         return index === -1 ? Number.POSITIVE_INFINITY : index;
       };
@@ -389,15 +470,18 @@ async function evaluateCandidateCases(cases = [], trustOrderingCases = []) {
 
 function aggregateRetrieval(reports) {
   const details = reports.flatMap((report) => report.details);
+  const judgedDetails = details.filter((detail) => detail.metrics.rankingJudged);
   return {
     fixtures: reports.length,
     queries: details.length,
     passed: details.filter((detail) => detail.passed).length,
     failed: details.filter((detail) => !detail.passed).length,
     metrics: {
-      recallAtK: average(details.map((detail) => detail.metrics.recallAtK)),
-      mrr: average(details.map((detail) => detail.metrics.reciprocalRank)),
-      ndcgAtK: average(details.map((detail) => detail.metrics.ndcgAtK)),
+      judgedQueries: judgedDetails.length,
+      unjudgedQueries: details.length - judgedDetails.length,
+      recallAtK: judgedDetails.length ? average(judgedDetails.map((detail) => detail.metrics.recallAtK)) : null,
+      mrr: judgedDetails.length ? average(judgedDetails.map((detail) => detail.metrics.reciprocalRank)) : null,
+      ndcgAtK: judgedDetails.length ? average(judgedDetails.map((detail) => detail.metrics.ndcgAtK)) : null,
       scopeLeakageCount: details.reduce((sum, detail) => sum + detail.leakedScopes.length, 0),
       forbiddenKeyCount: details.reduce((sum, detail) => sum + detail.leakedKeys.length, 0),
       exactStringRate: average(
@@ -411,13 +495,15 @@ function aggregateRetrieval(reports) {
       byLanguage: Object.fromEntries(
         [...new Set(details.map((detail) => detail.language))].map((language) => {
           const matching = details.filter((detail) => detail.language === language);
+          const judged = matching.filter((detail) => detail.metrics.rankingJudged);
           return [
             language,
             {
               queries: matching.length,
-              recallAtK: average(matching.map((detail) => detail.metrics.recallAtK)),
-              mrr: average(matching.map((detail) => detail.metrics.reciprocalRank)),
-              ndcgAtK: average(matching.map((detail) => detail.metrics.ndcgAtK)),
+              judgedQueries: judged.length,
+              recallAtK: judged.length ? average(judged.map((detail) => detail.metrics.recallAtK)) : null,
+              mrr: judged.length ? average(judged.map((detail) => detail.metrics.reciprocalRank)) : null,
+              ndcgAtK: judged.length ? average(judged.map((detail) => detail.metrics.ndcgAtK)) : null,
             },
           ];
         }),
@@ -459,7 +545,10 @@ export async function runQualityEval(options = {}) {
     baseline: baseline.name || path.basename(baselinePath),
     offline: true,
     retrieval: aggregateRetrieval(retrievalReports),
-    distillation: await evaluateDistillationCases(fixture.distillationCases || []),
+    distillation: await evaluateDistillationCases(
+      fixture.distillationCases || [],
+      fixture.distillationNegativeCases || [],
+    ),
     candidate: await evaluateCandidateCases(fixture.candidateCases || [], fixture.trustOrderingCases || []),
   };
   const checks = thresholdChecks(report, baseline.thresholds || {});

@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import test from 'node:test';
 
 import { runQualityEval } from '../../src/eval/quality.js';
+import { evaluateRetrievalFixture } from '../../src/eval/retrieval.js';
 
 const execFileAsync = promisify(execFile);
 const fixture = path.resolve('docs/examples/quality-eval/contextforge-quality.synthetic.json');
@@ -18,16 +19,20 @@ test('offline memory quality eval reports retrieval, distillation, and candidate
   assert.equal(report.offline, true);
   assert.equal(report.passed, true);
   assert.equal(report.retrieval.queries, 6);
+  assert.equal(report.retrieval.metrics.judgedQueries, 3);
+  assert.equal(report.retrieval.metrics.unjudgedQueries, 3);
   assert.equal(report.retrieval.failed, 0);
   assert.equal(report.retrieval.metrics.recallAtK, 1);
-  assert.ok(report.retrieval.metrics.mrr >= 0.9);
-  assert.ok(report.retrieval.metrics.ndcgAtK >= 0.9);
+  assert.ok(report.retrieval.metrics.mrr >= 0.83);
+  assert.ok(report.retrieval.metrics.ndcgAtK >= 0.87);
   assert.equal(report.retrieval.metrics.scopeLeakageCount, 0);
   assert.equal(report.retrieval.metrics.byLanguage.ko.recallAtK, 1);
   assert.equal(report.retrieval.metrics.byLanguage.en.recallAtK, 1);
   assert.equal(report.retrieval.metrics.byLanguage.mixed.recallAtK, 1);
   assert.equal(report.distillation.metrics.preservationRate, 1);
   assert.equal(report.distillation.metrics.hallucinationCount, 0);
+  assert.equal(report.distillation.metrics.sensitivityDetectionRate, 1);
+  assert.equal(report.distillation.sensitivity.detected, 1);
   assert.equal(report.distillation.details.find((item) => item.inputTruncated).missingHooks.length, 0);
   assert.notEqual(report.distillation.details[0].claims[0].sources[0], 'raw-1');
   assert.equal(report.candidate.metrics.durableCandidatePrecision, 1);
@@ -37,6 +42,24 @@ test('offline memory quality eval reports retrieval, distillation, and candidate
   assert.equal(report.candidate.details.find((item) => item.id === 'one-off-local-detail').actualClassification, 'too_specific');
   assert.equal(report.candidate.details.find((item) => item.id === 'conflicting-memory').actualAction, 'update');
   assert.equal(report.thresholds.failed, 0);
+});
+
+test('retrieval relevance labels control ranking metrics and fail missing relevant keys', async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'contextforge-retrieval-quality-test-'));
+  const fixturePath = path.resolve('docs/examples/quality-eval/multilingual-retrieval.synthetic.json');
+  const retrievalFixture = JSON.parse(await fs.readFile(fixturePath, 'utf8'));
+  retrievalFixture.queries[0].expected.relevantKeys = ['missing-relevant-memory'];
+  retrievalFixture.queries[0].expected.relevance = { 'missing-relevant-memory': 3 };
+  try {
+    const report = await evaluateRetrievalFixture(retrievalFixture, { dataDir });
+    assert.equal(report.failed, 1);
+    assert.equal(report.metrics.judgedQueries, 3);
+    assert.equal(report.details[0].passed, false);
+    assert.equal(report.details[0].metrics.recallAtK, 0);
+    assert.equal(report.details[0].metrics.reciprocalRank, 0);
+  } finally {
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
 });
 
 test('quality eval failures expose exact fixture and threshold details through the CLI', async () => {

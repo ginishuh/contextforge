@@ -274,8 +274,9 @@ npm test
 npm run verify
 ```
 
-외부 provider 없이 retrieval·distillation 보존/환각·candidate 품질 baseline을
-검증하려면 `npm run eval:quality`를 실행한다. 지표, fixture, threshold와 CI report는
+외부 provider 없이 retrieval·distillation persistence/source-link contract·candidate
+품질 baseline을 검증하려면 `npm run eval:quality`를 실행한다. Live LLM 생성 품질은
+별도 opt-in eval 범위다. 지표, fixture, threshold와 CI report는
 [Memory Quality Evals](docs/quality-evals.md)에 정리돼 있다.
 
 일반 테스트는 fail-closed test mode로 실행한다. fake가 주입되지 않은 실제

@@ -182,10 +182,11 @@ async function evaluateQuery(app, fixture, querySpec) {
   const missingScopeRoles = expectedScopeRoles.filter((role) => !presentRoles.has(role));
   const resultKeys = combinedResults.map((result) => result.key);
   const relevantReturned = relevantKeys.filter((key) => resultKeys.includes(key));
-  const recallAtK = relevantKeys.length ? relevantReturned.length / relevantKeys.length : 1;
-  const mrr = relevantKeys.length ? reciprocalRank(resultKeys, relevantKeys) : 1;
+  const rankingJudged = relevantKeys.length > 0;
+  const recallAtK = rankingJudged ? relevantReturned.length / relevantKeys.length : null;
+  const mrr = rankingJudged ? reciprocalRank(resultKeys, relevantKeys) : null;
   const relevance = expected.relevance || Object.fromEntries(relevantKeys.map((key) => [key, 1]));
-  const ndcgAtK = normalizedDiscountedCumulativeGain(resultKeys, relevance, topN);
+  const ndcgAtK = rankingJudged ? normalizedDiscountedCumulativeGain(resultKeys, relevance, topN) : null;
   const leakedKeys = forbiddenKeys.filter((key) => resultKeys.includes(key));
   const returnedScopeIdentities = topScopes.map((scope) => scopeIdentity(scope.scopeType, scope.scopeKey));
   const leakedScopes = forbiddenScopes.filter((scope) => returnedScopeIdentities.includes(scope));
@@ -194,6 +195,7 @@ async function evaluateQuery(app, fixture, querySpec) {
   const passed =
     missingRequiredTerms.length === 0 &&
     missingScopeRoles.length === 0 &&
+    (!rankingJudged || relevantReturned.length === relevantKeys.length) &&
     leakedKeys.length === 0 &&
     leakedScopes.length === 0 &&
     missingExactStrings.length === 0;
@@ -211,6 +213,7 @@ async function evaluateQuery(app, fixture, querySpec) {
     topScopes,
     resultKeys,
     metrics: {
+      rankingJudged,
       recallAtK,
       reciprocalRank: mrr,
       ndcgAtK,
@@ -238,7 +241,6 @@ export async function evaluateRetrievalFixture(fixture, options = {}) {
     options.app ||
     createContextForge({
       env: {
-        ...process.env,
         CONTEXTFORGE_DATA_DIR: options.dataDir,
         CONTEXTFORGE_STORAGE_MODE: 'local',
         CONTEXTFORGE_EMBEDDINGS_PROVIDER: 'none',
@@ -255,17 +257,20 @@ export async function evaluateRetrievalFixture(fixture, options = {}) {
     const languages = Object.fromEntries(
       [...new Set(details.map((detail) => detail.language))].map((language) => {
         const matching = details.filter((detail) => detail.language === language);
+        const judged = matching.filter((detail) => detail.metrics.rankingJudged);
         return [
           language,
           {
             queries: matching.length,
-            recallAtK: average(matching.map((detail) => detail.metrics.recallAtK)),
-            mrr: average(matching.map((detail) => detail.metrics.reciprocalRank)),
-            ndcgAtK: average(matching.map((detail) => detail.metrics.ndcgAtK)),
+            judgedQueries: judged.length,
+            recallAtK: judged.length ? average(judged.map((detail) => detail.metrics.recallAtK)) : null,
+            mrr: judged.length ? average(judged.map((detail) => detail.metrics.reciprocalRank)) : null,
+            ndcgAtK: judged.length ? average(judged.map((detail) => detail.metrics.ndcgAtK)) : null,
           },
         ];
       }),
     );
+    const judgedDetails = details.filter((detail) => detail.metrics.rankingJudged);
     return {
       kind: 'retrieval_eval',
       fixture: fixture.name || fixture.workspaceKey || fixture.workspace?.workspaceKey || null,
@@ -274,9 +279,11 @@ export async function evaluateRetrievalFixture(fixture, options = {}) {
       passed: details.length - failed,
       failed,
       metrics: {
-        recallAtK: average(details.map((detail) => detail.metrics.recallAtK)),
-        mrr: average(details.map((detail) => detail.metrics.reciprocalRank)),
-        ndcgAtK: average(details.map((detail) => detail.metrics.ndcgAtK)),
+        judgedQueries: judgedDetails.length,
+        unjudgedQueries: details.length - judgedDetails.length,
+        recallAtK: judgedDetails.length ? average(judgedDetails.map((detail) => detail.metrics.recallAtK)) : null,
+        mrr: judgedDetails.length ? average(judgedDetails.map((detail) => detail.metrics.reciprocalRank)) : null,
+        ndcgAtK: judgedDetails.length ? average(judgedDetails.map((detail) => detail.metrics.ndcgAtK)) : null,
         scopeLeakageCount: details.reduce((sum, detail) => sum + detail.leakedScopes.length, 0),
         forbiddenKeyCount: details.reduce((sum, detail) => sum + detail.leakedKeys.length, 0),
         exactStringRate: average(

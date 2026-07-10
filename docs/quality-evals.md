@@ -28,17 +28,28 @@ Retrieval reports:
 - exact command, path, API endpoint, and error-string preservation;
 - average retrieval latency and maximum returned context items.
 
-Distillation reports fixture-level and fact-category detail for names, numbers,
-paths, commands, error strings, decisions, rationale, conditions, and next
-actions. Source-linked claims must reference evidence containing their required
-support terms. The evaluator also checks forbidden/unsupported claims,
-live-state warnings, and retrieval hooks retained after a truncated raw window.
+Recall, MRR, and nDCG aggregate only queries with explicit `relevantKeys`.
+Queries that assert terms, scope roles, or leakage without relevance labels stay
+visible as `unjudgedQueries`, but they cannot inflate ranking metrics. Missing a
+declared relevant key also fails that query directly.
+
+Offline distillation reports fixture-level persistence and source-link contract
+detail for names, numbers, paths, commands, error strings, decisions, rationale,
+conditions, and next actions. The deterministic fixture provider supplies the
+golden summary, so these scores do not measure a live LLM's writing quality.
+They verify that the real checkpoint pipeline preserves that output and links
+claims to stored raw evidence. The suite also contains an intentionally broken
+negative fixture; CI fails if missing facts, unsupported/forbidden claims,
+missing live-state warnings, or missing truncation retrieval hooks are no longer
+detected.
 
 Candidate evaluation reports durable promotion precision, acceptance and
-rejection accuracy, repeated-preference handling, duplicate/conflict
-classification, and durable-memory/checkpoint/candidate trust ordering. A stale
-checkpoint ordering case prevents handoff state from outranking reviewed
-durable memory.
+rejection accuracy, repeated-preference handling, and duplicate/conflict
+classification. Cross-source trust checks use the actual bootstrap contract.
+The stale-state case seeds a real structured checkpoint and asserts that it is
+returned as a verification-required handoff with a `live_state_may_be_stale`
+warning alongside a `reviewed_durable` memory; the evaluator does not invent a
+separate stale ranking policy.
 
 ## Fixtures And Baseline
 
@@ -57,6 +68,10 @@ green: update the fixture or implementation, explain any intentionally changed
 ranking, and record the new observed baseline. Latency has a generous CI ceiling
 because hosted runners vary; ranking, leakage, preservation, hallucination, and
 classification thresholds are strict.
+
+The same offline suite runs once inside the full Node test suite for contract
+coverage and once as the dedicated CI job so the complete JSON report can be
+uploaded independently.
 
 ## Live Provider Evals
 

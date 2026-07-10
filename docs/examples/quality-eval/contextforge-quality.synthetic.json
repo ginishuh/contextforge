@@ -73,6 +73,37 @@
       }
     }
   ],
+  "distillationNegativeCases": [
+    {
+      "id": "detect-missing-and-unsupported-output",
+      "rawEvidence": [
+        {
+          "id": "negative-raw-1",
+          "content": "Preserve /critical/restore.plan and ERROR_NEGATIVE_FIXTURE from this synthetic evidence."
+        }
+      ],
+      "expectedFacts": {
+        "paths": ["/critical/restore.plan"],
+        "errors": ["ERROR_NEGATIVE_FIXTURE"]
+      },
+      "requiredLiveStateWarnings": ["verify restore plan"],
+      "requiredRetrievalHooks": ["ERROR_NEGATIVE_FIXTURE"],
+      "forbiddenClaims": ["invented deployment succeeded"],
+      "output": {
+        "summaryShort": "Intentionally incomplete negative fixture.",
+        "summaryText": "The invented deployment succeeded without preserving the required evidence.",
+        "liveStateWarnings": [],
+        "retrievalHooks": [],
+        "claims": [
+          {
+            "text": "Unsupported synthetic claim.",
+            "sources": ["missing-source"],
+            "requiredEvidenceTerms": ["not present"]
+          }
+        ]
+      }
+    }
+  ],
   "candidateCases": [
     {
       "id": "stable-runbook",
@@ -172,6 +203,7 @@
   "trustOrderingCases": [
     {
       "id": "recent-handoff-before-durable-and-candidate",
+      "mode": "base_order",
       "sources": [
         { "id": "memory", "type": "durable_memory" },
         { "id": "checkpoint", "type": "recent_checkpoint", "ageHours": 1 },
@@ -180,14 +212,11 @@
       "expectedBefore": [["checkpoint", "memory"], ["memory", "candidate"]]
     },
     {
-      "id": "stale-checkpoint-does-not-beat-durable",
-      "maxCheckpointAgeHours": 24,
-      "sources": [
-        { "id": "memory", "type": "durable_memory" },
-        { "id": "stale_checkpoint", "type": "recent_checkpoint", "ageHours": 168 },
-        { "id": "candidate", "type": "memory_candidate" }
-      ],
-      "expectedBefore": [["memory", "stale_checkpoint"], ["stale_checkpoint", "candidate"]]
+      "id": "stale-mutable-checkpoint-requires-verification",
+      "mode": "stale_checkpoint_safety",
+      "expectedCheckpointTrust": "credible_recent_handoff",
+      "expectedWarningCode": "live_state_may_be_stale",
+      "expectedDurableTrust": "reviewed_durable"
     }
   ]
 }
