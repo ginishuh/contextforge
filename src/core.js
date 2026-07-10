@@ -85,6 +85,7 @@ function operationJobResultSummary(operation, result) {
         result?.memoryCandidateCount ??
         (Array.isArray(result?.metadata?.memoryCandidates) ? result.metadata.memoryCandidates.length : null),
       provider: result?.provider || null,
+      candidateAudit: result?.candidateAudit || null,
     };
   }
   return {
@@ -4805,11 +4806,12 @@ export function createContextForge(options = {}) {
             job.operation === 'distill_checkpoint'
               ? await this.distillCheckpoint(jobOptions)
               : await this.auditMemoryCandidates(jobOptions);
-          if (
-            job.operation === 'audit_memory_candidates' &&
-            operationResult?.policy?.audit?.needsRetry === true
-          ) {
-            throw retryableAuditJobError(operationResult);
+          const retryableAudit =
+            job.operation === 'audit_memory_candidates'
+              ? operationResult?.policy?.audit
+              : operationResult?.candidateAudit;
+          if (retryableAudit?.needsRetry === true) {
+            throw retryableAuditJobError(operationResult, retryableAudit);
           }
           const checkpointId = operationJobCheckpointId(job.operation, operationResult) || job.checkpointId || null;
           const completed = useStore((store) =>
@@ -7783,6 +7785,8 @@ export function createContextForge(options = {}) {
             const auditBatchId = randomUUID();
             let auditedCount = 0;
             let promotedCount = 0;
+            let failedCount = 0;
+            let retryableFailureCount = 0;
             if (selected.length > 0) {
               assertProviderTimeoutFitsClient({
                 operation: 'candidate audit',
@@ -7823,6 +7827,10 @@ export function createContextForge(options = {}) {
                   retryable: providerFailureRetryable(error),
                   metadata: { ...(auditor?.metadata || {}), ...errorUsageMetadata(error), errorName: error.name },
                 };
+              }
+              if (audit.riskCodes?.includes('audit_failed')) {
+                failedCount += 1;
+                if (audit.retryable === true) retryableFailureCount += 1;
               }
               const auditedCandidate = store.withTransaction(() => {
                 assertJobLease();
@@ -7894,6 +7902,9 @@ export function createContextForge(options = {}) {
               selected: selected.length,
               audited: auditedCount,
               promoted: promotedCount,
+              failedCount,
+              retryableFailureCount,
+              needsRetry: retryableFailureCount > 0,
               minBatchCandidates,
               batchLimit,
               scanLimit,

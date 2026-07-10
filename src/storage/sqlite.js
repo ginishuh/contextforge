@@ -3784,6 +3784,10 @@ export class ContextForgeStore {
               attempts = attempts + 1,
               lease_owner = ?,
               lease_expires_at = ?,
+              error_name = NULL,
+              error_message = NULL,
+              error_code = NULL,
+              retryable = NULL,
               updated_at = ?,
               started_at = COALESCE(started_at, ?),
               completed_at = NULL

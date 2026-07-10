@@ -7832,6 +7832,70 @@ test('durable distill jobs do not swallow lease loss during embedded closeout au
   assert.equal(auditInvocations, 2);
 });
 
+test('durable distill jobs retry embedded closeout audit provider failures', async () => {
+  const dataDir = await makeTempDir();
+  let auditInvocations = 0;
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'embedded_audit_retry_provider',
+    },
+    cwd: process.cwd(),
+    autoPromoteAuditor: async () => {
+      auditInvocations += 1;
+      if (auditInvocations === 1) throw new ProviderTimeoutError('embedded_audit_provider', 10);
+      return {
+        approved: true,
+        decision: 'approve',
+        reason: 'Embedded audit retry succeeded.',
+        riskCodes: [],
+        metadata: { provider: 'embedded_audit_provider' },
+      };
+    },
+    distillProviders: {
+      embedded_audit_retry_provider: async () => ({
+        summaryShort: 'Embedded audit retry checkpoint.',
+        summaryText: 'The checkpoint remains unique while its closeout audit retries.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'embedded-audit-retry',
+            content: 'Retry a failed embedded closeout audit without redistilling.',
+            category: 'runbook',
+            candidateType: 'runbook',
+            confidence: 0.96,
+            stability: 0.96,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+        ],
+      }),
+    },
+  });
+  const source = { scope: 'repo', scopeKey: 'embedded-audit-retry-repo', sessionId: 'embedded-audit-retry-session' };
+  app.appendRaw({ ...source, role: 'assistant', content: 'Create a candidate whose first audit times out.' });
+  app.submitDistillJob({ ...source, auditTrigger: 'manual_closeout', maxAttempts: 2 });
+
+  const first = await app.processJobs({ workerId: 'embedded-retry-worker-1', leaseMs: 1000 });
+  assert.equal(first.failed, 1);
+  assert.equal(first.requeued, 1);
+  assert.equal(first.jobs[0].status, 'queued');
+  assert.equal(first.jobs[0].result.candidateAudit.needsRetry, true);
+  assert.equal(app.listCheckpoints(source).length, 1);
+
+  const second = await app.processJobs({ workerId: 'embedded-retry-worker-2', leaseMs: 1000 });
+  assert.equal(second.succeeded, 1);
+  assert.equal(second.jobs[0].status, 'succeeded');
+  assert.equal(second.jobs[0].attempts, 2);
+  assert.equal(second.jobs[0].result.candidateAudit.needsRetry, false);
+  assert.equal(app.listCheckpoints(source).length, 1);
+  const [candidate] = app.listMemoryCandidates({ ...source, status: 'pending' });
+  assert.equal(candidate.reviewMetadata.audit.decision, 'approve');
+  assert.equal(auditInvocations, 2);
+});
+
 test('durable audit jobs persist job provenance without promoting memory', async () => {
   const dataDir = await makeTempDir();
   let auditInvocations = 0;
