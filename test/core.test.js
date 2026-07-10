@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { execFile, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -36,6 +37,7 @@ import { ExternalProviderDisabledInTestError } from '../src/testing/external_pro
 import { CONTEXTFORGE_VERSION } from '../src/version.js';
 
 const execFileAsync = promisify(execFile);
+const packageManifest = createRequire(import.meta.url)('../package.json');
 
 function ciDetectRunTests(files) {
   const result = spawnSync('bash', ['scripts/ci-detect-run-tests.sh'], {
@@ -121,7 +123,6 @@ function collectStrictObjectSchemaViolations(value, pathParts = []) {
 }
 
 test('package, lockfile, CLI, and release docs share the canonical version', async () => {
-  const packageManifest = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const packageLock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
   const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
   const koreanReadme = await fs.readFile(new URL('../README.ko.md', import.meta.url), 'utf8');
@@ -129,7 +130,7 @@ test('package, lockfile, CLI, and release docs share the canonical version', asy
   assert.equal(CONTEXTFORGE_VERSION, packageManifest.version);
   assert.equal(packageLock.version, packageManifest.version);
   assert.equal(packageLock.packages[''].version, packageManifest.version);
-  assert.match(readme, new RegExp(`Current ${packageManifest.version.replaceAll('.', '\\.')} builds`));
+  assert.ok(readme.includes('Current package version: `' + packageManifest.version + '`'));
   assert.match(readme, new RegExp(`## What's New In ${packageManifest.version.replaceAll('.', '\\.')}`));
   assert.ok(koreanReadme.includes('현재 package version: `' + packageManifest.version + '`'));
 
@@ -12597,7 +12598,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
 
   try {
     await client.connect(transport);
-    assert.deepEqual(client.getServerVersion(), { name: 'contextforge', version: CONTEXTFORGE_VERSION });
+    assert.deepEqual(client.getServerVersion(), { name: 'contextforge', version: packageManifest.version });
     const toolList = await client.listTools();
     const toolNames = toolList.tools.map((tool) => tool.name).sort();
     assert.deepEqual(toolNames, [
@@ -12960,7 +12961,7 @@ test('MCP streamable HTTP endpoint exposes core tools with bearer auth', async (
 
   try {
     await client.connect(transport);
-    assert.deepEqual(client.getServerVersion(), { name: 'contextforge', version: CONTEXTFORGE_VERSION });
+    assert.deepEqual(client.getServerVersion(), { name: 'contextforge', version: packageManifest.version });
     const toolList = await client.listTools();
     assert.ok(toolList.tools.some((tool) => tool.name === 'remember'));
 
