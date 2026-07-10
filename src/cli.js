@@ -116,9 +116,11 @@ function toCoreOptions(options) {
     candidateLimit: options.candidateLimit == null ? undefined : Number(options.candidateLimit),
     legacyFullScan: cliBooleanOption(options.legacyFullScan, 'legacyFullScan'),
     includeDiagnostics: cliBooleanOption(options.includeDiagnostics, 'includeDiagnostics'),
+    cursor: options.cursor,
+    page: cliBooleanOption(options.page, 'page'),
     clusterId: options.clusterId,
     consultReason: options.consultReason,
-    limit: options.limit == null ? 10 : Number(options.limit),
+    limit: options.limit == null ? undefined : Number(options.limit),
     memoryMapLimit: options.memoryMapLimit == null ? undefined : Number(options.memoryMapLimit),
     memoryMapClusterSize: options.memoryMapClusterSize == null ? undefined : Number(options.memoryMapClusterSize),
     workspaceResultLimit: options.workspaceResultLimit == null ? undefined : Number(options.workspaceResultLimit),
@@ -439,7 +441,40 @@ async function main() {
   if (!handler) {
     throw new Error(`Unknown command: ${command}`);
   }
-  const result = await handler(app, coreOptions, options);
+  let result;
+  if (cliBooleanOption(options.allPages, 'allPages')) {
+    const pageableCommands = new Set([
+      'listMemories',
+      'listRawEvents',
+      'listCheckpoints',
+      'listEmbeddingJobs',
+      'listMemoryCandidates',
+      'listMemoryEvents',
+      'listPreferenceOccurrences',
+      'listMemoryUpdateCandidates',
+      'listDistillRuns',
+      'listLlmUsageEvents',
+    ]);
+    if (!pageableCommands.has(command)) {
+      throw new Error(`--allPages is not supported for ${command}.`);
+    }
+    const items = [];
+    let cursor = options.cursor || null;
+    let pages = 0;
+    do {
+      const page = await handler(app, { ...coreOptions, page: true, cursor }, { ...options, page: true, cursor });
+      if (!page || !Array.isArray(page.items) || !page.page) {
+        throw new Error(`${command} did not return a paginated response.`);
+      }
+      items.push(...page.items);
+      cursor = page.page.nextCursor;
+      pages += 1;
+      if (pages > 10000) throw new Error(`${command} exceeded the --allPages safety limit.`);
+    } while (cursor);
+    result = { kind: `${command}_all_pages`, items, pages, returned: items.length };
+  } else {
+    result = await handler(app, coreOptions, options);
+  }
   printJson(result);
   if (result?.kind === 'retrieval_eval' && Number(result.failed || 0) > 0) {
     process.exitCode = 1;

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added filter-bound opaque keyset cursors to public memory, raw-event,
+  checkpoint, embedding-job, candidate, event, distill-run, and usage lists.
+  Public arrays remain compatible but now default to 100 rows with a hard 500
+  maximum; `page=true` returns a next-cursor envelope and CLI `--allPages`
+  follows bounded pages explicitly.
 - Removed the default scope-wide durable-memory lexical scan from retrieval.
   Search now scores bounded FTS/vector candidates with hard result/candidate
   caps, preserves Unicode/path/API/error ranking, exposes per-result latency and

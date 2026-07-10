@@ -5333,6 +5333,27 @@ test('appendRaw and mock distillCheckpoint preserve raw evidence', async () => {
   assert.equal(runs[0].inputMetadata.sourceEventWindow.selectedEventCount, 2);
   assert.equal(runs[0].inputMetadata.previousWorkingSummaryId, null);
 
+  const checkpointPage = app.listCheckpoints({
+    scope: 'repo',
+    scopeKey: 'repo-a',
+    sessionId: session.sessionId,
+    limit: 1,
+    page: true,
+  });
+  assert.equal(checkpointPage.kind, 'checkpoints_page');
+  assert.equal(checkpointPage.items[0].id, checkpoint.id);
+  assert.equal(checkpointPage.page.nextCursor, null);
+
+  const distillRunPage = app.listDistillRuns({
+    scope: 'repo',
+    scopeKey: 'repo-a',
+    sessionId: session.sessionId,
+    limit: 1,
+    page: true,
+  });
+  assert.equal(distillRunPage.kind, 'distill_runs_page');
+  assert.equal(distillRunPage.items[0].id, runs[0].id);
+
   const workingSummary = app.getWorkingSummary({
     scope: 'repo',
     scopeKey: 'repo-a',
@@ -5354,6 +5375,180 @@ test('appendRaw and mock distillCheckpoint preserve raw evidence', async () => {
   assert.equal(statusAfter.latestCheckpointMemoryCandidateCount, 0);
   assert.equal(statusAfter.memoryCandidateHint, null);
   assert.equal(statusAfter.shouldDistill, false);
+});
+
+test('public list pagination is bounded, stable across timestamp ties, and filter-bound', async () => {
+  const dataDir = await makeTempDir();
+  const store = new ContextForgeStore({ dataDir });
+  const scopeType = 'repo';
+  const scopeKey = 'pagination-repo';
+  const timestamp = '2026-07-10T00:00:00.000Z';
+  try {
+    store.withTransaction(() => {
+      for (let index = 0; index < 505; index += 1) {
+        const sessionId = index < 5 ? 'small-session' : 'large-session';
+        const event = store.appendRawEvent({
+          scopeType,
+          scopeKey,
+          sessionId,
+          role: 'user',
+          content: `Pagination event ${index}`,
+        });
+        store.db
+          .prepare('UPDATE raw_events SET id = ?, created_at = ? WHERE id = ?')
+          .run(`raw-${String(index).padStart(4, '0')}`, timestamp, event.id);
+      }
+    });
+  } finally {
+    store.close();
+  }
+
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+  try {
+    for (const key of ['memory-a', 'memory-b', 'memory-c']) {
+      app.remember({ scope: 'repo', scopeKey, key, content: `Pagination ${key}`, importance: 1 });
+    }
+    const memoryStore = new ContextForgeStore({ dataDir });
+    try {
+      memoryStore.db
+        .prepare('UPDATE memories SET updated_at = ? WHERE scope_type = ? AND scope_key = ?')
+        .run(timestamp, scopeType, scopeKey);
+    } finally {
+      memoryStore.close();
+    }
+    const memoryFirst = app.listMemories({ scope: 'repo', scopeKey, limit: 2, page: true });
+    assert.deepEqual(memoryFirst.items.map((item) => item.key), ['memory-a', 'memory-b']);
+    const memorySecond = app.listMemories({
+      scope: 'repo',
+      scopeKey,
+      limit: 2,
+      cursor: memoryFirst.page.nextCursor,
+    });
+    assert.deepEqual(memorySecond.items.map((item) => item.key), ['memory-c']);
+
+    const bounded = app.listRawEvents({ scope: 'repo', scopeKey, sessionId: 'large-session' });
+    assert.equal(bounded.length, 100);
+    const hardCapped = app.listRawEvents({ scope: 'repo', scopeKey, sessionId: 'large-session', limit: 1000 });
+    assert.equal(hardCapped.length, 500);
+
+    const first = app.listRawEvents({
+      scope: 'repo',
+      scopeKey,
+      sessionId: 'small-session',
+      limit: 2,
+      page: true,
+    });
+    assert.deepEqual(first.items.map((item) => item.id), ['raw-0000', 'raw-0001']);
+    assert.equal(first.page.hasMore, true);
+    assert.ok(first.page.nextCursor);
+    assert.ok(!first.page.nextCursor.includes('raw-0001'));
+
+    const insertStore = new ContextForgeStore({ dataDir });
+    try {
+      insertStore.db
+        .prepare(`
+          INSERT INTO raw_events (
+            id, scope_type, scope_key, session_id, role, content, metadata_json, created_at
+          ) VALUES (?, ?, ?, ?, 'user', 'Inserted before cursor', '{}', ?)
+        `)
+        .run('raw-0000-new', scopeType, scopeKey, 'small-session', timestamp);
+    } finally {
+      insertStore.close();
+    }
+
+    const second = app.listRawEvents({
+      scope: 'repo',
+      scopeKey,
+      sessionId: 'small-session',
+      limit: 2,
+      cursor: first.page.nextCursor,
+    });
+    assert.deepEqual(second.items.map((item) => item.id), ['raw-0002', 'raw-0003']);
+    const third = app.listRawEvents({
+      scope: 'repo',
+      scopeKey,
+      sessionId: 'small-session',
+      limit: 2,
+      cursor: second.page.nextCursor,
+    });
+    assert.deepEqual(third.items.map((item) => item.id), ['raw-0004']);
+    assert.equal(third.page.nextCursor, null);
+
+    assert.throws(
+      () =>
+        app.listRawEvents({
+          scope: 'repo',
+          scopeKey,
+          sessionId: 'other-session',
+          cursor: first.page.nextCursor,
+        }),
+      /cursor does not match this list operation or filter set/i,
+    );
+    assert.throws(
+      () => app.listRawEvents({ scope: 'repo', scopeKey, sessionId: 'small-session', cursor: 'not-a-cursor' }),
+      /Invalid pagination cursor encoding/,
+    );
+
+    const remote = await startContextForgeServer({
+      app,
+      port: 0,
+      env: { CONTEXTFORGE_REMOTE_TOKEN: 'pagination-token' },
+    });
+    const remoteClient = createContextForge({
+      env: {
+        CONTEXTFORGE_STORAGE_MODE: 'remote',
+        CONTEXTFORGE_REMOTE_URL: remote.url,
+        CONTEXTFORGE_REMOTE_TOKEN: 'pagination-token',
+      },
+      cwd: process.cwd(),
+    });
+    try {
+      const remoteFirst = await remoteClient.listRawEvents({
+        scope: 'repo',
+        scopeKey,
+        sessionId: 'small-session',
+        limit: 2,
+        page: true,
+      });
+      assert.deepEqual(remoteFirst.items.map((item) => item.id), ['raw-0000', 'raw-0000-new']);
+      assert.equal(remoteFirst.page.limit, first.page.limit);
+      assert.ok(remoteFirst.page.nextCursor);
+    } finally {
+      remoteClient.close?.();
+      await remote.close();
+    }
+
+    const cliAllPages = JSON.parse(
+      (
+        await execFileAsync(
+          'node',
+          [
+            'src/cli.js',
+            'listRawEvents',
+            '--scope',
+            'repo',
+            '--scopeKey',
+            scopeKey,
+            '--sessionId',
+            'small-session',
+            '--limit',
+            '2',
+            '--allPages',
+            'true',
+          ],
+          { env: { ...process.env, CONTEXTFORGE_DATA_DIR: dataDir } },
+        )
+      ).stdout,
+    );
+    assert.equal(cliAllPages.kind, 'listRawEvents_all_pages');
+    assert.equal(cliAllPages.pages, 3);
+    assert.deepEqual(
+      cliAllPages.items.map((item) => item.id),
+      ['raw-0000', 'raw-0000-new', 'raw-0001', 'raw-0002', 'raw-0003', 'raw-0004'],
+    );
+  } finally {
+    app.close();
+  }
 });
 
 test('listDistillRuns can return newest runs first when limited', async () => {
@@ -14112,6 +14307,20 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.ok(processEmbeddingJobsTool.inputSchema.properties.retryFailed);
     const listEmbeddingJobsTool = toolList.tools.find((tool) => tool.name === 'list_embedding_jobs');
     assert.ok(listEmbeddingJobsTool.inputSchema.properties.status);
+    for (const name of [
+      'list_embedding_jobs',
+      'list_checkpoints',
+      'list_llm_usage_events',
+      'list_memory_events',
+      'list_memory_candidates',
+      'list_preference_occurrences',
+      'list_memory_update_candidates',
+    ]) {
+      const tool = toolList.tools.find((item) => item.name === name);
+      assert.equal(tool.inputSchema.properties.limit.maximum, 500, name);
+      assert.ok(tool.inputSchema.properties.cursor, name);
+      assert.ok(tool.inputSchema.properties.page, name);
+    }
     const bootstrapTool = toolList.tools.find((tool) => tool.name === 'bootstrap_context');
     assert.ok(bootstrapTool.inputSchema.properties.sessionId);
     assert.ok(bootstrapTool.inputSchema.properties.consultReason);

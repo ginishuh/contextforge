@@ -338,6 +338,12 @@ fixture 결과는 [Retrieval Performance](docs/retrieval-performance.md)를 참�
 0건 검색의 진단값까지 필요하면 `--includeDiagnostics true`로 envelope 응답을
 요청한다.
 
+Public list API는 기본 `100`, hard maximum `500`으로 제한된다. 기존 array
+응답은 유지하지만 더 많은 row가 필요하면 `--page true`의 opaque cursor를
+이어가거나 CLI에서 명시적으로 `--allPages true`를 사용한다. 자세한 cursor
+ordering·filter binding·호환 규칙은 [List Pagination](docs/list-pagination.md)을
+참고한다.
+
 - `project-local`: checkout-local SQLite. 기본값이며 실험에 좋다.
 - `local`: 사용자 홈 디렉터리 아래 단일 머신 SQLite.
 - `remote`: HTTP 서버가 canonical DB를 소유하고, 여러 머신이 MCP/CLI로 접근한다.
