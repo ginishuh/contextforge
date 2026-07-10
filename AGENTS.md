@@ -99,6 +99,9 @@ When a configured workspace profile is relevant, use `resolve_workspace` or pass
 `workspaceKey` to `bootstrap_context` for bounded supplemental cross-repo
 retrieval. During uninterrupted active work, prefer targeted `search`; pass
 `workspaceKey` there only when the lookup genuinely needs cross-repo memory.
+ContextForge does not infer the workspace from repo membership, and there is no
+process-global default workspace. Without an explicit `workspaceKey`, retrieval
+keeps its ordinary single-repo behavior.
 
 Before relying on retrieval, distinguish storage authority. Remote
 ContextForge storage is canonical shared memory for the configured scope;

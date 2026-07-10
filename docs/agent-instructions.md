@@ -35,6 +35,14 @@ may matter.
 If the repository belongs to a configured multi-repo workspace, use
 `resolve_workspace` first to inspect the scope plan, or pass `workspaceKey` to
 `bootstrap_context` when cross-repo context is needed during startup/resume.
+ContextForge does not infer this key from the current repo or workspace
+membership. Creating the profile does not activate federation by itself, so
+repo-local instructions or an adapter/wrapper must supply the intended
+`workspaceKey` on each relevant `resolve_workspace`, `bootstrap_context`, or
+`search` call. Core callers use `resolveWorkspace`; the corresponding CLI
+command is `workspaceResolve`. `bootstrapContext`, `search`, and `agentStart`
+also accept the option on their core/CLI surfaces. There is no process-global
+default workspace. Without the key, retrieval remains single-repo.
 Workspace profiles do not change storage mode; they only define which existing
 scopes are consulted together. Keep ordinary single-repo bootstrap as the
 default unless the task needs cross-repo context. When workspace bootstrap is
@@ -103,6 +111,11 @@ calls must go to the remote canonical server and must not fall back to local
 state. Use `resolve_workspace` to see included/excluded scopes and routing
 reasons before relying on cross-repo context, or pass `workspaceKey` to
 `bootstrap_context` to retrieve bounded supplemental member-scope results.
+Workspace membership is not auto-discovery: the caller must explicitly supply
+the intended `workspaceKey`, normally from repo-local agent instructions or an
+adapter/wrapper configuration. A persisted profile is not consulted unless the
+key is supplied, there is no process-global default workspace, and calls
+without `workspaceKey` remain single-repo.
 Workspace bootstrap result provenance should preserve `workspaceKey`,
 `memberName`, `role`, and `includedBecause`; checkpoint results from member
 repos require live-state verification before action.
