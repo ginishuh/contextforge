@@ -1010,6 +1010,7 @@ export function createContextForgeMcpServer({
         ...scopedSchema,
         scanLimit: z.number().int().positive().max(50000).optional(),
         completedJobRetentionDays: z.number().int().positive().optional(),
+        cursor: z.string().optional(),
       },
       annotations: {
         title: 'Embedding Maintenance Inventory',
@@ -1029,10 +1030,13 @@ export function createContextForgeMcpServer({
         ...scopedSchema,
         scanLimit: z.number().int().positive().max(50000).optional(),
         completedJobRetentionDays: z.number().int().positive().optional(),
+        cursor: z.string().optional(),
         batchSize: z.number().int().positive().max(500).optional(),
         dryRun: z.boolean().optional(),
         force: z.boolean().optional(),
         includeRetired: z.boolean().optional(),
+        confirmMassRetired: z.boolean().optional(),
+        includeInventory: z.boolean().optional(),
       },
       annotations: {
         title: 'Prune Embedding Artifacts',

@@ -381,7 +381,11 @@ For derived-data cleanup:
    indexed, then rebuild only sources that are legitimately stale.
 6. Preserve current failed jobs for retry. Retired model/dimension deletion
    requires an active provider plus explicit `includeRetired: true`; review
-   `reindexSuggestedSourceIds` after hash-mismatch cleanup.
+   `reindexSuggestedSourceIds` after hash-mismatch cleanup. When
+   `retiredRisk.code` is `mass_retired`, require a separately reviewed
+   `confirmMassRetired: true` before applying.
+7. Follow `nextCursor` until it is null. A bounded page with an empty plan is
+   not proof that a later index/job/vector page has no eligible rows.
 
 Use `prune_raw_events` only according to retention policy; durable memory and checkpoints are preserved separately.
 

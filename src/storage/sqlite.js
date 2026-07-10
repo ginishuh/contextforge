@@ -1540,7 +1540,7 @@ export class ContextForgeStore {
     };
   }
 
-  listEmbeddingIndexRecords({ scopeType = null, scopeKey = null, limit = 5000 } = {}) {
+  listEmbeddingIndexRecords({ scopeType = null, scopeKey = null, limit = 5000, after = null } = {}) {
     if (!this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'embedding_index'").get()) {
       return [];
     }
@@ -1553,6 +1553,10 @@ export class ContextForgeStore {
     if (scopeKey) {
       filters.push('scope_key = ?');
       values.push(scopeKey);
+    }
+    if (after) {
+      filters.push('(updated_at > ? OR (updated_at = ? AND source_id > ?))');
+      values.push(after[0], after[0], after[1]);
     }
     values.push(Number(limit));
     return this.db
@@ -1577,23 +1581,54 @@ export class ContextForgeStore {
       }));
   }
 
-  listOrphanEmbeddingVectorIds({ limit = 5000 } = {}) {
+  embeddingModelCounts({ scopeType = null, scopeKey = null } = {}) {
+    if (!this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'embedding_index'").get()) {
+      return [];
+    }
+    const filters = [];
+    const values = [];
+    if (scopeType) {
+      filters.push('scope_type = ?');
+      values.push(scopeType);
+    }
+    if (scopeKey) {
+      filters.push('scope_key = ?');
+      values.push(scopeKey);
+    }
+    return this.db
+      .prepare(`
+        SELECT model, dimensions, COUNT(*) AS count
+        FROM embedding_index
+        ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''}
+        GROUP BY model, dimensions
+        ORDER BY count DESC, model ASC, dimensions ASC
+      `)
+      .all(...values)
+      .map((row) => ({ model: row.model, dimensions: row.dimensions, count: row.count }));
+  }
+
+  listOrphanEmbeddingVectorIds({ limit = 5000, after = null } = {}) {
     if (
       !this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'embedding_vec'").get() ||
       !this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'embedding_index'").get()
     ) {
       return [];
     }
+    const values = [];
+    const afterClause = after ? 'AND embedding_vec.source_id > ?' : '';
+    if (after) values.push(after);
+    values.push(Number(limit));
     return this.db
       .prepare(`
         SELECT embedding_vec.source_id
         FROM embedding_vec
         LEFT JOIN embedding_index ON embedding_index.source_id = embedding_vec.source_id
         WHERE embedding_index.source_id IS NULL
+        ${afterClause}
         ORDER BY embedding_vec.source_id ASC
         LIMIT ?
       `)
-      .all(Number(limit))
+      .all(...values)
       .map((row) => row.source_id);
   }
 
@@ -1735,7 +1770,7 @@ export class ContextForgeStore {
       .map(hydrateEmbeddingJob);
   }
 
-  listTerminalEmbeddingJobs({ scopeType = null, scopeKey = null, limit = 5000 } = {}) {
+  listTerminalEmbeddingJobs({ scopeType = null, scopeKey = null, limit = 5000, after = null } = {}) {
     const conditions = ["status IN ('completed', 'failed')"];
     const values = [];
     if (scopeType) {
@@ -1745,6 +1780,10 @@ export class ContextForgeStore {
     if (scopeKey) {
       conditions.push('scope_key = ?');
       values.push(scopeKey);
+    }
+    if (after) {
+      conditions.push('(updated_at > ? OR (updated_at = ? AND id > ?))');
+      values.push(after[0], after[0], after[1]);
     }
     values.push(Number(limit));
     return this.db

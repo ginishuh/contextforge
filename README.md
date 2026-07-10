@@ -802,13 +802,19 @@ candidates. Scoped inventory does not classify or
 delete vector-only rows because a missing index also removes the only stored
 scope evidence; run a global inventory to inspect those rows. Inventory scans
 are bounded by `scanLimit` and report conservative per-table truncation flags,
-while the processing-job safety check always uses complete status counts.
+while the processing-job safety check always uses complete status counts. When
+`nextCursor` is present, pass it as `--cursor` to continue the index,
+terminal-job, and vector-only keyset scans; an empty plan is final only when
+`nextCursor` is null. GC responses keep the nested inventory summary-only by
+default to bound MCP/remote payloads; use `--includeInventory true` only when
+the full scanned page is required for diagnosis.
 
 GC is a bounded dry-run by default:
 
 ```bash
 node src/cli.js pruneEmbeddingArtifacts --batchSize 100
 node src/cli.js pruneEmbeddingArtifacts --batchSize 100 --dryRun false
+node src/cli.js pruneEmbeddingArtifacts --batchSize 100 --cursor '<nextCursor>'
 ```
 
 Before applying it, back up the canonical SQLite store and stop embedding
@@ -822,7 +828,9 @@ methods execute on the canonical server; verify `dbInfo.connection` before an
 operator run instead of assuming the current checkout owns the database.
 Retired model/dimension rows are classified only when an embedding provider is
 active and are excluded from deletion unless `--includeRetired true` is also
-explicit. If the plan removes a content-hash mismatch, process its embedding
+explicit. If at least half of indexed rows differ from the active provider,
+non-dry retired cleanup is blocked again until `--confirmMassRetired true` is
+provided. If the plan removes a content-hash mismatch, process its embedding
 job or run an intentional scoped rebuild after GC; the response lists those
 source ids in `reindexSuggestedSourceIds`.
 

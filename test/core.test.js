@@ -4849,6 +4849,27 @@ test('embedding maintenance inventory and GC remove only eligible artifacts in b
     assert.equal(limitedInventory.scanned.jobs, 1);
     assert.equal(limitedInventory.truncated.jobs, true);
     assert.equal(limitedInventory.processingJobs, 1);
+    assert.ok(limitedInventory.nextCursor);
+    const pagedReasons = new Set(Object.keys(limitedInventory.byReason));
+    let inventoryCursor = limitedInventory.nextCursor;
+    for (let page = 0; inventoryCursor && page < 50; page += 1) {
+      const next = app.embeddingInventory({ scope: 'repo', scopeKey, scanLimit: 1, cursor: inventoryCursor });
+      for (const reason of Object.keys(next.byReason)) pagedReasons.add(reason);
+      inventoryCursor = next.nextCursor;
+    }
+    assert.equal(inventoryCursor, null);
+    assert.ok(pagedReasons.has('orphan_source'));
+    assert.ok(pagedReasons.has('candidate_stale'));
+    assert.throws(
+      () =>
+        app.embeddingInventory({
+          scope: 'repo',
+          scopeKey: 'different-scope',
+          scanLimit: 1,
+          cursor: limitedInventory.nextCursor,
+        }),
+      /cursor does not match/,
+    );
     const inventory = app.embeddingInventory({ completedJobRetentionDays: 1 });
     assert.equal(inventory.processingJobs, 1);
     assert.ok(inventory.byReason.inactive_memory >= 1);
@@ -4883,6 +4904,8 @@ test('embedding maintenance inventory and GC remove only eligible artifacts in b
     assert.equal(dryRun.deleted.vectors, 0);
     assert.ok(dryRun.plan.total > 0);
     assert.equal(dryRun.includeRetired, false);
+    assert.equal(dryRun.includeInventory, false);
+    assert.equal(dryRun.inventory.artifacts, undefined);
     assert.equal(dryRun.skippedRetiredArtifacts, 1);
     assert.ok(!dryRun.plan.artifacts.some((item) => item.reason === 'retired_model_or_dimensions'));
     assert.ok(dryRun.reindexSuggestedSourceIds.includes(`memory:${staleHash.id}`));
@@ -4928,6 +4951,63 @@ test('embedding maintenance inventory and GC remove only eligible artifacts in b
     } finally {
       verifyStore.close();
     }
+  } finally {
+    app.close();
+  }
+});
+
+test('embedding GC requires an extra confirmation for majority retired indexes', async () => {
+  const dataDir = await makeTempDir();
+  const provider = {
+    name: 'test-vector',
+    model: 'current-model',
+    dimensions: 3,
+    async embed(texts) {
+      return texts.map(() => [1, 0, 0]);
+    },
+  };
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_EMBEDDINGS_PROVIDER: 'openai',
+      CONTEXTFORGE_EMBEDDINGS_DIMENSIONS: '3',
+    },
+    cwd: process.cwd(),
+    embeddingProviders: { openai: provider },
+  });
+  try {
+    app.remember({ scope: 'repo', scopeKey: 'repo-mass-retired', key: 'one', content: 'First vector.' });
+    app.remember({ scope: 'repo', scopeKey: 'repo-mass-retired', key: 'two', content: 'Second vector.' });
+    await app.rebuildEmbeddings({ scope: 'repo', scopeKey: 'repo-mass-retired' });
+    const store = new ContextForgeStore({ dataDir });
+    try {
+      store.db.prepare('UPDATE embedding_index SET model = ?').run('retired-model');
+    } finally {
+      store.close();
+    }
+
+    const inventory = app.embeddingInventory({ scope: 'repo', scopeKey: 'repo-mass-retired' });
+    assert.equal(inventory.retiredRisk.code, 'mass_retired');
+    assert.equal(inventory.retiredRisk.retiredRatio, 1);
+
+    const blocked = app.pruneEmbeddingArtifacts({
+      scope: 'repo',
+      scopeKey: 'repo-mass-retired',
+      dryRun: false,
+      includeRetired: true,
+    });
+    assert.equal(blocked.blocked, true);
+    assert.equal(blocked.blockedReason, 'mass_retired_confirmation_required');
+
+    const confirmed = app.pruneEmbeddingArtifacts({
+      scope: 'repo',
+      scopeKey: 'repo-mass-retired',
+      dryRun: false,
+      includeRetired: true,
+      confirmMassRetired: true,
+    });
+    assert.equal(confirmed.blocked, false);
+    assert.equal(confirmed.deleted.indexRows, 2);
   } finally {
     app.close();
   }
@@ -14488,6 +14568,10 @@ test('CLI supports the v0 workflow with synthetic data', async () => {
           '5',
           '--includeRetired',
           'false',
+          '--confirmMassRetired',
+          'false',
+          '--includeInventory',
+          'false',
         ],
         { env },
       )
@@ -14497,6 +14581,8 @@ test('CLI supports the v0 workflow with synthetic data', async () => {
   assert.equal(embeddingGc.dryRun, true);
   assert.equal(embeddingGc.batchSize, 5);
   assert.equal(embeddingGc.includeRetired, false);
+  assert.equal(embeddingGc.confirmMassRetired, false);
+  assert.equal(embeddingGc.includeInventory, false);
 });
 
 test('CLI submits, inspects, processes, and cancels durable operation jobs', async () => {
@@ -14711,7 +14797,10 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     const pruneEmbeddingArtifactsTool = toolList.tools.find((tool) => tool.name === 'prune_embedding_artifacts');
     assert.ok(pruneEmbeddingArtifactsTool.inputSchema.properties.batchSize);
     assert.ok(pruneEmbeddingArtifactsTool.inputSchema.properties.dryRun);
+    assert.ok(pruneEmbeddingArtifactsTool.inputSchema.properties.cursor);
     assert.ok(pruneEmbeddingArtifactsTool.inputSchema.properties.includeRetired);
+    assert.ok(pruneEmbeddingArtifactsTool.inputSchema.properties.confirmMassRetired);
+    assert.ok(pruneEmbeddingArtifactsTool.inputSchema.properties.includeInventory);
     assert.equal(pruneEmbeddingArtifactsTool.annotations.readOnlyHint, false);
     assert.equal(pruneEmbeddingArtifactsTool.annotations.destructiveHint, true);
     for (const name of [

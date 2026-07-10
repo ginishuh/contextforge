@@ -733,13 +733,18 @@ job만 GC 후보로 삼는다. index가 사라진
 vector-only row는 scope 근거도 함께 사라지므로 scoped inventory/GC에서는
 건드리지 않고 global inventory에서만 대상으로 삼는다. inventory scan은
 `scanLimit`으로 제한하고 보수적인 table별 truncation flag를 반환하지만,
-processing job 안전 검사는 항상 전체 status count를 사용한다.
+processing job 안전 검사는 항상 전체 status count를 사용한다. `nextCursor`가
+있으면 `--cursor`로 넘겨 index, terminal job, vector-only keyset scan을 이어간다.
+plan이 비어도 `nextCursor`가 null일 때만 전체 순회가 끝난 것이다. GC 응답은
+MCP/remote payload를 제한하려고 nested inventory를 기본 summary-only로 반환하며,
+진단에 전체 scan page가 필요할 때만 `--includeInventory true`를 사용한다.
 
 GC는 기본이 dry-run이며 한 번에 `batchSize`개만 transaction으로 삭제한다.
 
 ```bash
 node src/cli.js pruneEmbeddingArtifacts --batchSize 100
 node src/cli.js pruneEmbeddingArtifacts --batchSize 100 --dryRun false
+node src/cli.js pruneEmbeddingArtifacts --batchSize 100 --cursor '<nextCursor>'
 ```
 
 적용 전 canonical SQLite를 backup하고 embedding worker를 멈춰야 한다. 실행 중인
@@ -749,8 +754,10 @@ node src/cli.js pruneEmbeddingArtifacts --batchSize 100 --dryRun false
 storage mode에서는 이 명령이 canonical server에서 실행되므로, operator 실행 전
 현재 checkout이 DB를 소유한다고 가정하지 말고 `dbInfo.connection`을 확인한다.
 retired model/dimension row는 embedding provider가 활성일 때만 분류하며,
-`--includeRetired true`를 추가로 명시하지 않으면 삭제 계획에서 제외한다. content
-hash mismatch를 삭제한 경우 응답의 `reindexSuggestedSourceIds`를 확인하고 embedding
+`--includeRetired true`를 추가로 명시하지 않으면 삭제 계획에서 제외한다. active
+provider와 다른 row가 전체 index의 절반 이상이면 non-dry retired cleanup은
+`--confirmMassRetired true`까지 명시해야 실행된다. content hash mismatch를 삭제한
+경우 응답의 `reindexSuggestedSourceIds`를 확인하고 embedding
 job을 처리하거나 의도적인 scoped rebuild를 실행한다.
 
 ## 안전 원칙
