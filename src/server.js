@@ -2,6 +2,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import http from 'node:http';
+import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -15,6 +16,7 @@ const UI_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'admin-ui
 const DEFAULT_ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const DEFAULT_ADMIN_LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const DEFAULT_ADMIN_LOGIN_MAX_FAILURES = 5;
+const DEFAULT_ADMIN_LOGIN_MAX_KEYS = 10000;
 const ADMIN_COOKIE_NAME = 'contextforge_admin';
 const UI_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -155,20 +157,65 @@ function parseAdminCookieSecureMode(value) {
   throw new Error('CONTEXTFORGE_ADMIN_COOKIE_SECURE must be true, false, or auto.');
 }
 
-function requestIsSecure(request) {
+function normalizeIpAddress(value) {
+  const address = String(value || '').trim().split('%')[0];
+  return net.isIP(address) ? address : null;
+}
+
+function parseTrustedProxy(value) {
+  const trustedProxy = new net.BlockList();
+  if (value == null || String(value).trim() === '') return trustedProxy;
+  const normalized = String(value).trim().toLowerCase();
+  if (['false', '0', 'no', 'off'].includes(normalized)) return trustedProxy;
+  const entries = ['true', '1', 'yes', 'on'].includes(normalized)
+    ? ['0.0.0.0/0', '::/0']
+    : normalized.split(',').map((entry) => entry.trim()).filter(Boolean);
+  const expanded = entries.flatMap((entry) =>
+    entry === 'loopback' ? ['127.0.0.0/8', '::1/128'] : [entry],
+  );
+  for (const entry of expanded) {
+    const parts = entry.split('/');
+    const address = normalizeIpAddress(parts[0]);
+    if (!address || parts.length > 2) {
+      throw new Error(`CONTEXTFORGE_TRUST_PROXY contains an invalid IP or CIDR: ${entry}`);
+    }
+    const family = net.isIP(address) === 4 ? 'ipv4' : 'ipv6';
+    const maximumPrefix = family === 'ipv4' ? 32 : 128;
+    const prefix = parts[1] == null ? maximumPrefix : Number(parts[1]);
+    if (!Number.isInteger(prefix) || prefix < 0 || prefix > maximumPrefix) {
+      throw new Error(`CONTEXTFORGE_TRUST_PROXY contains an invalid CIDR prefix: ${entry}`);
+    }
+    trustedProxy.addSubnet(address, prefix, family);
+  }
+  return trustedProxy;
+}
+
+function proxyIsTrusted(address, trustedProxy) {
+  const normalized = normalizeIpAddress(address);
+  if (!normalized) return false;
+  const family = net.isIP(normalized) === 4 ? 'ipv4' : 'ipv6';
+  return trustedProxy.check(normalized, family);
+}
+
+function socketPeerAddress(request) {
+  return normalizeIpAddress(request.socket.remoteAddress) || '';
+}
+
+function requestIsSecure(request, trustedProxy) {
   if (request.socket.encrypted) return true;
+  if (!proxyIsTrusted(socketPeerAddress(request), trustedProxy)) return false;
   const forwardedProto = String(request.headers['x-forwarded-proto'] || '')
     .split(',')[0]
     .trim()
     .toLowerCase();
   if (forwardedProto) return forwardedProto === 'https';
-  return Boolean(request.socket.encrypted);
+  return false;
 }
 
-function adminCookieSecureForRequest(request, mode) {
+function adminCookieSecureForRequest(request, mode, trustedProxy) {
   if (mode === 'always') return true;
   if (mode === 'never') return false;
-  return requestIsSecure(request);
+  return requestIsSecure(request, trustedProxy);
 }
 
 function parsePositiveInteger(value, fallback) {
@@ -223,10 +270,20 @@ function verifyAdminPassword(password, passwordHash) {
   return crypto.timingSafeEqual(derived, passwordHash.hash);
 }
 
-function requestIp(request) {
-  return String(request.headers['x-forwarded-for'] || request.socket.remoteAddress || '')
-    .split(',')[0]
-    .trim();
+function requestIp(request, trustedProxy) {
+  let address = socketPeerAddress(request);
+  if (!proxyIsTrusted(address, trustedProxy)) return address;
+  const rawForwardedAddresses = String(request.headers['x-forwarded-for'] || '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const forwardedAddresses = rawForwardedAddresses.map((entry) => normalizeIpAddress(entry));
+  if (forwardedAddresses.some((entry) => !entry)) return address;
+  for (let index = forwardedAddresses.length - 1; index >= 0; index -= 1) {
+    if (!proxyIsTrusted(address, trustedProxy)) break;
+    address = forwardedAddresses[index];
+  }
+  return address;
 }
 
 function parseCookies(request) {
@@ -347,7 +404,12 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
     env.CONTEXTFORGE_ADMIN_LOGIN_MAX_FAILURES,
     DEFAULT_ADMIN_LOGIN_MAX_FAILURES,
   );
+  const adminLoginMaxKeys = parsePositiveInteger(
+    env.CONTEXTFORGE_ADMIN_LOGIN_MAX_KEYS,
+    DEFAULT_ADMIN_LOGIN_MAX_KEYS,
+  );
   const adminCookieSecureMode = parseAdminCookieSecureMode(env.CONTEXTFORGE_ADMIN_COOKIE_SECURE);
+  const trustedProxy = parseTrustedProxy(env.CONTEXTFORGE_TRUST_PROXY);
   const adminSessions = new Map();
   const failedAdminLogins = new Map();
 
@@ -360,25 +422,33 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
   }
 
   function loginAttemptKey(request, username) {
-    return `${requestIp(request)}:${String(username || '')}`;
+    const usernameHash = crypto.createHash('sha256').update(String(username || '')).digest('hex');
+    return `${requestIp(request, trustedProxy)}:${usernameHash}`;
+  }
+
+  function pruneFailedAdminLogins(now = Date.now()) {
+    for (const [key, entry] of failedAdminLogins.entries()) {
+      if (now > entry.resetAt) failedAdminLogins.delete(key);
+    }
   }
 
   function loginAllowed(key, now = Date.now()) {
+    pruneFailedAdminLogins(now);
     const entry = failedAdminLogins.get(key);
-    if (!entry || now > entry.resetAt) {
-      failedAdminLogins.delete(key);
-      return true;
-    }
+    if (!entry) return failedAdminLogins.size < adminLoginMaxKeys;
     return entry.count < adminLoginMaxFailures;
   }
 
   function recordFailedLogin(key, now = Date.now()) {
+    pruneFailedAdminLogins(now);
     const entry = failedAdminLogins.get(key);
-    if (!entry || now > entry.resetAt) {
+    if (!entry) {
+      if (failedAdminLogins.size >= adminLoginMaxKeys) return false;
       failedAdminLogins.set(key, { count: 1, resetAt: now + adminLoginWindowMs });
-      return;
+      return true;
     }
     entry.count += 1;
+    return true;
   }
 
   const server = http.createServer(async (request, response) => {
@@ -432,7 +502,7 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
           'cache-control': 'no-store',
           'set-cookie': makeCookie(ADMIN_COOKIE_NAME, session, {
             maxAge: Math.ceil(adminSessionTtlMs / 1000),
-            secure: adminCookieSecureForRequest(request, adminCookieSecureMode),
+            secure: adminCookieSecureForRequest(request, adminCookieSecureMode, trustedProxy),
           }),
         });
         response.end(`${JSON.stringify({ ok: true })}\n`);
@@ -450,7 +520,7 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
         'cache-control': 'no-store',
         'set-cookie': makeCookie(ADMIN_COOKIE_NAME, '', {
           maxAge: 0,
-          secure: adminCookieSecureForRequest(request, adminCookieSecureMode),
+          secure: adminCookieSecureForRequest(request, adminCookieSecureMode, trustedProxy),
         }),
       });
       response.end('{"ok":true}\n');

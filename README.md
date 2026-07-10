@@ -463,6 +463,9 @@ CONTEXTFORGE_REMOTE_TOKEN=change-me
 # iterations:saltHex:hashHex
 # CONTEXTFORGE_ADMIN_USER=admin
 # CONTEXTFORGE_ADMIN_PASSWORD_PBKDF2=
+# Trust forwarded headers only when the direct peer matches this IP/CIDR list.
+# Prefer the proxy network over `true`; `loopback` is useful for a local proxy.
+# CONTEXTFORGE_TRUST_PROXY=127.0.0.1/32,::1/128
 CONTEXTFORGE_SERVER_STORAGE_MODE=local
 CONTEXTFORGE_DATA_DIR=/var/lib/contextforge
 CONTEXTFORGE_RAW_TTL_DAYS=30
@@ -561,11 +564,18 @@ calls without restarting the server. API keys are write-only in the UI/API:
 callers can set, replace, clear, and test them, but stored values are never
 returned. Optional admin password login is cookie-session based; bearer-token
 access remains available for API clients. Admin UI cookies use
-`CONTEXTFORGE_ADMIN_COOKIE_SECURE=auto` by default: direct HTTP access gets a
-non-`Secure` cookie so local operator sessions work, while requests marked as
-HTTPS by a trusted reverse proxy get a `Secure` cookie. If the server is exposed
-directly over TLS, set `CONTEXTFORGE_ADMIN_COOKIE_SECURE=true`; reverse proxies
-must overwrite client-supplied `X-Forwarded-Proto` before forwarding requests.
+`CONTEXTFORGE_ADMIN_COOKIE_SECURE=auto` by default. Direct HTTP access gets a
+non-`Secure` cookie so local operator sessions work. Forwarded headers are
+ignored unless the direct peer matches `CONTEXTFORGE_TRUST_PROXY`. Set it to a
+comma-separated proxy IP/CIDR list (or `loopback` for a proxy on the same
+machine) so `X-Forwarded-Proto: https` can produce a `Secure` cookie and
+`X-Forwarded-For` can identify the client for login rate limiting. `true` trusts
+every direct peer and should only be used when ContextForge is unreachable
+except through a proxy that overwrites client-supplied forwarded headers. If
+Node terminates TLS directly, set `CONTEXTFORGE_ADMIN_COOKIE_SECURE=true`
+instead. Failed-login state is bounded by `CONTEXTFORGE_ADMIN_LOGIN_MAX_KEYS`
+(default `10000`) and rejects new keys while the cap is full rather than
+dropping active rate limits.
 
 `CONTEXTFORGE_OPENAI_API_KEY` is only needed on the process that performs
 embedding calls. In remote/server-backed deployments, keep that key only in the
@@ -620,7 +630,10 @@ curl -fsS http://127.0.0.1:8765/healthz
 6. Choose how clients reach the server.
 
 For a public internet endpoint, put HTTPS in front of the local server. A
-minimal nginx location is:
+minimal nginx location is shown below. With this loopback proxy, set
+`CONTEXTFORGE_TRUST_PROXY=loopback` in the server environment. The right-to-left
+trust-chain parser treats nginx's appended client address as untrusted and does
+not accept spoofed addresses farther to its left.
 
 ```nginx
 server {

@@ -13065,7 +13065,7 @@ test('HTTP server accepts admin UI login sessions', async () => {
   }
 });
 
-test('HTTP server auto-secures admin UI cookies behind HTTPS reverse proxies', async () => {
+test('HTTP server ignores spoofed forwarded proto without a trusted proxy', async () => {
   const dataDir = await makeTempDir();
   const password = 'proxy-cookie-CON' + 'TEXT';
   const remote = await startContextForgeServer({
@@ -13075,6 +13075,36 @@ test('HTTP server auto-secures admin UI cookies behind HTTPS reverse proxies', a
       CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
       CONTEXTFORGE_ADMIN_USER: 'ginishuh',
       CONTEXTFORGE_ADMIN_PASSWORD_PBKDF2: testAdminPasswordHash(password),
+    },
+  });
+
+  try {
+    const login = await fetch(`${remote.url}/ui/login`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-forwarded-proto': 'https',
+      },
+      body: JSON.stringify({ username: 'ginishuh', password }),
+    });
+    assert.equal(login.status, 200);
+    assert.doesNotMatch(login.headers.get('set-cookie'), /;\s*Secure\b/);
+  } finally {
+    await remote.close();
+  }
+});
+
+test('HTTP server auto-secures admin UI cookies behind an explicitly trusted HTTPS proxy', async () => {
+  const dataDir = await makeTempDir();
+  const password = 'trusted-proxy-cookie-CON' + 'TEXT';
+  const remote = await startContextForgeServer({
+    port: 0,
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+      CONTEXTFORGE_ADMIN_USER: 'ginishuh',
+      CONTEXTFORGE_ADMIN_PASSWORD_PBKDF2: testAdminPasswordHash(password),
+      CONTEXTFORGE_TRUST_PROXY: 'loopback',
     },
   });
 
@@ -13137,6 +13167,22 @@ test('HTTP server rejects invalid admin cookie secure mode', async () => {
   );
 });
 
+test('HTTP server rejects invalid trusted proxy ranges', async () => {
+  const dataDir = await makeTempDir();
+  assert.throws(
+    () =>
+      startContextForgeServer({
+        port: 0,
+        env: {
+          CONTEXTFORGE_DATA_DIR: dataDir,
+          CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+          CONTEXTFORGE_TRUST_PROXY: '127.0.0.1/99',
+        },
+      }),
+    /CONTEXTFORGE_TRUST_PROXY.*CIDR prefix/,
+  );
+});
+
 test('HTTP server keeps admin UI login disabled unless credentials are configured', async () => {
   const dataDir = await makeTempDir();
   const remote = await startContextForgeServer({
@@ -13178,7 +13224,10 @@ test('HTTP server rate limits repeated admin UI login failures', async () => {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const login = await fetch(`${remote.url}/ui/login`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: {
+          'content-type': 'application/json',
+          'x-forwarded-for': `198.51.100.${attempt + 1}`,
+        },
         body: JSON.stringify({ username: 'ginishuh', password: 'wrong-password' }),
       });
       assert.equal(login.status, 401);
@@ -13186,10 +13235,171 @@ test('HTTP server rate limits repeated admin UI login failures', async () => {
 
     const limited = await fetch(`${remote.url}/ui/login`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        'x-forwarded-for': '198.51.100.3',
+      },
       body: JSON.stringify({ username: 'ginishuh', password: 'wrong-password' }),
     });
     assert.equal(limited.status, 429);
+  } finally {
+    await remote.close();
+  }
+});
+
+test('HTTP server uses forwarded client IP only for explicitly trusted proxies', async () => {
+  const dataDir = await makeTempDir();
+  const remote = await startContextForgeServer({
+    port: 0,
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+      CONTEXTFORGE_ADMIN_USER: 'ginishuh',
+      CONTEXTFORGE_ADMIN_PASSWORD_PBKDF2: testAdminPasswordHash('correct-password'),
+      CONTEXTFORGE_ADMIN_LOGIN_MAX_FAILURES: '1',
+      CONTEXTFORGE_TRUST_PROXY: '127.0.0.0/8',
+    },
+  });
+
+  try {
+    for (const forwardedFor of ['198.51.100.10', '198.51.100.11']) {
+      const login = await fetch(`${remote.url}/ui/login`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-forwarded-for': forwardedFor,
+        },
+        body: JSON.stringify({ username: 'ginishuh', password: 'wrong-password' }),
+      });
+      assert.equal(login.status, 401);
+    }
+
+    const limited = await fetch(`${remote.url}/ui/login`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-forwarded-for': '198.51.100.10',
+      },
+      body: JSON.stringify({ username: 'ginishuh', password: 'wrong-password' }),
+    });
+    assert.equal(limited.status, 429);
+  } finally {
+    await remote.close();
+  }
+});
+
+test('HTTP server falls back to the socket peer for malformed forwarded client chains', async () => {
+  const dataDir = await makeTempDir();
+  const remote = await startContextForgeServer({
+    port: 0,
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+      CONTEXTFORGE_ADMIN_USER: 'ginishuh',
+      CONTEXTFORGE_ADMIN_PASSWORD_PBKDF2: testAdminPasswordHash('correct-password'),
+      CONTEXTFORGE_ADMIN_LOGIN_MAX_FAILURES: '1',
+      CONTEXTFORGE_TRUST_PROXY: 'loopback',
+    },
+  });
+
+  try {
+    const first = await fetch(`${remote.url}/ui/login`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-forwarded-for': 'not-an-ip',
+      },
+      body: JSON.stringify({ username: 'ginishuh', password: 'wrong-password' }),
+    });
+    assert.equal(first.status, 401);
+
+    const limited = await fetch(`${remote.url}/ui/login`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-forwarded-for': 'also-not-an-ip',
+      },
+      body: JSON.stringify({ username: 'ginishuh', password: 'wrong-password' }),
+    });
+    assert.equal(limited.status, 429);
+  } finally {
+    await remote.close();
+  }
+});
+
+test('HTTP server fails closed when the failed-login key cap is exhausted', async () => {
+  const dataDir = await makeTempDir();
+  const remote = await startContextForgeServer({
+    port: 0,
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+      CONTEXTFORGE_ADMIN_USER: 'ginishuh',
+      CONTEXTFORGE_ADMIN_PASSWORD_PBKDF2: testAdminPasswordHash('correct-password'),
+      CONTEXTFORGE_ADMIN_LOGIN_MAX_FAILURES: '2',
+      CONTEXTFORGE_ADMIN_LOGIN_MAX_KEYS: '2',
+      CONTEXTFORGE_ADMIN_LOGIN_WINDOW_MS: '60000',
+    },
+  });
+
+  try {
+    for (const username of ['first', 'second']) {
+      const login = await fetch(`${remote.url}/ui/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username, password: 'wrong-password' }),
+      });
+      assert.equal(login.status, 401);
+    }
+
+    const overflow = await fetch(`${remote.url}/ui/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'third', password: 'wrong-password' }),
+    });
+    assert.equal(overflow.status, 429);
+
+    const existing = await fetch(`${remote.url}/ui/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'first', password: 'wrong-password' }),
+    });
+    assert.equal(existing.status, 401);
+  } finally {
+    await remote.close();
+  }
+});
+
+test('HTTP server sweeps expired failed-login keys before enforcing the key cap', async () => {
+  const dataDir = await makeTempDir();
+  const remote = await startContextForgeServer({
+    port: 0,
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+      CONTEXTFORGE_ADMIN_USER: 'ginishuh',
+      CONTEXTFORGE_ADMIN_PASSWORD_PBKDF2: testAdminPasswordHash('correct-password'),
+      CONTEXTFORGE_ADMIN_LOGIN_MAX_FAILURES: '2',
+      CONTEXTFORGE_ADMIN_LOGIN_MAX_KEYS: '1',
+      CONTEXTFORGE_ADMIN_LOGIN_WINDOW_MS: '1',
+    },
+  });
+
+  try {
+    const first = await fetch(`${remote.url}/ui/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'first', password: 'wrong-password' }),
+    });
+    assert.equal(first.status, 401);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const afterExpiry = await fetch(`${remote.url}/ui/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'second', password: 'wrong-password' }),
+    });
+    assert.equal(afterExpiry.status, 401);
   } finally {
     await remote.close();
   }

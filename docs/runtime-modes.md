@@ -115,10 +115,17 @@ Meaning:
 - Binding to a non-loopback host requires `CONTEXTFORGE_REMOTE_TOKEN`.
 - Public internet exposure should go through HTTPS reverse proxy when possible.
 - The operator UI cookie defaults to `CONTEXTFORGE_ADMIN_COOKIE_SECURE=auto`.
-  In this mode, direct HTTP access receives a non-`Secure` cookie, and requests
-  marked as HTTPS by a trusted reverse proxy receive a `Secure` cookie. If Node
-  terminates TLS directly, set `CONTEXTFORGE_ADMIN_COOKIE_SECURE=true`. Reverse
-  proxies must overwrite client-supplied `X-Forwarded-Proto`.
+  In this mode, direct HTTP access receives a non-`Secure` cookie. Forwarded
+  headers are ignored unless the socket peer matches `CONTEXTFORGE_TRUST_PROXY`.
+  Configure a comma-separated proxy IP/CIDR list, or `loopback` for a local
+  proxy, before relying on `X-Forwarded-Proto` or `X-Forwarded-For`. The special
+  value `true` trusts every direct peer and is safe only when the server cannot
+  be reached except through a proxy that overwrites client-supplied forwarded
+  headers. If Node terminates TLS directly, set
+  `CONTEXTFORGE_ADMIN_COOKIE_SECURE=true` instead.
+- Failed admin-login keys expire across the whole in-memory map and are capped
+  by `CONTEXTFORGE_ADMIN_LOGIN_MAX_KEYS` (default `10000`). When the cap is full,
+  new keys fail closed with HTTP 429 until an entry expires.
 
 Useful checks:
 
