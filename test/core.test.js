@@ -6206,6 +6206,108 @@ test('raw event TTL pruning blocks previously covered evidence after the latest 
   app.close();
 });
 
+test('raw event TTL pruning blocks covered evidence while the latest distill is incomplete', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_RAW_TTL_DAYS: '7',
+      CONTEXTFORGE_DISTILL_PROVIDER: 'mock',
+    },
+    cwd: process.cwd(),
+  });
+  const scope = {
+    scope: 'repo',
+    scopeKey: 'repo-ttl-incomplete',
+    sessionId: 'session-ttl-incomplete',
+  };
+  app.appendRaw({ ...scope, role: 'user', content: 'covered evidence before incomplete run' });
+  await app.distillCheckpoint(scope);
+
+  const db = new Database(path.join(dataDir, 'contextforge.db'));
+  try {
+    db.prepare('UPDATE raw_events SET created_at = ? WHERE content = ?').run(
+      '2026-01-01T00:00:00.000Z',
+      'covered evidence before incomplete run',
+    );
+    db.prepare(`
+      INSERT INTO distill_runs (
+        id, scope_type, scope_key, session_id, provider, status,
+        source_event_count, input_metadata_json, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, 'started', 0, '{}', ?)
+    `).run(
+      'incomplete-prune-run',
+      'repo',
+      'repo-ttl-incomplete',
+      'session-ttl-incomplete',
+      'mock',
+      new Date(Date.now() + 1000).toISOString(),
+    );
+  } finally {
+    db.close();
+  }
+
+  const result = app.pruneRawEvents({ dryRun: true });
+  assert.equal(result.eligibleRawEvents, 0);
+  assert.equal(result.blockedRawEvents, 1);
+  assert.equal(result.sessions[0].reason, 'latest_distill_incomplete');
+  assert.equal(result.sessions[0].latestDistillRunStatus, 'started');
+  app.close();
+});
+
+test('raw event TTL pruning rejects checkpoint coverage without a succeeded distill run', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_RAW_TTL_DAYS: '7',
+    },
+    cwd: process.cwd(),
+  });
+  const scope = {
+    scope: 'repo',
+    scopeKey: 'repo-ttl-unverified-checkpoint',
+    sessionId: 'session-ttl-unverified-checkpoint',
+  };
+  app.appendRaw({ ...scope, role: 'user', content: 'evidence with unverified checkpoint' });
+  const rawEvent = app.listRawEvents(scope)[0];
+
+  const db = new Database(path.join(dataDir, 'contextforge.db'));
+  try {
+    db.prepare('UPDATE raw_events SET created_at = ? WHERE id = ?').run(
+      '2026-01-01T00:00:00.000Z',
+      rawEvent.id,
+    );
+    db.prepare(`
+      INSERT INTO checkpoints (
+        id, scope_type, scope_key, session_id, summary_short, summary_text,
+        source_event_count, provider, level, metadata_json, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?)
+    `).run(
+      'unverified-prune-checkpoint',
+      'repo',
+      'repo-ttl-unverified-checkpoint',
+      'session-ttl-unverified-checkpoint',
+      'Unverified checkpoint.',
+      'This checkpoint is not linked to a succeeded distill run.',
+      'synthetic',
+      JSON.stringify({ sourceRawEventIds: [rawEvent.id] }),
+      '2026-07-10T04:00:00.000Z',
+    );
+  } finally {
+    db.close();
+  }
+
+  const result = app.pruneRawEvents({ dryRun: true });
+  assert.equal(result.eligibleRawEvents, 0);
+  assert.equal(result.blockedRawEvents, 1);
+  assert.equal(result.sessions[0].latestCheckpointId, 'unverified-prune-checkpoint');
+  assert.equal(result.sessions[0].reason, 'no_successful_level_zero_checkpoint');
+  app.close();
+});
+
 test('append-time TTL pruning uses the same checkpoint coverage guard', async () => {
   const dataDir = await makeTempDir();
   const scope = {
