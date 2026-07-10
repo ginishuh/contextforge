@@ -7357,10 +7357,21 @@ export function createContextForge(options = {}) {
           if (existingCheckpoint) {
             const auditTrigger = options.auditTrigger || options.trigger || null;
             if (!CLOSEOUT_TRIGGERS.has(auditTrigger)) return existingCheckpoint;
+            const recoveryEffective = getEffectiveRuntime(store);
+            const recoveryAuditConfig = recoveryEffective.autoPromoteAudit || {};
+            const recoveryMinBatchCandidates = Number(recoveryAuditConfig.minBatchCandidates || 5);
+            const recoveryBatchLimit = Math.min(10, Number(recoveryAuditConfig.batchLimit || 5));
+            const recoveryScanLimit = Math.max(
+              recoveryMinBatchCandidates,
+              recoveryBatchLimit,
+              1,
+            ) * 10;
             const auditResult = await this.auditMemoryCandidates({
               ...scope,
               sessionId: options.sessionId,
               trigger: auditTrigger,
+              limit: recoveryBatchLimit,
+              scanLimit: recoveryScanLimit,
               jobId: options.jobId,
               _jobLeaseOwner: options._jobLeaseOwner,
               _jobLeaseAttempt: options._jobLeaseAttempt,
@@ -7376,6 +7387,19 @@ export function createContextForge(options = {}) {
             };
             if (auditResult.policy?.audit?.needsRetry === true) {
               throw retryableAuditJobError(recoveredResult, auditResult.policy.audit);
+            }
+            const incompleteRun = store.getLatestDistillRunByJobId(options.jobId);
+            if (incompleteRun?.outputMetadata?.candidateAuditIncomplete === true) {
+              store.completeDistillRun({
+                id: incompleteRun.id,
+                outputMetadata: {
+                  ...incompleteRun.outputMetadata,
+                  candidateAuditIncomplete: false,
+                  candidateAuditRecovered: true,
+                  candidateAudit: auditResult.policy?.audit || null,
+                  recoveredAt: new Date().toISOString(),
+                },
+              });
             }
             return recoveredResult;
           }
@@ -7721,7 +7745,7 @@ export function createContextForge(options = {}) {
           const effectiveForAudit = getEffectiveRuntime(store);
           const auditConfig = effectiveForAudit.autoPromoteAudit || {};
           const minBatchCandidates = Number(auditConfig.minBatchCandidates || 5);
-          const batchLimit = Number(auditConfig.batchLimit || 5);
+          const batchLimit = Math.min(10, Number(auditConfig.batchLimit || 5));
           const scanLimit = Math.max(minBatchCandidates, batchLimit, 1) * 10;
           const auditor = getAutoPromoteAuditor(store);
           const unauditedPending = store

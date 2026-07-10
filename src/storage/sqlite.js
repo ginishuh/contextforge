@@ -3646,7 +3646,6 @@ export class ContextForgeStore {
               error_message = NULL,
               error_code = NULL,
               retryable = NULL,
-              result_json = NULL,
               updated_at = ?,
               started_at = NULL,
               completed_at = NULL
@@ -3789,6 +3788,7 @@ export class ContextForgeStore {
               error_message = NULL,
               error_code = NULL,
               retryable = NULL,
+              result_json = NULL,
               updated_at = ?,
               started_at = COALESCE(started_at, ?),
               completed_at = NULL
@@ -3997,12 +3997,27 @@ export class ContextForgeStore {
         UPDATE distill_runs
         SET status = 'succeeded',
             output_metadata_json = ?,
+            error_message = NULL,
+            error_stack = NULL,
             completed_at = ?
         WHERE id = ?
         RETURNING *
       `)
       .get(json(outputMetadata, {}), nowIso(), id);
     return hydrateDistillRun(row);
+  }
+
+  getLatestDistillRunByJobId(jobId) {
+    return hydrateDistillRun(
+      this.db
+        .prepare(`
+          SELECT * FROM distill_runs
+          WHERE job_id = ?
+          ORDER BY created_at DESC, id DESC
+          LIMIT 1
+        `)
+        .get(jobId),
+    );
   }
 
   findCheckpointByJobId({ scopeType, scopeKey, jobId }) {

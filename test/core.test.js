@@ -7830,6 +7830,9 @@ test('durable distill jobs do not swallow lease loss during embedded closeout au
   [candidate] = app.listMemoryCandidates({ ...source, status: 'pending' });
   assert.ok(candidate.reviewedAt);
   assert.equal(auditInvocations, 2);
+  const [recoveredRun] = app.listDistillRuns(source);
+  assert.equal(recoveredRun.status, 'succeeded');
+  assert.equal(recoveredRun.outputMetadata.candidateAuditRecovered, true);
 });
 
 test('durable distill jobs retry embedded closeout audit provider failures', async () => {
@@ -7840,11 +7843,12 @@ test('durable distill jobs retry embedded closeout audit provider failures', asy
     env: {
       CONTEXTFORGE_DATA_DIR: dataDir,
       CONTEXTFORGE_DISTILL_PROVIDER: 'embedded_audit_retry_provider',
+      CONTEXTFORGE_AUTO_PROMOTE_AUDIT_MIN_BATCH_CANDIDATES: '6',
     },
     cwd: process.cwd(),
     autoPromoteAuditor: async () => {
       auditInvocations += 1;
-      if (auditInvocations === 1) throw new ProviderTimeoutError('embedded_audit_provider', 10);
+      if (auditInvocations <= 5) throw new ProviderTimeoutError('embedded_audit_provider', 10);
       return {
         approved: true,
         decision: 'approve',
@@ -7864,18 +7868,16 @@ test('durable distill jobs retry embedded closeout audit provider failures', asy
           openQuestions: [],
           memoryCandidates:
             distillInvocations === 1
-              ? [
-                  {
-                    key: 'embedded-audit-retry',
-                    content: 'Retry an older checkpoint candidate audit without redistilling the job checkpoint.',
+              ? Array.from({ length: 5 }, (_, index) => ({
+                    key: `embedded-audit-retry-${index + 1}`,
+                    content: `Retry older checkpoint candidate ${index + 1} without redistilling the job checkpoint.`,
                     category: 'runbook',
                     candidateType: 'runbook',
                     confidence: 0.96,
                     stability: 0.96,
                     sensitivity: 'low',
                     promotionRecommendation: 'promote',
-                  },
-                ]
+                  }))
               : [],
         };
       },
@@ -7892,6 +7894,7 @@ test('durable distill jobs retry embedded closeout audit provider failures', asy
   assert.equal(first.requeued, 1);
   assert.equal(first.jobs[0].status, 'queued');
   assert.equal(first.jobs[0].result.candidateAudit.needsRetry, true);
+  assert.equal(first.jobs[0].result.candidateAudit.retryableFailureCount, 5);
   assert.equal(app.listCheckpoints(source).length, 2);
 
   const second = await app.processJobs({ workerId: 'embedded-retry-worker-2', leaseMs: 1000 });
@@ -7902,9 +7905,10 @@ test('durable distill jobs retry embedded closeout audit provider failures', asy
   const checkpoints = app.listCheckpoints(source);
   assert.equal(checkpoints.length, 2);
   assert.equal(checkpoints.filter((checkpoint) => checkpoint.metadata.operationJobId).length, 1);
-  const [candidate] = app.listMemoryCandidates({ ...source, status: 'pending' });
-  assert.equal(candidate.reviewMetadata.audit.decision, 'approve');
-  assert.equal(auditInvocations, 2);
+  const candidates = app.listMemoryCandidates({ ...source, status: 'pending' });
+  assert.equal(candidates.length, 5);
+  assert.ok(candidates.every((candidate) => candidate.reviewMetadata.audit.decision === 'approve'));
+  assert.equal(auditInvocations, 10);
   assert.equal(distillInvocations, 2);
 });
 
