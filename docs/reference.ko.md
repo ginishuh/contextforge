@@ -96,6 +96,15 @@ profile을 함께 쓰는 구성이 권장된다. remote mode에서는 workspace 
 read/write/resolve도 remote canonical server로 가야 하며, local 또는
 project-local로 조용히 fallback하면 안 된다.
 
+Workspace 선택은 명시적이다. ContextForge는 primary repo scope나 workspace
+membership에서 workspace를 자동 추론하지 않으며, profile을 저장해도 agent
+호출의 federation은 자동 활성화되지 않는다. Caller가 `bootstrap_context`,
+`search`, `agentStart`에 `workspaceKey`를 넘겨야 한다. 반복적으로
+사용할 key는 repo-local agent 지침이나 adapter/wrapper 설정에 기록한다.
+하나의 agent가 여러 서로 관계없는 workspace를 오갈 수 있으므로 process-global
+workspace를 가정하지 않는다. `workspaceKey`가 없으면 bootstrap과 search는
+기존 단일 repo 동작을 유지한다.
+
 예시:
 
 ```bash

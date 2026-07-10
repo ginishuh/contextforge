@@ -132,6 +132,13 @@ scoped search, session ID, closeout, promotion 규칙이 정리돼 있다.
 
 ## Retrieval·품질
 
+Workspace profile은 호출별로 명시해야 하는 opt-in retrieval topology다.
+ContextForge는 현재 repo scope에서 workspace를 자동 추론하지 않으며,
+profile을 만드는 것만으로 federation이 활성화되지 않는다. Caller가
+`bootstrap_context`, `search`, `agentStart`에 `workspaceKey`를 넘겨야 한다.
+반복적으로 사용할 workspace key는 repo-local agent 지침이나 wrapper
+설정에 기록한다.
+
 - [Workspace profile·architecture](docs/architecture.md)
 - [Retrieval performance·diagnostic](docs/retrieval-performance.md)
 - [Cursor pagination contract](docs/list-pagination.md)

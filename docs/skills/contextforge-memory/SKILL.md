@@ -67,6 +67,14 @@ Workspace profiles are retrieval topology, not storage authority. Storage modes
 answer where memory is authoritative; workspace profiles answer which existing
 scopes are consulted together. They are independent.
 
+Workspace selection is explicit per call. ContextForge does not infer a
+workspace from the current repo scope or workspace membership, and creating a
+profile does not activate federation by itself. The caller must pass the
+intended `workspaceKey` to `bootstrap_context`, `search`, or `agentStart`.
+For repeated use, record it in repo-local agent instructions or an
+adapter/wrapper configuration. Without `workspaceKey`, retrieval keeps its
+ordinary single-repo behavior.
+
 For multi-repo products, call `resolve_workspace` when a workspace profile is
 configured and the task may involve cross-repo contracts, frontend consumers,
 E2E, release gates, or shared API/domain decisions. Read the scope plan before
