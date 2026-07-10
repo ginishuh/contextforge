@@ -3,8 +3,8 @@
 ## Unreleased
 
 - Refreshed transitive production dependencies to patched `hono` and `qs`
-  releases and added a CI gate that rejects high-severity production dependency
-  advisories.
+  releases and added a CI gate that rejects moderate-or-higher production
+  dependency advisories.
 - Hardened local SQLite storage by enforcing `0700` on POSIX data directories
   and `0600` on database/journal/WAL/SHM files, reporting the active permission
   policy in `dbInfo`, and documenting inherited ACL semantics on Windows. Plaintext

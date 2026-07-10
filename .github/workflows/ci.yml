@@ -112,10 +112,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
-      - name: Reject high-severity production advisories
-        run: npm audit --omit=dev --audit-level=high
+      # npm audit reads package-lock.json directly; no install is needed for this
+      # fast supply-chain gate.
+      - name: Reject moderate-or-higher production advisories
+        run: npm audit --omit=dev --audit-level=moderate
 
   ci-summary:
     name: CI Summary
@@ -144,5 +145,5 @@ jobs:
             exit 1
           fi
           if [[ "${{ needs.changes.outputs.run-tests }}" != "true" ]]; then
-            echo "docs-only change: Node test matrix skipped"
+            echo "docs-only change: Node test matrix and production dependency audit skipped"
           fi
