@@ -967,11 +967,14 @@ export function createContextForgeMcpServer({
     {
       title: 'Search Memory',
       description:
-        'Search scoped ContextForge retrieval results. Results may include type=memory reviewed durable facts, type=checkpoint credible recent handoff state, and type=memory_candidate unreviewed promotion candidates. Pass repoPath or cwd to retrieve repo results for a checkout outside the MCP process cwd; repoPath takes precedence. Pass scopeKey to pin the canonical repo memory key. Pass workspaceKey to add bounded workspace federation over existing scopes; workspace profiles do not change storage mode.',
+        'Search bounded indexed scoped memory. Results can be reviewed memory, checkpoint, or unreviewed memory_candidate. includeDiagnostics returns an envelope even for zero hits. The per-index window is min(max(limit*4,50),candidateLimit), hard-capped at 500; results cap at 100. legacyFullScan enables linear substring diagnosis only. Use repoPath/cwd or scopeKey for repo identity and workspaceKey for bounded workspace federation.',
       inputSchema: {
         ...scopedSchema,
         query: z.string(),
         limit: z.number().int().positive().optional(),
+        candidateLimit: z.number().int().positive().optional(),
+        legacyFullScan: z.boolean().optional(),
+        includeDiagnostics: z.boolean().optional(),
         searchScopes: z.enum(['scope', 'repo', 'shared', 'repo+shared', 'local']).optional(),
         sharedScopeKey: z.string().optional(),
         workspaceKey: z.string().optional(),

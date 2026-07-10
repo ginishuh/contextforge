@@ -16,11 +16,11 @@ HTTP.
 
 | Profile | Tools | Instructions bytes | `tools/list` JSON bytes | Description bytes | Estimated tokens |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `agent-core` | 24 | 1,423 | 25,243 | 5,992 | 6,667 |
-| `review` | 37 | 1,423 | 37,455 | 8,038 | 9,720 |
-| `operator` | 54 | 1,423 | 53,194 | 11,128 | 13,655 |
+| `agent-core` | 24 | 1,423 | 25,331 | 5,920 | 6,689 |
+| `review` | 37 | 1,423 | 37,543 | 7,966 | 9,742 |
+| `operator` | 54 | 1,423 | 53,282 | 11,056 | 13,677 |
 | `workspace-admin` | 11 | 1,423 | 8,888 | 2,061 | 2,578 |
-| `all` | 60 | 1,423 | 58,292 | 12,150 | 14,929 |
+| `all` | 60 | 1,423 | 58,380 | 12,078 | 14,951 |
 
 `estimatedInitialTokens` is `ceil((instructionsBytes + toolSchemaBytes) / 4)`.
 It is a conservative transport-level comparison, not a claim about a specific

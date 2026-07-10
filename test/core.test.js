@@ -4722,8 +4722,14 @@ test('hybrid ranking keeps strong lexical matches ahead of weak vector-only matc
 
   const results = searchMemories(
     {
+      searchMemoryIndex: ({ limit }) => {
+        assert.equal(limit, 50);
+        return [{ memory: exactMemory, ftsRank: -0.001 }];
+      },
       searchMemoryVectorIndex: () => [{ memory: vectorMemory, distance: 0.99, model: 'test-embedding', dimensions: 3 }],
-      listMemories: () => [exactMemory],
+      listMemories: () => {
+        throw new Error('default indexed retrieval must not scan the full scope');
+      },
     },
     {
       scopeType: 'repo',
@@ -4735,9 +4741,173 @@ test('hybrid ranking keeps strong lexical matches ahead of weak vector-only matc
 
   assert.equal(results.length, 2);
   assert.equal(results[0].memory.key, 'sqlite-vec-upsert');
-  assert.equal(results[0].retrieval.method, 'lexical');
+  assert.equal(results[0].retrieval.method, 'fts5+lexical');
   assert.equal(results[1].memory.key, 'unrelated-vector');
   assert.equal(results[1].retrieval.method, 'vector');
+  assert.deepEqual(results[0].retrieval.diagnostics.sources, {
+    fts: 1,
+    vectorMemory: 1,
+    vectorCheckpoint: 0,
+    vectorCandidate: 0,
+    legacyLexical: 0,
+  });
+  assert.equal(results[0].retrieval.diagnostics.scannedRows, 2);
+  assert.equal(results[0].retrieval.diagnostics.candidateRows, 2);
+});
+
+test('retrieval degrades to bounded FTS candidates when vector search is unavailable', () => {
+  const memory = {
+    id: 'memory-fts-degraded',
+    key: 'degraded-vector-fallback',
+    category: 'runbook',
+    content: 'Use indexed FTS when the vector index is unavailable.',
+    tags: ['retrieval'],
+    importance: 3,
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+  const results = searchMemories(
+    {
+      searchMemoryIndex: ({ limit }) => {
+        assert.equal(limit, 50);
+        return [{ memory, ftsRank: -0.001 }];
+      },
+      searchMemoryVectorIndex: () => {
+        throw new Error('sqlite-vec is unavailable');
+      },
+      listMemories: () => {
+        throw new Error('degraded indexed retrieval must not fall back to a scope scan');
+      },
+    },
+    {
+      scopeType: 'repo',
+      scopeKey: 'repo-degraded-vector',
+      query: 'indexed FTS',
+      queryEmbedding: [1, 0, 0],
+    },
+  );
+
+  assert.equal(results[0].memory.key, 'degraded-vector-fallback');
+  assert.equal(results[0].retrieval.method, 'fts5+lexical');
+  assert.equal(results[0].retrieval.diagnostics.sources.fts, 1);
+  assert.equal(results[0].retrieval.diagnostics.sources.vectorMemory, 0);
+  assert.equal(results[0].retrieval.diagnostics.scannedRows, 1);
+  assert.deepEqual(results[0].retrieval.diagnostics.degradedSources, [
+    { source: 'vectorMemory', message: 'sqlite-vec is unavailable' },
+  ]);
+});
+
+test('indexed retrieval bounds candidates and exposes legacy full scan only by explicit opt-in', () => {
+  const substringMemory = {
+    id: 'memory-substring',
+    key: 'prefix-internal-suffix',
+    category: 'note',
+    content: 'Diagnostic substring fallback.',
+    tags: [],
+    importance: 0,
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+  const observedLimits = [];
+  const store = {
+    searchMemoryIndex: ({ limit }) => {
+      observedLimits.push(limit);
+      return [];
+    },
+    listMemories: () => [substringMemory],
+  };
+
+  const indexed = searchMemories(store, {
+    scopeType: 'repo',
+    scopeKey: 'repo-bounded',
+    query: 'internal',
+    limit: 1000,
+    candidateLimit: 1000,
+  });
+  assert.deepEqual(indexed, []);
+  assert.equal(indexed.diagnostics.returnedRows, 0);
+  assert.equal(indexed.diagnostics.scannedRows, 0);
+  assert.deepEqual(observedLimits, [400]);
+
+  const diagnostic = searchMemories(store, {
+    scopeType: 'repo',
+    scopeKey: 'repo-bounded',
+    query: 'internal',
+    limit: 1000,
+    candidateLimit: 1000,
+    legacyFullScan: true,
+  });
+  assert.equal(diagnostic.length, 1);
+  assert.equal(diagnostic[0].memory.key, 'prefix-internal-suffix');
+  assert.equal(diagnostic[0].retrieval.method, 'lexical');
+  assert.equal(diagnostic[0].retrieval.diagnostics.requestedLimit, 1000);
+  assert.equal(diagnostic[0].retrieval.diagnostics.resultLimit, 100);
+  assert.equal(diagnostic[0].retrieval.diagnostics.candidateLimit, 400);
+  assert.equal(diagnostic[0].retrieval.diagnostics.legacyFullScan, true);
+  assert.equal(diagnostic[0].retrieval.diagnostics.sources.legacyLexical, 1);
+  assert.equal(diagnostic[0].retrieval.diagnostics.returnedRows, 1);
+  assert.ok(diagnostic[0].retrieval.diagnostics.elapsedMs >= 0);
+});
+
+test('core search keeps arbitrary substring fallback behind legacyFullScan', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: { CONTEXTFORGE_DATA_DIR: dataDir, CONTEXTFORGE_EMBEDDINGS_PROVIDER: 'none' },
+    cwd: process.cwd(),
+  });
+  try {
+    app.remember({
+      scope: 'repo',
+      scopeKey: 'repo-substring-diagnostic',
+      key: 'prefix-internal-suffix',
+      content: 'Arbitrary token substring comparison is diagnostic only.',
+    });
+    const indexed = app.search({
+      scope: 'repo',
+      scopeKey: 'repo-substring-diagnostic',
+      query: 'nterna',
+    });
+    assert.deepEqual(indexed, []);
+
+    const zeroHitEnvelope = app.search({
+      scope: 'repo',
+      scopeKey: 'repo-substring-diagnostic',
+      query: 'nterna',
+      includeDiagnostics: true,
+    });
+    assert.equal(zeroHitEnvelope.kind, 'search_results');
+    assert.deepEqual(zeroHitEnvelope.results, []);
+    assert.equal(zeroHitEnvelope.diagnostics.returnedRows, 0);
+    assert.equal(zeroHitEnvelope.diagnostics.sources.fts, 0);
+    assert.ok(zeroHitEnvelope.diagnostics.elapsedMs >= 0);
+
+    const legacy = app.search({
+      scope: 'repo',
+      scopeKey: 'repo-substring-diagnostic',
+      query: 'nterna',
+      legacyFullScan: true,
+      candidateLimit: 5,
+    });
+    assert.equal(legacy[0].memory.key, 'prefix-internal-suffix');
+    assert.equal(legacy[0].retrieval.method, 'lexical');
+    assert.equal(legacy[0].retrieval.diagnostics.candidateLimit, 5);
+    assert.equal(legacy[0].retrieval.diagnostics.sources.legacyLexical, 1);
+  } finally {
+    app.close();
+  }
+});
+
+test('retrieval benchmark reports bounded indexed rows against the legacy scope scan', async () => {
+  const benchmark = JSON.parse(
+    (
+      await execFileAsync('node', ['scripts/benchmark-retrieval.js', '--sizes', '100', '--iterations', '1'])
+    ).stdout,
+  );
+  assert.equal(benchmark.kind, 'contextforge_retrieval_benchmark');
+  assert.equal(benchmark.results[0].size, 100);
+  assert.equal(benchmark.results[0].modes.ftsPrefix.scannedRows, 1);
+  assert.equal(benchmark.results[0].modes.ftsPrefix.firstKey, 'retrievaltarget-100');
+  assert.equal(benchmark.results[0].modes.koreanFts.firstKey, 'retrievaltarget-100');
+  assert.equal(benchmark.results[0].modes.pathErrorFts.firstKey, 'retrievaltarget-100');
+  assert.equal(benchmark.results[0].modes.legacySubstring.scannedRows, 100);
 });
 
 test('distillCheckpoint queues embedding jobs and processEmbeddingJobs indexes them', async () => {
@@ -13955,6 +14125,10 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.ok(bootstrapTool.description.includes('memoryMap'));
     const searchTool = toolList.tools.find((tool) => tool.name === 'search');
     assert.ok(searchTool.inputSchema.properties.workspaceKey);
+    assert.ok(searchTool.inputSchema.properties.limit);
+    assert.ok(searchTool.inputSchema.properties.candidateLimit);
+    assert.ok(searchTool.inputSchema.properties.legacyFullScan);
+    assert.ok(searchTool.inputSchema.properties.includeDiagnostics);
     assert.ok(searchTool.inputSchema.properties.workspaceMode);
     assert.ok(searchTool.inputSchema.properties.workspaceResultLimit);
     assert.ok(searchTool.inputSchema.properties.workspacePerScopeLimit);
