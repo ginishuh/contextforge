@@ -420,7 +420,12 @@ async function main() {
   if (command === 'serve') {
     const host = options.host || process.env.CONTEXTFORGE_REMOTE_HOST || '127.0.0.1';
     const port = options.port == null ? Number(process.env.CONTEXTFORGE_REMOTE_PORT || 8765) : Number(options.port);
-    const server = await startContextForgeServer({ host, port });
+    const env = {
+      ...process.env,
+      ...(options.mcpProfile ? { CONTEXTFORGE_MCP_PROFILE: options.mcpProfile } : {}),
+      ...(options.mcpTools ? { CONTEXTFORGE_MCP_TOOLS: options.mcpTools } : {}),
+    };
+    const server = await startContextForgeServer({ host, port, env });
     printJson({ listening: server.url });
     return;
   }

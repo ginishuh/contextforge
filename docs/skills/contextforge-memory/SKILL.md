@@ -29,6 +29,29 @@ ContextForge has layered state:
 
 Trust order for action: live source > reviewed durable memory > checkpoint handoff > memory_candidate.
 
+## MCP Tool Profiles
+
+ContextForge intentionally keeps the default prompt surface small. Missing MCP
+tools may mean the server selected a narrower profile; this is not evidence that
+the underlying core or remote API lacks the operation.
+
+- `agent-core` (default): bootstrap, scoped retrieval, manual evidence,
+  checkpointing, durable distill submission/status, and ordinary closeout.
+- `review`: `agent-core` plus candidate audits, duplicate/update review,
+  correction, promotion, and deactivation.
+- `operator`: all runtime operations except workspace mutations; use for job
+  workers, due distills/consolidations, retention, embeddings, and usage.
+- `workspace-admin`: workspace profiles/members/routing and scope migration.
+- `all`: compatibility surface for clients that previously received every tool.
+
+Operators can inspect the exact selected surface with
+`node src/mcp.js --describe-surface`. Set `CONTEXTFORGE_MCP_PROFILE` on either
+stdio or HTTP server processes, or `CONTEXTFORGE_MCP_TOOLS` for an exact
+allowlist. Do not broaden a normal agent registration merely because one
+maintenance task is needed; use a separate operator/admin registration where
+the client supports it. Profile selection remains functional when this skill is
+not installed, but this skill is the authoritative detailed workflow guide.
+
 ## Scopes And Storage
 
 Always set scope intentionally:

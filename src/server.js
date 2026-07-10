@@ -552,7 +552,10 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
         sendJson(response, 401, { error: { message: 'Unauthorized.' } });
         return;
       }
-      const mcpServer = createContextForgeMcpServer({ app: createRemoteAccessApp(serverApp, 'http-mcp') });
+      const mcpServer = createContextForgeMcpServer({
+        app: createRemoteAccessApp(serverApp, 'http-mcp'),
+        env,
+      });
       try {
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: undefined,

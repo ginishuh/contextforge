@@ -349,6 +349,37 @@ CONTEXTFORGE_REMOTE_TOKEN=change-me \
 node src/cli.js dbInfo
 ```
 
+## MCP 도구 프로필
+
+MCP는 기본적으로 모든 유지보수·관리 schema를 preload하지 않고 24개 도구의
+`agent-core` 프로필만 노출한다.
+
+| 프로필 | 도구 수 | 용도 |
+| --- | ---: | --- |
+| `agent-core` | 24 | 일반 agent bootstrap, 검색, evidence, distill, closeout |
+| `review` | 37 | candidate와 durable memory 검토 |
+| `operator` | 54 | job, retention, embedding, usage, 서버 유지보수 |
+| `workspace-admin` | 11 | workspace topology와 scope migration |
+| `all` | 60 | 기존 전체 MCP surface 호환 |
+
+`CONTEXTFORGE_MCP_PROFILE`로 프로필을 선택한다. 정확한 comma-separated
+allowlist가 필요하면 `CONTEXTFORGE_MCP_TOOLS`를 사용하며, 이 값은 프로필보다
+우선한다. 알 수 없는 프로필이나 도구 이름은 startup에서 즉시 실패한다. 로컬
+stdio는 `--profile`/`--tools`, `node src/cli.js serve`는
+`--mcpProfile`/`--mcpTools`도 지원한다.
+
+```bash
+node src/mcp.js --describe-surface --profile agent-core
+```
+
+이 보고서는 활성/비활성 도구 이름, instruction/schema/description byte 수와 초기
+token 추정치를 보여준다. 기존 client가 전체 surface에 의존했다면 migration 동안만
+`all`을 사용하고, 일반 coding agent는 기본 `agent-core`를 유지하는 편이 좋다.
+상세 workflow는 package에 포함된 `contextforge-memory` skill에 있으며, skill 설치
+여부와 관계없이 profile 선택과 서버 startup은 동작한다.
+재현 가능한 transport 측정값과 host token 한계는
+[MCP Surface Budget](docs/mcp-surface-budget.md)에 정리돼 있다.
+
 ## HTTP 서버
 
 서버 실행:
