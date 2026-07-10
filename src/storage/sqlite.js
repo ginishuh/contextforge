@@ -6,6 +6,9 @@ import * as sqliteVec from 'sqlite-vec';
 import { secureDataDirectoryPermissions } from './permissions.js';
 
 export const SCHEMA_VERSION = 19;
+export const SQLITE_BUSY_TIMEOUT_MS = 5000;
+export const SQLITE_JOURNAL_MODE = 'wal';
+export const SQLITE_SYNCHRONOUS = 'normal';
 
 export class UnsupportedSchemaVersionError extends Error {
   constructor(existingVersion, supportedVersion) {
@@ -620,7 +623,13 @@ export class ContextForgeStore {
     this.db = new Database(this.dbPath);
     try {
       this.assertSupportedSchemaVersion();
-      this.db.exec('PRAGMA foreign_keys = ON;');
+      this.db.exec(`
+        PRAGMA foreign_keys = ON;
+        PRAGMA journal_mode = WAL;
+        PRAGMA synchronous = NORMAL;
+        PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS};
+      `);
+      this.migrationBackup = this.backupBeforeMigration();
       this.vectorStatus = this.loadVectorExtension();
       this.migrate();
       this.storagePermissions = secureDataDirectoryPermissions(dataDir);
@@ -635,10 +644,12 @@ export class ContextForgeStore {
       .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_meta'")
       .get();
     if (!hasSchemaMeta) {
+      this.openedSchemaVersion = null;
       return;
     }
     const stored = this.db.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").get()?.value;
     if (stored == null || stored === '') {
+      this.openedSchemaVersion = null;
       return;
     }
     const existingVersion = Number(stored);
@@ -651,6 +662,29 @@ export class ContextForgeStore {
     if (existingVersion > SCHEMA_VERSION) {
       throw new UnsupportedSchemaVersionError(existingVersion, SCHEMA_VERSION);
     }
+    this.openedSchemaVersion = existingVersion;
+  }
+
+  backupBeforeMigration() {
+    if (
+      !Number.isInteger(this.openedSchemaVersion) ||
+      this.openedSchemaVersion <= 0 ||
+      this.openedSchemaVersion >= SCHEMA_VERSION
+    ) {
+      return null;
+    }
+    const timestamp = new Date().toISOString().replaceAll(/[:.]/g, '-');
+    const backupPath = path.join(
+      this.dataDir,
+      `contextforge.db.pre-migration-v${this.openedSchemaVersion}-${timestamp}.bak`,
+    );
+    this.db.prepare('VACUUM INTO ?').run(backupPath);
+    fs.chmodSync(backupPath, 0o600);
+    return {
+      file: backupPath,
+      fromSchemaVersion: this.openedSchemaVersion,
+      toSchemaVersion: SCHEMA_VERSION,
+    };
   }
 
   loadVectorExtension() {
@@ -1192,6 +1226,124 @@ export class ContextForgeStore {
         sqliteVecVersion: this.vectorStatus.version,
         error: this.vectorStatus.error,
         dimensions: embeddingDimensions ? Number(embeddingDimensions) : null,
+      },
+      sqlite: this.sqlitePolicy(),
+      migrationBackup: this.migrationBackup,
+    };
+  }
+
+  sqlitePolicy() {
+    const synchronousValue = Number(this.db.pragma('synchronous', { simple: true }));
+    const synchronousNames = { 0: 'off', 1: 'normal', 2: 'full', 3: 'extra' };
+    return {
+      journalMode: String(this.db.pragma('journal_mode', { simple: true })).toLowerCase(),
+      synchronous: synchronousNames[synchronousValue] || String(synchronousValue),
+      busyTimeoutMs: Number(this.db.pragma('busy_timeout', { simple: true })),
+      foreignKeys: Boolean(this.db.pragma('foreign_keys', { simple: true })),
+    };
+  }
+
+  operationalSnapshot({ now = new Date() } = {}) {
+    const nowIsoText = now.toISOString();
+    const operationJobs = { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 };
+    for (const row of this.db.prepare('SELECT status, COUNT(*) AS count FROM operation_jobs GROUP BY status').all()) {
+      operationJobs[row.status] = row.count;
+    }
+    const oldestQueuedAt = this.db
+      .prepare("SELECT MIN(created_at) AS value FROM operation_jobs WHERE status = 'queued'")
+      .get().value;
+    const staleRunningJobs = this.db
+      .prepare(
+        "SELECT COUNT(*) AS count FROM operation_jobs WHERE status = 'running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?",
+      )
+      .get(nowIsoText).count;
+    const distill = this.db
+      .prepare(
+        `SELECT provider, status, COUNT(*) AS count,
+                  AVG(CASE WHEN completed_at IS NOT NULL
+                      THEN (julianday(completed_at) - julianday(created_at)) * 86400000
+                      ELSE NULL END) AS average_elapsed_ms
+         FROM distill_runs GROUP BY provider, status`,
+      )
+      .all()
+      .map((row) => ({
+        provider: row.provider,
+        status: row.status,
+        count: row.count,
+        averageElapsedMs: row.average_elapsed_ms,
+      }));
+    const usage = this.db
+      .prepare(
+        `SELECT COUNT(*) AS events,
+                COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failures,
+                AVG(elapsed_ms) AS average_elapsed_ms
+         FROM llm_usage_events`,
+      )
+      .get();
+    const usageByOperation = this.db
+      .prepare(
+        `SELECT operation, status, COUNT(*) AS events,
+                COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                AVG(elapsed_ms) AS average_elapsed_ms
+         FROM llm_usage_events
+         GROUP BY operation, status
+         ORDER BY operation ASC, status ASC`,
+      )
+      .all()
+      .map((row) => ({
+        operation: row.operation,
+        status: row.status,
+        events: row.events,
+        totalTokens: row.total_tokens,
+        averageElapsedMs: row.average_elapsed_ms,
+      }));
+    const providerTimeouts = this.db
+      .prepare(
+        `SELECT COUNT(*) AS count FROM distill_runs
+         WHERE status = 'failed'
+           AND (lower(error_message) LIKE '%timeout%' OR lower(error_message) LIKE '%timed out%')`,
+      )
+      .get().count;
+    const disk = fs.statfsSync(this.dataDir);
+    let writable = true;
+    try {
+      fs.accessSync(this.dataDir, fs.constants.R_OK | fs.constants.W_OK);
+      fs.accessSync(this.dbPath, fs.constants.R_OK | fs.constants.W_OK);
+      writable = Number(this.db.pragma('query_only', { simple: true })) === 0;
+    } catch {
+      writable = false;
+    }
+    return {
+      observedAt: nowIsoText,
+      database: {
+        queryOk: this.db.prepare('SELECT 1 AS ok').get().ok === 1,
+        writable,
+        schemaVersion: Number(this.db.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").get().value),
+        supportedSchemaVersion: SCHEMA_VERSION,
+        sqlite: this.sqlitePolicy(),
+      },
+      disk: {
+        availableBytes: Number(disk.bavail) * Number(disk.bsize),
+        totalBytes: Number(disk.blocks) * Number(disk.bsize),
+      },
+      queues: {
+        operationJobs,
+        oldestQueuedAt: oldestQueuedAt || null,
+        oldestQueuedWaitMs: oldestQueuedAt ? Math.max(0, now.getTime() - Date.parse(oldestQueuedAt)) : 0,
+        staleRunningJobs,
+        embeddingJobs: this.countEmbeddingJobs(),
+      },
+      providers: {
+        distill,
+        usage: {
+          events: usage.events,
+          totalTokens: usage.total_tokens,
+          failures: usage.failures,
+          averageElapsedMs: usage.average_elapsed_ms,
+          byOperation: usageByOperation,
+          timeouts: providerTimeouts,
+        },
       },
     };
   }

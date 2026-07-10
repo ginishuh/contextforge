@@ -113,6 +113,8 @@ See [docs/architecture.md](docs/architecture.md) for the full product model and
 [docs/roadmap.md](docs/roadmap.md) for the implementation roadmap. For the
 operator-facing distinction between local all-in-one, HTTP server, and external
 remote client roles, see [ContextForge Runtime Modes](docs/runtime-modes.md).
+For readiness, metrics, verified backup/restore, and graceful shutdown, see
+[ContextForge Operations](docs/operations.md).
 
 ## Workspace Profiles
 
@@ -689,6 +691,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now contextforge-remote.service
 systemctl status contextforge-remote.service
 curl -fsS http://127.0.0.1:8765/healthz
+curl -fsS http://127.0.0.1:8765/readyz
 ```
 
 6. Choose how clients reach the server.

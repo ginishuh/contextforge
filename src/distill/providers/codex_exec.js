@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { ProviderTimeoutError } from '../../runtime/provider_execution.js';
+import { registerRuntimeChild } from '../../runtime/child_processes.js';
 import { assertExternalProviderAllowed } from '../../testing/external_provider.js';
 import { STRUCTURED_CHECKPOINT_SCHEMA_VERSION } from '../validate.js';
 
@@ -512,6 +513,7 @@ export function runCodexExecCommand({
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+    const unregisterChild = registerRuntimeChild(child);
 
     let stdout = '';
     let stderr = '';
@@ -524,6 +526,7 @@ export function runCodexExecCommand({
       if (killTimer) {
         clearTimeout(killTimer);
       }
+      unregisterChild();
     }
     function settle(fn) {
       if (settled) return false;

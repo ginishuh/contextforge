@@ -2,6 +2,8 @@ import { normalizeScopeOptions } from '../scopes/index.js';
 
 const REMOTE_METHODS = [
   'dbInfo',
+  'readiness',
+  'operationalMetrics',
   'migrateScope',
   'getRuntimeSettings',
   'updateRuntimeSettings',

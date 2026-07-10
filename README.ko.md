@@ -404,7 +404,11 @@ CONTEXTFORGE_REMOTE_TOKEN=change-me \
 node src/cli.js serve --host 127.0.0.1 --port 8765
 ```
 
-서버는 `/mcp`, `/v0/*`, `/healthz`, `/ui/`를 제공한다. token이 설정되어 있으면
+서버는 `/mcp`, `/v0/*`, `/healthz`, `/readyz`, `/metrics`, `/ui/`를 제공한다.
+`/healthz`는 liveness, `/readyz`는 DB/schema·disk·queue readiness다. `/metrics`는
+Prometheus text이며 remote token 또는 admin session 인증이 필요하다. 검증된
+backup/restore와 graceful shutdown 절차는
+[ContextForge Operations](docs/operations.md)을 따른다. token이 설정되어 있으면
 remote API 호출에는 `CONTEXTFORGE_REMOTE_TOKEN`이 필요하다.
 
 운영 UI는 `/ui/`에서 사용할 수 있다. UI에서는 runtime 설정, distill provider,

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseCodexExecJson } from '../distill/providers/codex_exec.js';
 import { ProviderTimeoutError } from '../runtime/provider_execution.js';
+import { registerRuntimeChild } from '../runtime/child_processes.js';
 import {
   AUDIT_OUTPUT_SCHEMA,
   AUTO_PROMOTE_AUDIT_SCHEMA_VERSION,
@@ -76,6 +77,7 @@ export function runCodexSdkPythonCommand({
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
     });
+    const unregisterChild = registerRuntimeChild(child);
     let stdout = '';
     let stderr = '';
     let settled = false;
@@ -85,6 +87,7 @@ export function runCodexSdkPythonCommand({
     function cleanup() {
       clearTimeout(timeout);
       if (killTimer) clearTimeout(killTimer);
+      unregisterChild();
     }
     const timeout = setTimeout(() => {
       if (settled) return;

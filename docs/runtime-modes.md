@@ -43,7 +43,8 @@ Use local all-in-one when one machine owns its own memory and no other machine
 needs to share it.
 
 Use HTTP server mode when this checkout or host is supposed to own canonical
-memory and expose ContextForge through `/mcp`, `/v0/*`, and `/healthz`.
+memory and expose ContextForge through `/mcp`, `/v0/*`, `/healthz`, `/readyz`,
+and authenticated `/metrics`.
 
 Use external remote client mode when another ContextForge server owns canonical
 memory and this checkout only reads/writes through `CONTEXTFORGE_REMOTE_URL`.
@@ -140,7 +141,8 @@ Meaning:
 - If `CONTEXTFORGE_SERVER_STORAGE_MODE` is omitted, the server coerces remote
   client-style configuration into a local server store instead of recursively
   calling another remote.
-- `/healthz` is the health endpoint.
+- `/healthz` is liveness; `/readyz` is DB/schema/disk/queue readiness.
+- `/metrics` is an authenticated Prometheus endpoint.
 - `/mcp` is the Streamable HTTP MCP endpoint.
 - `/v0/*` is the JSON remote API.
 - Binding to a non-loopback host requires `CONTEXTFORGE_REMOTE_TOKEN`.

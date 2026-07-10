@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added `/readyz` DB/schema/disk/queue readiness, authenticated Prometheus
+  `/metrics`, request/job correlation ids, and graceful HTTP drain on
+  SIGTERM/SIGINT. SQLite now reports an explicit WAL/NORMAL/5s busy-timeout
+  policy. Added verified online backups, metadata/hash/quick/foreign-key checks,
+  dry-run-first offline restore with automatic pre-restore backup, and automatic
+  private snapshots before schema upgrades.
 - Added read-only embedding lifecycle inventory and dry-run-first bounded GC
   across core, CLI, remote API, and the MCP `operator` profile. Inventory
   classifies orphan sources, inactive memories, reviewed-out candidates,

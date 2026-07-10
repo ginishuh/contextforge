@@ -3999,6 +3999,71 @@ export function createContextForge(options = {}) {
       return useStore((store) => buildDbInfo(store));
     },
 
+    readiness() {
+      return useStore((store) => {
+        const snapshot = store.operationalSnapshot();
+        const dbState = buildDbInfo(store);
+        const embeddingState = dbState.embeddings;
+        const checks = {
+          database: {
+            ok:
+              snapshot.database.queryOk &&
+              snapshot.database.writable &&
+              snapshot.database.schemaVersion === snapshot.database.supportedSchemaVersion,
+            schemaVersion: snapshot.database.schemaVersion,
+            supportedSchemaVersion: snapshot.database.supportedSchemaVersion,
+            writable: snapshot.database.writable,
+          },
+          disk: {
+            ok: snapshot.disk.availableBytes >= config.operations.readinessMinFreeBytes,
+            availableBytes: snapshot.disk.availableBytes,
+            minimumBytes: config.operations.readinessMinFreeBytes,
+          },
+          operationQueue: {
+            ok:
+              snapshot.queues.operationJobs.queued <= config.operations.readinessMaxQueuedJobs &&
+              snapshot.queues.staleRunningJobs === 0,
+            queued: snapshot.queues.operationJobs.queued,
+            running: snapshot.queues.operationJobs.running,
+            staleRunning: snapshot.queues.staleRunningJobs,
+            maximumQueued: config.operations.readinessMaxQueuedJobs,
+          },
+          embeddings: {
+            ok:
+              !embeddingProvider ||
+              (dbState.vector.sqliteVecAvailable && snapshot.queues.embeddingJobs.failed === 0),
+            enabled: Boolean(embeddingProvider),
+            degraded: embeddingState.degraded,
+            vectorAvailable: dbState.vector.sqliteVecAvailable,
+            pending: snapshot.queues.embeddingJobs.pending,
+            processing: snapshot.queues.embeddingJobs.processing,
+            failed: snapshot.queues.embeddingJobs.failed,
+            staleSources: embeddingState.coverage?.staleSources || 0,
+          },
+        };
+        const ready = checks.database.ok && checks.disk.ok && checks.operationQueue.ok && checks.embeddings.ok;
+        return {
+          kind: 'contextforge_readiness',
+          ready,
+          status: ready ? 'ready' : 'not_ready',
+          observedAt: snapshot.observedAt,
+          checks,
+          sqlite: snapshot.database.sqlite,
+        };
+      });
+    },
+
+    operationalMetrics() {
+      return useStore((store) => ({
+        kind: 'contextforge_operational_metrics',
+        ...store.operationalSnapshot(),
+        providerExecution: {
+          concurrencyLimit: providerConcurrencyLimit,
+          active: providerExecutionSnapshot(),
+        },
+      }));
+    },
+
     migrateScope(options = {}) {
       const from = migrationScopeOptions(options, 'from');
       const toInput = migrationScopeOptions(options, 'to', from.scopeType);
@@ -4812,6 +4877,7 @@ export function createContextForge(options = {}) {
           retryFailed: truthyOption(options.retryFailed),
           metadata: {
             submittedBy: options.submittedBy || 'api',
+            requestId: options.requestId || null,
             sourceFingerprint,
             executionMode: 'durable_worker',
           },
@@ -4913,6 +4979,7 @@ export function createContextForge(options = {}) {
           retryFailed: truthyOption(options.retryFailed),
           metadata: {
             submittedBy: options.submittedBy || 'api',
+            requestId: options.requestId || null,
             sourceFingerprint,
             executionMode: 'durable_worker',
             providerBatchMode: 'per_candidate',

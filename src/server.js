@@ -9,6 +9,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { createContextForge } from './core.js';
 import { createContextForgeMcpServer } from './mcp.js';
 import { REMOTE_METHODS } from './remote/client.js';
+import { runtimeChildSnapshot, terminateRuntimeChildren } from './runtime/child_processes.js';
 
 const METHOD_SET = new Set(REMOTE_METHODS);
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
@@ -39,6 +40,85 @@ function sendJson(response, statusCode, body) {
     'content-type': 'application/json',
   });
   response.end(`${JSON.stringify(body, null, 2)}\n`);
+}
+
+function sendText(response, statusCode, body, contentType = 'text/plain; charset=utf-8') {
+  response.writeHead(statusCode, { 'content-type': contentType });
+  response.end(body);
+}
+
+function metricsRoute(pathname) {
+  if (pathname.startsWith('/v0/')) {
+    const method = pathname.slice('/v0/'.length);
+    return METHOD_SET.has(method) ? `/v0/${method}` : '/v0/:unknown';
+  }
+  if (pathname.startsWith('/ui/')) return '/ui/*';
+  return pathname;
+}
+
+function prometheusLabel(value) {
+  return String(value).replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('\n', '\\n');
+}
+
+function renderPrometheusMetrics(snapshot, serverMetrics) {
+  const lines = [
+    '# HELP contextforge_up Process liveness.',
+    '# TYPE contextforge_up gauge',
+    'contextforge_up 1',
+    '# HELP contextforge_http_requests_total HTTP responses by route, method, and status.',
+    '# TYPE contextforge_http_requests_total counter',
+  ];
+  for (const [key, value] of Object.entries(serverMetrics.requests)) {
+    const [method, route, status] = key.split('|');
+    lines.push(
+      `contextforge_http_requests_total{method="${prometheusLabel(method)}",route="${prometheusLabel(route)}",status="${prometheusLabel(status)}"} ${value.count}`,
+      `contextforge_http_request_duration_ms_sum{method="${prometheusLabel(method)}",route="${prometheusLabel(route)}",status="${prometheusLabel(status)}"} ${value.durationMs}`,
+    );
+  }
+  lines.push(
+    '# TYPE contextforge_http_active_requests gauge',
+    `contextforge_http_active_requests ${serverMetrics.activeRequests}`,
+    '# TYPE contextforge_operation_jobs gauge',
+  );
+  for (const [status, count] of Object.entries(snapshot.queues.operationJobs)) {
+    lines.push(`contextforge_operation_jobs{status="${prometheusLabel(status)}"} ${count}`);
+  }
+  lines.push(
+    `contextforge_operation_job_oldest_wait_ms ${snapshot.queues.oldestQueuedWaitMs}`,
+    `contextforge_operation_jobs_stale_running ${snapshot.queues.staleRunningJobs}`,
+    '# TYPE contextforge_embedding_jobs gauge',
+  );
+  for (const [status, count] of Object.entries(snapshot.queues.embeddingJobs)) {
+    lines.push(`contextforge_embedding_jobs{status="${prometheusLabel(status)}"} ${count}`);
+  }
+  for (const item of snapshot.providers.distill) {
+    lines.push(
+      `contextforge_distill_runs_total{provider="${prometheusLabel(item.provider)}",status="${prometheusLabel(item.status)}"} ${item.count}`,
+      `contextforge_distill_duration_ms_average{provider="${prometheusLabel(item.provider)}",status="${prometheusLabel(item.status)}"} ${item.averageElapsedMs || 0}`,
+    );
+  }
+  for (const item of snapshot.providers.usage.byOperation) {
+    lines.push(
+      `contextforge_llm_operation_events_total{operation="${prometheusLabel(item.operation)}",status="${prometheusLabel(item.status)}"} ${item.events}`,
+      `contextforge_llm_operation_tokens_total{operation="${prometheusLabel(item.operation)}",status="${prometheusLabel(item.status)}"} ${item.totalTokens}`,
+      `contextforge_llm_operation_duration_ms_average{operation="${prometheusLabel(item.operation)}",status="${prometheusLabel(item.status)}"} ${item.averageElapsedMs || 0}`,
+    );
+  }
+  lines.push(
+    `contextforge_llm_usage_events_total ${snapshot.providers.usage.events}`,
+    `contextforge_llm_tokens_total ${snapshot.providers.usage.totalTokens}`,
+    `contextforge_llm_failures_total ${snapshot.providers.usage.failures}`,
+    `contextforge_provider_timeouts_total ${snapshot.providers.usage.timeouts}`,
+    `contextforge_disk_available_bytes ${snapshot.disk.availableBytes}`,
+    `contextforge_provider_active ${snapshot.providerExecution.active.length}`,
+    `contextforge_runtime_child_processes ${runtimeChildSnapshot().active}`,
+    `contextforge_retrieval_requests_total ${serverMetrics.retrieval.requests}`,
+    `contextforge_retrieval_duration_ms_sum ${serverMetrics.retrieval.durationMs}`,
+    `contextforge_retrieval_scanned_candidates_total ${serverMetrics.retrieval.scannedCandidates}`,
+    `contextforge_raw_prune_eligible_total ${serverMetrics.rawPrune.eligible}`,
+    `contextforge_raw_prune_blocked_total ${serverMetrics.rawPrune.blocked}`,
+  );
+  return `${lines.join('\n')}\n`;
 }
 
 async function sendStaticUi(requestUrl, response) {
@@ -368,14 +448,28 @@ function wrapRemoteAccessResult(result, transport) {
   return wrapped;
 }
 
-function createRemoteAccessApp(app, transport) {
+function createRemoteAccessApp(app, transport, onOperation = null, context = {}) {
   return new Proxy(app, {
     get(target, property, receiver) {
       const value = Reflect.get(target, property, receiver);
       if (typeof value !== 'function') {
         return value;
       }
-      return async (...args) => wrapRemoteAccessResult(await value.apply(target, args), transport);
+      return async (...args) => {
+        const startedAt = Date.now();
+        const callArgs = [...args];
+        if (
+          context.requestId &&
+          ['submitDistillJob', 'submitAuditJob'].includes(String(property)) &&
+          callArgs[0] &&
+          typeof callArgs[0] === 'object'
+        ) {
+          callArgs[0] = { ...callArgs[0], requestId: context.requestId };
+        }
+        const result = await value.apply(target, callArgs);
+        onOperation?.(String(property), result, Math.max(0, Date.now() - startedAt));
+        return wrapRemoteAccessResult(result, transport);
+      };
     },
   });
 }
@@ -392,6 +486,9 @@ function serverStorageEnv(env) {
 export function createContextForgeServer({ app, env = process.env } = {}) {
   const serverApp = app || createContextForge({ env: serverStorageEnv(env), reuseStore: true });
   const authToken = env.CONTEXTFORGE_REMOTE_TOKEN || null;
+  const shutdownTimeoutMs =
+    serverApp.config?.operations?.shutdownTimeoutMs ||
+    parsePositiveInteger(env.CONTEXTFORGE_SHUTDOWN_TIMEOUT_MS, 30000);
   const maxBodyBytes = parseMaxBodyBytes(env);
   const adminUser = env.CONTEXTFORGE_ADMIN_USER || null;
   const adminPasswordHash = parseAdminPasswordHash(env);
@@ -412,6 +509,25 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
   const trustedProxy = parseTrustedProxy(env.CONTEXTFORGE_TRUST_PROXY);
   const adminSessions = new Map();
   const failedAdminLogins = new Map();
+  let draining = false;
+  const serverMetrics = {
+    activeRequests: 0,
+    requests: {},
+    retrieval: { requests: 0, durationMs: 0, scannedCandidates: 0 },
+    rawPrune: { eligible: 0, blocked: 0 },
+  };
+  function recordOperationMetrics(method, result, elapsedMs) {
+    if (method === 'search') {
+      const diagnostics = result?.diagnostics || result?.[0]?.retrieval?.diagnostics;
+      serverMetrics.retrieval.requests += 1;
+      serverMetrics.retrieval.durationMs += elapsedMs;
+      serverMetrics.retrieval.scannedCandidates += Number(diagnostics?.scannedRows || 0);
+    }
+    if (method === 'pruneRawEvents') {
+      serverMetrics.rawPrune.eligible += Number(result?.eligibleRawEvents || 0);
+      serverMetrics.rawPrune.blocked += Number(result?.blockedRawEvents || 0);
+    }
+  }
 
   function pruneAdminSessions(now = Date.now()) {
     for (const [session, entry] of adminSessions.entries()) {
@@ -453,9 +569,71 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
 
   const server = http.createServer(async (request, response) => {
     const requestUrl = new URL(request.url, 'http://localhost');
+    const requestId = String(request.headers['x-request-id'] || crypto.randomUUID()).slice(0, 128);
+    const startedAt = Date.now();
+    const route = metricsRoute(requestUrl.pathname);
+    response.setHeader('x-request-id', requestId);
+    serverMetrics.activeRequests += 1;
+    let finalized = false;
+    const finalizeRequest = () => {
+      if (finalized) return;
+      finalized = true;
+      serverMetrics.activeRequests = Math.max(0, serverMetrics.activeRequests - 1);
+      const key = `${request.method}|${route}|${response.statusCode}`;
+      const metric = serverMetrics.requests[key] || { count: 0, durationMs: 0 };
+      metric.count += 1;
+      metric.durationMs += Math.max(0, Date.now() - startedAt);
+      serverMetrics.requests[key] = metric;
+      if (draining && serverMetrics.activeRequests === 0) {
+        server.closeIdleConnections?.();
+      }
+    };
+    response.once('finish', finalizeRequest);
+    response.once('close', finalizeRequest);
 
     if (request.method === 'GET' && requestUrl.pathname === '/healthz') {
       sendJson(response, 200, { ok: true });
+      return;
+    }
+
+    if (request.method === 'GET' && requestUrl.pathname === '/readyz') {
+      try {
+        const readiness = await serverApp.readiness();
+        const result = draining
+          ? { ...readiness, ready: false, status: 'not_ready', draining: true }
+          : { ...readiness, draining: false };
+        sendJson(response, result.ready ? 200 : 503, result);
+      } catch (error) {
+        sendJson(response, 503, {
+          kind: 'contextforge_readiness',
+          ready: false,
+          status: 'not_ready',
+          draining,
+          error: { name: error.name, message: error.message },
+        });
+      }
+      return;
+    }
+
+    if (draining) {
+      sendJson(response, 503, {
+        error: { name: 'ServerDrainingError', message: 'ContextForge is draining.' },
+        draining: true,
+      });
+      return;
+    }
+
+    if (request.method === 'GET' && requestUrl.pathname === '/metrics') {
+      if (!isRequestAuthorized(request, authToken, adminSessions)) {
+        sendJson(response, 401, { error: { message: 'Unauthorized.' } });
+        return;
+      }
+      try {
+        const snapshot = await serverApp.operationalMetrics();
+        sendText(response, 200, renderPrometheusMetrics(snapshot, serverMetrics), 'text/plain; version=0.0.4');
+      } catch (error) {
+        sendJson(response, 503, { error: { name: error.name, message: error.message } });
+      }
       return;
     }
 
@@ -553,7 +731,7 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
         return;
       }
       const mcpServer = createContextForgeMcpServer({
-        app: createRemoteAccessApp(serverApp, 'http-mcp'),
+        app: createRemoteAccessApp(serverApp, 'http-mcp', recordOperationMetrics, { requestId }),
         env,
       });
       try {
@@ -599,7 +777,10 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
 
     try {
       const options = await readJsonBody(request, { maxBodyBytes });
+      options.requestId = requestId;
+      const operationStartedAt = Date.now();
       const result = await serverApp[method](options);
+      recordOperationMetrics(method, result, Math.max(0, Date.now() - operationStartedAt));
       sendJson(response, 200, { result: wrapRemoteAccessResult(result, 'http-api') });
     } catch (error) {
       sendJson(response, error.statusCode || 500, {
@@ -617,6 +798,11 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
       serverApp.close();
     }
   };
+  server.beginContextForgeDrain = () => {
+    draining = true;
+  };
+  server.contextForgeMetrics = serverMetrics;
+  server.contextForgeShutdownTimeoutMs = shutdownTimeoutMs;
   return server;
 }
 
@@ -637,18 +823,31 @@ export function startContextForgeServer({ host = '127.0.0.1', port = 8765, env =
         host,
         port: address.port,
         url: `http://${host}:${address.port}`,
-        close: () =>
+        close: ({ timeoutMs = server.contextForgeShutdownTimeoutMs } = {}) =>
           new Promise((closeResolve, closeReject) => {
-            server.close((error) => {
+            server.beginContextForgeDrain?.();
+            terminateRuntimeChildren({ killAfterMs: Math.min(1000, timeoutMs) });
+            let settled = false;
+            const finish = (error) => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(timer);
               try {
-                if (server.closeContextForge) {
-                  server.closeContextForge();
-                }
+                server.closeContextForge?.();
               } finally {
                 if (error) closeReject(error);
                 else closeResolve();
               }
+            };
+            const timer = setTimeout(() => {
+              server.closeAllConnections?.();
+              finish(new Error(`ContextForge shutdown exceeded ${timeoutMs}ms.`));
+            }, timeoutMs);
+            timer.unref?.();
+            server.close((error) => {
+              finish(error);
             });
+            server.closeIdleConnections?.();
           }),
       });
     });
@@ -660,6 +859,20 @@ async function main() {
   const host = process.env.CONTEXTFORGE_REMOTE_HOST || '127.0.0.1';
   const instance = await startContextForgeServer({ host, port });
   console.log(JSON.stringify({ listening: instance.url }, null, 2));
+  let stopping = false;
+  const stop = async (signal) => {
+    if (stopping) return;
+    stopping = true;
+    try {
+      await instance.close();
+      console.error(`ContextForge stopped after ${signal}.`);
+    } catch (error) {
+      console.error(error.message);
+      process.exitCode = 1;
+    }
+  };
+  process.once('SIGTERM', () => void stop('SIGTERM'));
+  process.once('SIGINT', () => void stop('SIGINT'));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
