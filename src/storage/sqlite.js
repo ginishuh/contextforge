@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
+import { applySqliteMigrations } from './migrations/index.js';
 import { secureDataDirectoryPermissions } from './permissions.js';
 
 export const SCHEMA_VERSION = 19;
@@ -1133,15 +1134,10 @@ export class ContextForgeStore {
           AND json_extract(metadata_json, '$.consolidation.target') IS NOT NULL;
     `);
 
-    this.ensureColumn('checkpoints', 'distill_run_id', 'TEXT');
-    this.ensureColumn('checkpoints', 'level', 'INTEGER NOT NULL DEFAULT 0');
-    this.ensureColumn('checkpoints', 'covers_from', 'TEXT');
-    this.ensureColumn('checkpoints', 'covers_to', 'TEXT');
-    this.ensureColumn('checkpoints', 'source', "TEXT NOT NULL DEFAULT 'distill'");
-    this.ensureColumn('checkpoints', 'source_ref', 'TEXT');
-    this.ensureColumn('checkpoints', 'metadata_json', "TEXT NOT NULL DEFAULT '{}'");
-    this.ensureColumn('distill_runs', 'job_id', 'TEXT');
-    this.ensureColumn('llm_usage_events', 'job_id', 'TEXT');
+    applySqliteMigrations({
+      supportedVersion: SCHEMA_VERSION,
+      ensureColumn: (table, column, definition) => this.ensureColumn(table, column, definition),
+    });
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_distill_runs_job
         ON distill_runs(job_id);
@@ -1151,27 +1147,6 @@ export class ContextForgeStore {
         ON checkpoints(json_extract(metadata_json, '$.operationJobId'))
         WHERE json_extract(metadata_json, '$.operationJobId') IS NOT NULL;
     `);
-    this.ensureColumn('memories', 'status', "TEXT NOT NULL DEFAULT 'active'");
-    this.ensureColumn('memories', 'supersedes_memory_id', 'TEXT');
-    this.ensureColumn('memories', 'deactivated_at', 'TEXT');
-    this.ensureColumn('memory_candidate_index', 'review_reason', 'TEXT');
-    this.ensureColumn('memory_candidate_index', 'review_metadata_json', "TEXT NOT NULL DEFAULT '{}'");
-    this.ensureColumn('memory_candidate_index', 'candidate_type', 'TEXT');
-    this.ensureColumn('memory_candidate_index', 'confidence', 'REAL');
-    this.ensureColumn('memory_candidate_index', 'stability', 'REAL');
-    this.ensureColumn('memory_candidate_index', 'sensitivity', 'TEXT');
-    this.ensureColumn('memory_candidate_index', 'promotion_recommendation', 'TEXT');
-    this.ensureColumn('memory_candidate_index', 'source_event_ids_json', "TEXT NOT NULL DEFAULT '[]'");
-    this.ensureColumn('memory_candidate_index', 'candidate_json', "TEXT NOT NULL DEFAULT '{}'");
-    this.ensureColumn('preference_occurrences', 'negative_count', 'INTEGER NOT NULL DEFAULT 0');
-    this.ensureColumn('preference_occurrences', 'last_correction', 'TEXT');
-    this.ensureColumn('preference_occurrences', 'review_reason', 'TEXT');
-    this.ensureColumn('preference_occurrences', 'metadata_json', "TEXT NOT NULL DEFAULT '{}'");
-    this.ensureColumn('memory_update_candidates', 'review_reason', 'TEXT');
-    this.ensureColumn('memory_update_candidates', 'review_metadata_json', "TEXT NOT NULL DEFAULT '{}'");
-    this.ensureColumn('memory_update_candidates', 'applied_memory_id', 'TEXT');
-    this.ensureColumn('embedding_jobs', 'last_error', 'TEXT');
-    this.ensureColumn('embedding_jobs', 'completed_at', 'TEXT');
     this.backfillMemoryCandidateIndexOnce();
     this.backfillMemoryCandidateJsonOnce();
     this.backfillPreferenceOccurrencesOnce();

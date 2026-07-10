@@ -1,72 +1,12 @@
 import crypto from 'node:crypto';
-import { REMOTE_METHODS } from '../remote/client.js';
+import { OPERATION_REGISTRY, operationByName } from '../operations/registry.js';
 import { normalizeScopeOptions } from '../scopes/index.js';
 
 export const TOKEN_CAPABILITIES = Object.freeze(['read', 'write', 'review', 'operator']);
 
-const CAPABILITY_METHODS = Object.freeze({
-  read: [
-    'dbInfo', 'readiness', 'getWorkspaceProfile', 'listWorkspaceProfiles', 'resolveWorkspace', 'listScopeKeys',
-    'bootstrapContext', 'agentStart', 'expandMemoryCluster', 'syncResumeContext', 'sessionStatus', 'getJob',
-    'listJobs', 'listDueDistillSessions', 'listDueConsolidations', 'getMemory', 'listMemories', 'search',
-    'listMemoryEvents', 'listMemoryCandidates', 'listPreferenceOccurrences', 'listMemoryUpdateCandidates',
-    'suggestMemoryPromotions', 'listEmbeddingJobs', 'listRawEvents', 'listCheckpoints', 'getWorkingSummary',
-    'getSessionWorkingContext', 'listDistillRuns', 'listRecentDistillRuns', 'listLlmUsageEvents', 'llmUsageRollup',
-    'distillUsage',
-  ],
-  write: [
-    'beginSession', 'submitDistillJob', 'remember', 'appendRaw', 'upsertSessionWorkingContext', 'distillCheckpoint',
-  ],
-  review: [
-    'agentCloseout', 'submitAuditJob', 'promoteMemory', 'promoteMemoryCandidate', 'rejectMemoryCandidate',
-    'correctMemory', 'deactivateMemory', 'auditMemoryDuplicates', 'applyMemoryUpdateCandidate',
-    'rejectMemoryUpdateCandidate', 'skipMemoryUpdateCandidate', 'auditMemoryCandidates',
-    'autoPromoteMemoryCandidates', 'reconcileMemory',
-  ],
-  operator: [
-    'operationalMetrics', 'migrateScope', 'getRuntimeSettings', 'updateRuntimeSettings', 'checkDistillProvider',
-    'upsertWorkspaceProfile', 'deleteWorkspaceProfile', 'deactivateWorkspaceProfile', 'upsertWorkspaceMember',
-    'removeWorkspaceMember', 'upsertWorkspaceRoutingRule', 'removeWorkspaceRoutingRule', 'checkCodexExec',
-    'processJobs', 'cancelJob', 'processDueDistills', 'processConsolidations', 'embeddingInventory',
-    'pruneEmbeddingArtifacts', 'rebuildEmbeddings', 'processEmbeddingJobs', 'pruneRawEvents',
-  ],
-});
-
-const capabilityEntries = Object.entries(CAPABILITY_METHODS).flatMap(([capability, methods]) =>
-  methods.map((method) => [method, capability]),
+export const REMOTE_METHOD_CAPABILITIES = Object.freeze(
+  Object.fromEntries(OPERATION_REGISTRY.map((operation) => [operation.name, operation.capability])),
 );
-const duplicateCapabilityMethods = capabilityEntries
-  .map(([method]) => method)
-  .filter((method, index, methods) => methods.indexOf(method) !== index);
-if (duplicateCapabilityMethods.length) {
-  throw new Error(
-    `Remote authorization matrix assigns multiple capabilities to: ${[...new Set(duplicateCapabilityMethods)].join(', ')}.`,
-  );
-}
-export const REMOTE_METHOD_CAPABILITIES = Object.freeze(Object.fromEntries(capabilityEntries));
-
-const missingMethods = REMOTE_METHODS.filter((method) => !REMOTE_METHOD_CAPABILITIES[method]);
-const unknownMethods = Object.keys(REMOTE_METHOD_CAPABILITIES).filter((method) => !REMOTE_METHODS.includes(method));
-if (missingMethods.length || unknownMethods.length) {
-  throw new Error(
-    `Remote authorization matrix drifted (missing: ${missingMethods.join(', ') || 'none'}; unknown: ${unknownMethods.join(', ') || 'none'}).`,
-  );
-}
-
-const WORKSPACE_METHODS = new Set([
-  'upsertWorkspaceProfile', 'getWorkspaceProfile', 'listWorkspaceProfiles', 'deleteWorkspaceProfile',
-  'deactivateWorkspaceProfile', 'upsertWorkspaceMember', 'removeWorkspaceMember', 'upsertWorkspaceRoutingRule',
-  'removeWorkspaceRoutingRule', 'resolveWorkspace',
-]);
-const GLOBAL_SCOPE_METHODS = new Set([
-  'dbInfo', 'readiness', 'operationalMetrics', 'getRuntimeSettings', 'updateRuntimeSettings',
-  'checkDistillProvider', 'checkCodexExec',
-]);
-const GLOBAL_DATA_METHODS = new Set(['listScopeKeys', 'listRecentDistillRuns', 'processJobs', 'pruneRawEvents']);
-const OPTIONALLY_SCOPED_METHODS = new Set([
-  'getJob', 'listJobs', 'cancelJob', 'listDueDistillSessions', 'processDueDistills', 'embeddingInventory',
-  'pruneEmbeddingArtifacts',
-]);
 
 export class ContextForgeAuthenticationError extends Error {
   constructor(message = 'Unauthorized: authentication required.') {
@@ -272,13 +212,14 @@ export function createTokenAuthorizer(env = process.env) {
 
   function authorize(identity, method, options = {}, config = {}) {
     if (!identity) throw new ContextForgeAuthenticationError();
-    const capability = REMOTE_METHOD_CAPABILITIES[method];
-    if (!capability) {
+    const operation = operationByName(method);
+    if (!operation) {
       throw new ContextForgeAuthorizationError(`No authorization policy exists for method ${method}.`, {
         tokenId: identity.id,
         method,
       });
     }
+    const capability = operation.capability;
     if (!identity.capabilities.includes(capability)) {
       throw new ContextForgeAuthorizationError(`Method ${method} requires the ${capability} capability.`, {
         tokenId: identity.id,
@@ -286,8 +227,8 @@ export function createTokenAuthorizer(env = process.env) {
         requiredCapability: capability,
       });
     }
-    if (GLOBAL_SCOPE_METHODS.has(method)) return { capability, scopes: [] };
-    if (GLOBAL_DATA_METHODS.has(method) || WORKSPACE_METHODS.has(method)) {
+    if (operation.scopeMode === 'process') return { capability, scopes: [] };
+    if (operation.scopeMode === 'all' || operation.scopeMode === 'workspace') {
       if (!hasAllScopes(identity)) {
         throw new ContextForgeAuthorizationError(`Method ${method} requires an all-scope token.`, {
           tokenId: identity.id,
@@ -296,7 +237,7 @@ export function createTokenAuthorizer(env = process.env) {
       }
       return { capability, scopes: [] };
     }
-    if (method === 'migrateScope') {
+    if (operation.scopeMode === 'migration') {
       const from = { scopeType: options.fromScopeType || options.fromScope, scopeKey: options.fromScopeKey };
       const to = { scopeType: options.toScopeType || options.toScope || from.scopeType, scopeKey: options.toScopeKey };
       if (!from.scopeType || !from.scopeKey || !to.scopeType || !to.scopeKey) {
@@ -310,7 +251,7 @@ export function createTokenAuthorizer(env = process.env) {
       return { capability, scopes: [from, to] };
     }
     const hasExplicitScope = hasScopeHints(options);
-    if (OPTIONALLY_SCOPED_METHODS.has(method) && !hasExplicitScope) {
+    if (operation.scopeMode === 'optional' && !hasExplicitScope) {
       if (!hasAllScopes(identity)) {
         throw new ContextForgeAuthorizationError(`Method ${method} requires an explicit scope for this token.`, {
           tokenId: identity.id,

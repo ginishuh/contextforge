@@ -268,7 +268,10 @@ npm install
 테스트:
 
 ```bash
+npm run lint
 npm test
+# 둘 다 실행
+npm run verify
 ```
 
 일반 테스트는 fail-closed test mode로 실행한다. fake가 주입되지 않은 실제

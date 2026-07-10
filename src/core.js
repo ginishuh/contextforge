@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { pagedList } from './application/paged_list.js';
 import { createCodexExecAutoPromoteAuditor } from './audit/codex_exec.js';
 import { createCodexSdkPythonAutoPromoteAuditor } from './audit/codex_sdk_python.js';
 import { loadConfig } from './config/index.js';
@@ -10,7 +11,6 @@ import { createEmbeddingProvider } from './embeddings/index.js';
 import { normalizeAgentAdapterIds } from './ingest/agents.js';
 import { createRemoteContextForge } from './remote/client.js';
 import { searchMemories } from './retrieval/search.js';
-import { compatiblePageResponse, pageResult, resolvePageRequest } from './pagination.js';
 import {
   assertProviderTimeoutFitsClient,
   providerFailureRetryable,
@@ -227,18 +227,6 @@ function positiveInteger(value, name) {
     throw new Error(`${name} must be a positive integer.`);
   }
   return parsed;
-}
-
-function pagedList({ kind, filters, options, load, positionForItem }) {
-  const request = resolvePageRequest({
-    kind,
-    filters,
-    limit: options.limit,
-    cursor: options.cursor,
-    page: options.page,
-  });
-  const items = load({ limit: request.limit + 1, after: request.position });
-  return compatiblePageResponse(pageResult(items, request, positionForItem), request);
 }
 
 const CONSULT_REASONS = new Set([

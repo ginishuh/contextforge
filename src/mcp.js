@@ -5,6 +5,7 @@ import { normalizeObjectSchema } from '@modelcontextprotocol/sdk/server/zod-comp
 import { toJsonSchemaCompat } from '@modelcontextprotocol/sdk/server/zod-json-schema-compat.js';
 import { z } from 'zod';
 import { createContextForge } from './core.js';
+import { MCP_OPERATION_TOOL_NAMES, operationByMcpTool } from './operations/registry.js';
 import { CONTEXTFORGE_VERSION } from './version.js';
 
 const scopeSchema = z.enum(['shared', 'repo', 'local']);
@@ -34,70 +35,7 @@ const closeoutTriggerSchema = z.enum([
   'manual_closeout',
 ]);
 
-export const ALL_MCP_TOOL_NAMES = Object.freeze([
-  'db_info',
-  'migrate_scope',
-  'get_runtime_settings',
-  'list_workspaces',
-  'get_workspace',
-  'resolve_workspace',
-  'upsert_workspace_profile',
-  'deactivate_workspace_profile',
-  'upsert_workspace_member',
-  'remove_workspace_member',
-  'upsert_workspace_routing_rule',
-  'remove_workspace_routing_rule',
-  'bootstrap_context',
-  'expand_memory_cluster',
-  'sync_resume_context',
-  'begin_session',
-  'session_status',
-  'submit_distill_job',
-  'submit_audit_job',
-  'get_job',
-  'list_jobs',
-  'process_jobs',
-  'cancel_job',
-  'list_due_distill_sessions',
-  'process_due_distills',
-  'list_due_consolidations',
-  'process_consolidations',
-  'search',
-  'embedding_inventory',
-  'prune_embedding_artifacts',
-  'rebuild_embeddings',
-  'process_embedding_jobs',
-  'list_embedding_jobs',
-  'get_memory',
-  'remember',
-  'append_raw',
-  'prune_raw_events',
-  'get_working_summary',
-  'list_checkpoints',
-  'get_session_working_context',
-  'upsert_session_working_context',
-  'distill_checkpoint',
-  'distill_usage',
-  'list_llm_usage_events',
-  'llm_usage_rollup',
-  'list_memory_events',
-  'list_memory_candidates',
-  'list_preference_occurrences',
-  'list_memory_update_candidates',
-  'audit_memory_duplicates',
-  'apply_memory_update_candidate',
-  'reject_memory_update_candidate',
-  'skip_memory_update_candidate',
-  'suggest_memory_promotions',
-  'auto_promote_memory_candidates',
-  'audit_memory_candidates',
-  'reconcile_memory',
-  'promote_memory',
-  'promote_memory_candidate',
-  'reject_memory_candidate',
-  'correct_memory',
-  'deactivate_memory',
-]);
+export const ALL_MCP_TOOL_NAMES = MCP_OPERATION_TOOL_NAMES;
 
 const AGENT_CORE_TOOLS = Object.freeze([
   'db_info',
@@ -235,7 +173,7 @@ const MCP_INSTRUCTIONS = [
 ].join(' ');
 
 function mcpSurfaceInfo(toolRegistrations, selection) {
-  const measuredTools = toolRegistrations.map(({ name, config }) => {
+  const measuredTools = toolRegistrations.map(({ name, operation, config }) => {
     const inputSchemaSource =
       config.inputSchema && Object.keys(config.inputSchema).length === 0 ? z.object({}) : config.inputSchema;
     const normalizedInputSchema = normalizeObjectSchema(inputSchemaSource);
@@ -262,6 +200,8 @@ function mcpSurfaceInfo(toolRegistrations, selection) {
       schema,
       info: {
         name,
+        operation,
+        annotations: config.annotations || {},
         descriptionBytes: Buffer.byteLength(config.description || '', 'utf8'),
         schemaBytes: Buffer.byteLength(JSON.stringify(schema), 'utf8'),
       },
@@ -311,11 +251,23 @@ export function createContextForgeMcpServer({
   const toolDefinitions = [];
   const toolRegistrations = [];
   const sdkRegisterTool = server.registerTool.bind(server);
-  const registerTool = (name, config, handler) => {
+  const registerTool = (name, config, _handler) => {
     toolDefinitions.push(name);
     if (!enabledTools.has(name)) return null;
-    toolRegistrations.push({ name, config });
-    return sdkRegisterTool(name, config, handler);
+    const operation = operationByMcpTool(name);
+    if (!operation || typeof app[operation.name] !== 'function') {
+      throw new Error(`ContextForge MCP tool ${name} has no registered application operation.`);
+    }
+    const registeredConfig = {
+      ...config,
+      annotations: {
+        ...(config.annotations || {}),
+        ...operation.mcp.annotations,
+      },
+    };
+    const handler = async (args = {}) => jsonResult(await app[operation.name](args));
+    toolRegistrations.push({ name, operation: operation.name, config: registeredConfig });
+    return sdkRegisterTool(name, registeredConfig, handler);
   };
 
   registerTool(
@@ -327,7 +279,6 @@ export function createContextForgeMcpServer({
       inputSchema: {},
       annotations: {
         title: 'Database Info',
-        readOnlyHint: true,
         idempotentHint: true,
       },
     },
@@ -351,7 +302,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Migrate Scope',
-        readOnlyHint: false,
         idempotentHint: false,
       },
     },
@@ -367,7 +317,6 @@ export function createContextForgeMcpServer({
       inputSchema: {},
       annotations: {
         title: 'Get Runtime Settings',
-        readOnlyHint: true,
         idempotentHint: true,
       },
     },
@@ -386,7 +335,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'List Workspaces',
-        readOnlyHint: true,
         idempotentHint: true,
       },
     },
@@ -405,7 +353,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Get Workspace',
-        readOnlyHint: true,
         idempotentHint: true,
       },
     },
@@ -433,7 +380,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Resolve Workspace',
-        readOnlyHint: true,
         idempotentHint: true,
       },
     },
@@ -457,7 +403,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Upsert Workspace Profile',
-        readOnlyHint: false,
         idempotentHint: true,
       },
     },
@@ -475,7 +420,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Deactivate Workspace Profile',
-        readOnlyHint: false,
         idempotentHint: true,
       },
     },
@@ -502,7 +446,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Upsert Workspace Member',
-        readOnlyHint: false,
         idempotentHint: true,
       },
     },
@@ -525,7 +468,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Remove Workspace Member',
-        readOnlyHint: false,
         idempotentHint: true,
       },
     },
@@ -551,7 +493,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Upsert Workspace Routing Rule',
-        readOnlyHint: false,
         idempotentHint: true,
       },
     },
@@ -570,7 +511,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Remove Workspace Routing Rule',
-        readOnlyHint: false,
         idempotentHint: true,
       },
     },
@@ -605,7 +545,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Bootstrap Context',
-        readOnlyHint: true,
         idempotentHint: true,
       },
     },
@@ -630,7 +569,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Expand Memory Cluster',
-        readOnlyHint: true,
         idempotentHint: true,
       },
     },
@@ -655,7 +593,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Sync Resume Context',
-        readOnlyHint: true,
         idempotentHint: true,
       },
     },
@@ -675,7 +612,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Begin Session',
-        readOnlyHint: false,
         idempotentHint: false,
       },
     },
@@ -700,7 +636,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Session Status',
-        readOnlyHint: true,
         idempotentHint: true,
       },
     },
@@ -730,7 +665,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Submit Distill Job',
-        readOnlyHint: false,
         destructiveHint: false,
         idempotentHint: true,
       },
@@ -764,7 +698,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Submit Candidate Audit Job',
-        readOnlyHint: false,
         destructiveHint: false,
         idempotentHint: true,
       },
@@ -783,7 +716,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Get Operation Job',
-        readOnlyHint: true,
         idempotentHint: true,
       },
     },
@@ -806,7 +738,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'List Operation Jobs',
-        readOnlyHint: true,
         idempotentHint: true,
       },
     },
@@ -828,7 +759,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Process Operation Jobs',
-        readOnlyHint: false,
         destructiveHint: false,
         idempotentHint: false,
         openWorldHint: true,
@@ -850,7 +780,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Cancel Queued Operation Job',
-        readOnlyHint: false,
         destructiveHint: false,
         idempotentHint: true,
       },
@@ -880,7 +809,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'List Due Distill Sessions',
-        readOnlyHint: true,
         idempotentHint: true,
       },
     },
@@ -911,7 +839,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Process Due Distills',
-        readOnlyHint: false,
         idempotentHint: false,
       },
     },
@@ -943,7 +870,6 @@ export function createContextForgeMcpServer({
       inputSchema: consolidationSchema,
       annotations: {
         title: 'List Due Consolidations',
-        readOnlyHint: true,
         idempotentHint: true,
       },
     },
@@ -962,7 +888,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Process Consolidations',
-        readOnlyHint: false,
         idempotentHint: true,
       },
     },
@@ -994,7 +919,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Search Memory',
-        readOnlyHint: true,
         idempotentHint: true,
       },
     },
@@ -1014,7 +938,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Embedding Maintenance Inventory',
-        readOnlyHint: true,
         idempotentHint: true,
       },
     },
@@ -1040,7 +963,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Prune Embedding Artifacts',
-        readOnlyHint: false,
         destructiveHint: true,
         idempotentHint: false,
       },
@@ -1061,7 +983,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Rebuild Embeddings',
-        readOnlyHint: false,
         idempotentHint: true,
       },
     },
@@ -1084,7 +1005,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Process Embedding Jobs',
-        readOnlyHint: false,
         idempotentHint: true,
       },
     },
@@ -1104,7 +1024,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'List Embedding Jobs',
-        readOnlyHint: true,
         idempotentHint: true,
       },
     },
@@ -1122,7 +1041,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Get Memory',
-        readOnlyHint: true,
         idempotentHint: true,
       },
     },
@@ -1145,7 +1063,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Remember',
-        readOnlyHint: false,
         idempotentHint: true,
       },
     },
@@ -1167,7 +1084,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Append Raw Evidence',
-        readOnlyHint: false,
         idempotentHint: false,
       },
     },
@@ -1187,7 +1103,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Prune Raw Evidence',
-        readOnlyHint: false,
         idempotentHint: true,
       },
     },
@@ -1206,7 +1121,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Get Working Summary',
-        readOnlyHint: true,
         idempotentHint: true,
       },
     },
@@ -1227,7 +1141,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'List Checkpoints',
-        readOnlyHint: true,
         idempotentHint: true,
       },
     },
@@ -1246,7 +1159,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Get Session Working Context',
-        readOnlyHint: true,
         idempotentHint: true,
       },
     },
@@ -1277,7 +1189,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Upsert Session Working Context',
-        readOnlyHint: false,
         idempotentHint: true,
       },
     },
@@ -1308,7 +1219,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Distill Checkpoint',
-        readOnlyHint: false,
         idempotentHint: false,
       },
     },
@@ -1328,7 +1238,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Distill Usage',
-        readOnlyHint: true,
         idempotentHint: true,
       },
     },
@@ -1355,7 +1264,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'List LLM Usage Events',
-        readOnlyHint: true,
         idempotentHint: true,
       },
     },
@@ -1383,7 +1291,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'LLM Usage Rollup',
-        readOnlyHint: true,
         idempotentHint: true,
       },
     },
@@ -1402,7 +1309,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'List Memory Events',
-        readOnlyHint: true,
         idempotentHint: true,
       },
     },
@@ -1427,7 +1333,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'List Memory Candidates',
-        readOnlyHint: true,
         idempotentHint: true,
       },
     },
@@ -1447,7 +1352,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'List Preference Occurrences',
-        readOnlyHint: true,
         idempotentHint: true,
       },
     },
@@ -1470,7 +1374,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'List Memory Update Candidates',
-        readOnlyHint: true,
         idempotentHint: true,
       },
     },
@@ -1492,7 +1395,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Audit Memory Duplicates',
-        readOnlyHint: false,
         idempotentHint: true,
       },
     },
@@ -1519,7 +1421,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Apply Memory Update Candidate',
-        readOnlyHint: false,
         idempotentHint: true,
       },
     },
@@ -1539,7 +1440,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Reject Memory Update Candidate',
-        readOnlyHint: false,
         idempotentHint: true,
       },
     },
@@ -1559,7 +1459,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Skip Memory Update Candidate',
-        readOnlyHint: false,
         idempotentHint: true,
       },
     },
@@ -1591,7 +1490,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Suggest Memory Promotions',
-        readOnlyHint: false,
         idempotentHint: true,
       },
     },
@@ -1623,7 +1521,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Auto Promote Memory Candidates',
-        readOnlyHint: false,
         idempotentHint: true,
       },
     },
@@ -1655,7 +1552,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Audit Memory Candidates',
-        readOnlyHint: false,
         destructiveHint: false,
         idempotentHint: false,
         openWorldHint: true,
@@ -1684,7 +1580,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Reconcile Memory',
-        readOnlyHint: false,
         idempotentHint: false,
       },
     },
@@ -1712,7 +1607,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Promote Memory',
-        readOnlyHint: false,
         idempotentHint: true,
       },
     },
@@ -1743,7 +1637,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Promote Memory Candidate',
-        readOnlyHint: false,
         idempotentHint: true,
       },
     },
@@ -1762,7 +1655,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Reject Memory Candidate',
-        readOnlyHint: false,
         idempotentHint: true,
       },
     },
@@ -1785,7 +1677,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Correct Memory',
-        readOnlyHint: false,
         idempotentHint: true,
       },
     },
@@ -1804,7 +1695,6 @@ export function createContextForgeMcpServer({
       },
       annotations: {
         title: 'Deactivate Memory',
-        readOnlyHint: false,
         idempotentHint: true,
       },
     },

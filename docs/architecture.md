@@ -97,6 +97,34 @@ cannot reach the server, the operation should fail visibly. Users may configure
 `project-local` or `local` as an explicit fallback profile, but ContextForge
 should not silently fork canonical memory.
 
+## Module And Operation Contracts
+
+`src/operations/registry.js` is the canonical contract for every remotely
+exposed application operation. Each entry fixes the public method name,
+authorization capability, scope mode, remote dispatch mode, optional MCP tool
+name, and MCP read-only semantics. The remote client, HTTP server authorization,
+and MCP dispatch surface derive from this registry. Adding an operation without
+a capability or adding duplicate capability/MCP mappings fails at module load;
+contract tests also compare the generated surfaces.
+
+Transport-specific schema and descriptions stay in `src/mcp.js`, but tool
+handlers dispatch through the registry instead of repeating application method
+names. CLI-specific argument parsing remains in `src/cli.js`. This keeps
+transport presentation separate from application operation identity without a
+large rewrite.
+
+Reusable application plumbing begins under `src/application/`; bounded list
+pagination lives there rather than inside the core facade. SQLite compatibility
+migrations begin under `src/storage/migrations/` as ordered, versioned manifests.
+The current v19 manifest preserves the existing idempotent additive-column
+behavior. New schema work should add a new ordered manifest together with a
+`SCHEMA_VERSION` bump, migration backup coverage, and downgrade fail-fast tests.
+
+Domain contract tests live outside the legacy monolith under `test/contracts/`.
+`npm run lint` syntax-checks project JavaScript, rejects tabs/trailing whitespace,
+and enforces non-growth budgets on the largest legacy files. CI runs this source
+gate separately; `npm run verify` runs it before the complete test suite.
+
 ## Scope Model
 
 Scopes are intentionally explicit.

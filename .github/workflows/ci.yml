@@ -73,6 +73,20 @@ jobs:
       - name: Run actionlint
         run: actionlint .github/workflows/*.yml
 
+  source-lint:
+    name: Source lint
+    needs: changes
+    if: (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && needs.changes.outputs.run-tests == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm run lint
+
   test:
     name: Test on Node ${{ matrix.node-version }}
     needs: changes
@@ -127,6 +141,7 @@ jobs:
     needs:
       - changes
       - workflow-lint
+      - source-lint
       - test
       - dependency-audit
     if: (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && always()
@@ -138,6 +153,10 @@ jobs:
           set -euo pipefail
           if [[ "${{ needs.workflow-lint.result }}" != "success" ]]; then
             echo "workflow-lint failed"
+            exit 1
+          fi
+          if [[ "${{ needs.changes.outputs.run-tests }}" == "true" && "${{ needs.source-lint.result }}" != "success" ]]; then
+            echo "source-lint failed"
             exit 1
           fi
           if [[ "${{ needs.changes.outputs.run-tests }}" == "true" && "${{ needs.test.result }}" != "success" ]]; then
