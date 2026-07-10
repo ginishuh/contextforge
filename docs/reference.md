@@ -9,9 +9,9 @@ Current package version: `0.5.1`
 This is not another memory file. ContextForge is a scoped memory runtime for
 coding agents.
 
-![ContextForge explainer comic](assets/contextforge-explainer-comic-en.jpg)
+![ContextForge explainer comic](https://raw.githubusercontent.com/ginishuh/contextforge/main/docs/assets/contextforge-explainer-comic-en.jpg)
 
-[Korean version of the explainer comic](assets/contextforge-explainer-comic-ko.jpg)
+[Korean version of the explainer comic](https://raw.githubusercontent.com/ginishuh/contextforge/main/docs/assets/contextforge-explainer-comic-ko.jpg)
 
 ContextForge is designed for agents that need canonical project memory, scoped
 retrieval, evidence-preserving raw logs, and LLM-backed distillation into

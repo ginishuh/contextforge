@@ -4,7 +4,7 @@ export const LIST_PAGE_LIMITS = Object.freeze({ default: 100, max: 500 });
 const CURSOR_POSITION_TYPES = Object.freeze({
   memories: ['number', 'string', 'string'],
   raw_events: ['string', 'string'],
-  checkpoints: ['string', 'string'],
+  checkpoints: ['string', 'number'],
   embedding_jobs: ['string', 'string'],
   memory_candidates: ['string', 'string'],
   memory_events: ['string', 'string'],

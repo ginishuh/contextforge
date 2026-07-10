@@ -22,9 +22,17 @@ test('release hygiene validates docs, versions, and the npm package boundary', a
     assert.equal(report.markdown.brokenLinks.length, 0);
     assert.equal(report.markdown.missingCommandFiles.length, 0);
     assert.equal(report.markdown.missingPackageScripts.length, 0);
+    assert.equal(report.markdown.publishedPackage.passed, true);
+    assert.equal(report.markdown.publishedPackage.missingLocalTargets.length, 0);
+    assert.equal(report.markdown.publishedPackage.missingCommandTargets.length, 0);
+    assert.ok(report.markdown.publishedPackage.checkedLocalTargets > 0);
+    assert.ok(report.markdown.publishedPackage.checkedCommandTargets > 0);
     assert.equal(report.versions.passed, true);
     assert.equal(report.package.missingRequired.length, 0);
     assert.equal(report.package.forbidden.length, 0);
+    assert.equal(report.package.missingPublishedScripts.length, 0);
+    assert.equal(report.package.unexpectedPublishedScripts.length, 0);
+    assert.ok(!report.package.publishedScripts.includes('scripts/ci-detect-run-tests.sh'));
     assert.equal(report.package.budgetChecks.packedBytes, true);
     assert.equal(report.package.budgetChecks.unpackedBytes, true);
     assert.equal(report.package.budgetChecks.entryCount, true);

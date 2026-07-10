@@ -91,7 +91,7 @@ function hydrateRawEvent(row) {
 function hydrateCheckpoint(row) {
   if (!row) return null;
   const metadata = parseJson(row.metadata_json, {});
-  return {
+  const checkpoint = {
     id: row.id,
     scopeType: row.scope_type,
     scopeKey: row.scope_key,
@@ -114,6 +114,13 @@ function hydrateCheckpoint(row) {
     structured: metadata.structured || null,
     createdAt: row.created_at,
   };
+  if (Number.isInteger(row.checkpoint_sequence)) {
+    Object.defineProperty(checkpoint, '_storageSequence', {
+      value: row.checkpoint_sequence,
+      enumerable: false,
+    });
+  }
+  return checkpoint;
 }
 
 function hydrateDistillRun(row) {
@@ -1513,7 +1520,7 @@ export class ContextForgeStore {
           AND embedding_index.dimensions = ?
         WHERE 1 = 1
           ${scopeSql}
-        ORDER BY checkpoints.created_at ASC, checkpoints.id ASC
+        ORDER BY checkpoints.created_at ASC, checkpoints.rowid ASC
       `)
       .all(...values);
     return rows
@@ -2992,7 +2999,7 @@ export class ContextForgeStore {
     }
     const row = this.db
       .prepare(`
-        SELECT * FROM checkpoints
+        SELECT rowid AS checkpoint_sequence, * FROM checkpoints
         WHERE ${filters.join(' AND ')}
         ORDER BY created_at DESC, rowid DESC
         LIMIT 1
@@ -3013,7 +3020,7 @@ export class ContextForgeStore {
       values.push(Number(level));
     }
     if (after) {
-      filters.push('(created_at < ? OR (created_at = ? AND id < ?))');
+      filters.push('(created_at < ? OR (created_at = ? AND rowid < ?))');
       values.push(after[0], after[0], after[1]);
     }
     const parsedLimit = limit == null ? null : Number(limit);
@@ -3021,9 +3028,9 @@ export class ContextForgeStore {
     if (limitClause) values.push(parsedLimit);
     const rows = this.db
       .prepare(`
-        SELECT * FROM checkpoints
+        SELECT rowid AS checkpoint_sequence, * FROM checkpoints
         WHERE ${filters.join(' AND ')}
-        ORDER BY created_at DESC, id DESC
+        ORDER BY created_at DESC, rowid DESC
         ${limitClause}
       `)
       .all(...values);
@@ -3045,9 +3052,9 @@ export class ContextForgeStore {
     values.push(parsedLimit);
     const rows = this.db
       .prepare(`
-        SELECT * FROM checkpoints
+        SELECT rowid AS checkpoint_sequence, * FROM checkpoints
         WHERE ${filters.join(' AND ')}
-        ORDER BY created_at DESC, id DESC
+        ORDER BY created_at DESC, rowid DESC
         LIMIT ?
       `)
       .all(...values);
@@ -3084,9 +3091,9 @@ export class ContextForgeStore {
     values.push(parsedLimit);
     return this.db
       .prepare(`
-        SELECT * FROM checkpoints
+        SELECT rowid AS checkpoint_sequence, * FROM checkpoints
         WHERE ${filters.join(' AND ')}
-        ORDER BY created_at ASC, id ASC
+        ORDER BY created_at ASC, rowid ASC
         LIMIT ?
       `)
       .all(...values)
@@ -3096,13 +3103,13 @@ export class ContextForgeStore {
   findConsolidationCheckpoint({ scopeType, scopeKey, target, source, sourceRef }) {
     const row = this.db
       .prepare(`
-        SELECT * FROM checkpoints
+        SELECT rowid AS checkpoint_sequence, * FROM checkpoints
         WHERE scope_type = ?
           AND scope_key = ?
           AND source = ?
           AND source_ref = ?
           AND json_extract(metadata_json, '$.consolidation.target') = ?
-        ORDER BY created_at DESC, id DESC
+        ORDER BY created_at DESC, rowid DESC
         LIMIT 1
       `)
       .get(scopeType, scopeKey, source, sourceRef, target);
@@ -3125,9 +3132,9 @@ export class ContextForgeStore {
     }
     const row = this.db
       .prepare(`
-        SELECT * FROM checkpoints
+        SELECT rowid AS checkpoint_sequence, * FROM checkpoints
         WHERE ${filters.join(' AND ')}
-        ORDER BY covers_to DESC, created_at DESC, id DESC
+        ORDER BY covers_to DESC, created_at DESC, rowid DESC
         LIMIT 1
       `)
       .get(...values);
@@ -4359,11 +4366,11 @@ export class ContextForgeStore {
     return hydrateCheckpoint(
       this.db
         .prepare(`
-          SELECT * FROM checkpoints
+          SELECT rowid AS checkpoint_sequence, * FROM checkpoints
           WHERE scope_type = ?
             AND scope_key = ?
             AND json_extract(metadata_json, '$.operationJobId') = ?
-          ORDER BY created_at DESC, id DESC
+          ORDER BY created_at DESC, rowid DESC
           LIMIT 1
         `)
         .get(scopeType, scopeKey, jobId),

@@ -50,7 +50,8 @@ per operation before any SQL query is executed.
 Ordering is deterministic and uses a unique tie-breaker:
 
 - raw events and memory events: `createdAt ASC, id ASC`
-- checkpoints and default memory candidates: `createdAt DESC, id DESC`
+- checkpoints: `createdAt DESC`, then SQLite insertion sequence descending
+- default memory candidates: `createdAt DESC, id DESC`
 - embedding jobs: `updatedAt ASC, id ASC`
 - distill runs and LLM usage: requested time order plus matching id order
 - memories: `importance DESC, updatedAt DESC, key ASC`
@@ -62,6 +63,11 @@ cursor. They are not a database snapshot: rows inserted after the cursor may
 appear on later pages, while newly inserted rows ordered before it are left for
 a fresh traversal. Deleted cursor rows do not invalidate the position because
 the cursor stores sort values rather than a row reference.
+
+Checkpoint cursors keep the insertion sequence opaque. This makes
+`getLatestCheckpoint`, recent handoff selection, and public checkpoint pages
+agree when multiple checkpoints share the same timestamp; the sequence is not
+part of the checkpoint response contract.
 
 Recommendation-sorted memory candidates do not support cursor pagination
 because that ranking has a wider mutable tuple. Use the default created order
