@@ -338,6 +338,23 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
         2,
       ),
     },
+    operations: {
+      readinessMinFreeBytes: parsePositiveInteger(
+        env.CONTEXTFORGE_READINESS_MIN_FREE_BYTES,
+        'CONTEXTFORGE_READINESS_MIN_FREE_BYTES',
+        100 * 1024 * 1024,
+      ),
+      readinessMaxQueuedJobs: parsePositiveInteger(
+        env.CONTEXTFORGE_READINESS_MAX_QUEUED_JOBS,
+        'CONTEXTFORGE_READINESS_MAX_QUEUED_JOBS',
+        1000,
+      ),
+      shutdownTimeoutMs: parsePositiveInteger(
+        env.CONTEXTFORGE_SHUTDOWN_TIMEOUT_MS,
+        'CONTEXTFORGE_SHUTDOWN_TIMEOUT_MS',
+        30000,
+      ),
+    },
     autoPromote: {
       enabled: parseBoolean(env.CONTEXTFORGE_AUTO_PROMOTE_ENABLED),
       audit: {

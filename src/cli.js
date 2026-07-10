@@ -22,6 +22,7 @@ import {
 } from './ingest/agents.js';
 import { runRetrievalEval } from './eval/retrieval.js';
 import { startContextForgeServer } from './server.js';
+import { backupSqliteDatabase, restoreSqliteDatabase, verifySqliteBackup } from './storage/backup.js';
 import { CONTEXTFORGE_VERSION } from './version.js';
 
 function parseArgs(argv) {
@@ -268,6 +269,7 @@ function toCoreOptions(options) {
     includeRetired: options.includeRetired === true || options.includeRetired === 'true',
     confirmMassRetired: options.confirmMassRetired === true || options.confirmMassRetired === 'true',
     includeInventory: options.includeInventory === true || options.includeInventory === 'true',
+    confirmOffline: cliBooleanOption(options.confirmOffline, 'confirmOffline'),
     includeEvents: options.includeEvents === true || options.includeEvents === 'true',
     retryFailed: options.retryFailed === true || options.retryFailed === 'true',
     staleAfterMs: options.staleAfterMs == null ? undefined : Number(options.staleAfterMs),
@@ -288,10 +290,37 @@ function preserveCoreLimitDefault(coreOptions, rawOptions) {
   return withoutLimit;
 }
 
+function requireLocalBackupAuthority(app, command) {
+  if (app.config.storageMode === 'remote') {
+    throw new Error(
+      `${command} must run on the process that owns the canonical SQLite store; remote clients cannot back up or restore checkout-local data.`,
+    );
+  }
+}
+
 async function main() {
   const { command, options } = parseArgs(process.argv);
   const commands = {
     dbInfo: (app) => app.dbInfo(),
+    readiness: (app) => app.readiness(),
+    operationalMetrics: (app) => app.operationalMetrics(),
+    backupDatabase: (app, coreOptions) => {
+      requireLocalBackupAuthority(app, 'backupDatabase');
+      return backupSqliteDatabase({ dataDir: app.config.dataDir, file: coreOptions.file, force: coreOptions.force });
+    },
+    verifyBackup: (app, coreOptions) => {
+      requireLocalBackupAuthority(app, 'verifyBackup');
+      return verifySqliteBackup({ file: coreOptions.file, requireMetadata: true });
+    },
+    restoreDatabase: (app, coreOptions) => {
+      requireLocalBackupAuthority(app, 'restoreDatabase');
+      return restoreSqliteDatabase({
+        dataDir: app.config.dataDir,
+        file: coreOptions.file,
+        dryRun: coreOptions.dryRun,
+        confirmOffline: coreOptions.confirmOffline,
+      });
+    },
     migrateScope: (app, coreOptions) => app.migrateScope(coreOptions),
     getRuntimeSettings: (app) => app.getRuntimeSettings(),
     updateRuntimeSettings: (app, coreOptions) => app.updateRuntimeSettings(coreOptions),
@@ -494,6 +523,9 @@ async function main() {
   }
   printJson(result);
   if (result?.kind === 'retrieval_eval' && Number(result.failed || 0) > 0) {
+    process.exitCode = 1;
+  }
+  if (result?.kind === 'contextforge_backup_verification' && result.ok !== true) {
     process.exitCode = 1;
   }
 }

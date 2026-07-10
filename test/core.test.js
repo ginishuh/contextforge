@@ -41,8 +41,19 @@ import {
 import { searchMemories } from '../src/retrieval/search.js';
 import { REMOTE_METHODS } from '../src/remote/client.js';
 import { ProviderTimeoutError } from '../src/runtime/provider_execution.js';
+import {
+  registerRuntimeChild,
+  runtimeChildSnapshot,
+  terminateRuntimeChildren,
+} from '../src/runtime/child_processes.js';
 import { startContextForgeServer } from '../src/server.js';
-import { ContextForgeStore, SCHEMA_VERSION } from '../src/storage/sqlite.js';
+import {
+  ContextForgeStore,
+  SCHEMA_VERSION,
+  SQLITE_BUSY_TIMEOUT_MS,
+  SQLITE_JOURNAL_MODE,
+  SQLITE_SYNCHRONOUS,
+} from '../src/storage/sqlite.js';
 import {
   PRIVATE_DATA_DIRECTORY_MODE,
   PRIVATE_DATA_FILE_MODE,
@@ -290,6 +301,21 @@ test('child provider timeouts wait for SIGKILL close before rejecting', async ()
     assert.equal(rejectedAfterClose, true);
     assert.deepEqual(fake.child.signals, ['SIGTERM', 'SIGKILL']);
   }
+});
+
+test('runtime child registry sends TERM on shutdown and unregisters on close', () => {
+  const child = new EventEmitter();
+  child.signals = [];
+  child.kill = (signal) => {
+    child.signals.push(signal);
+    return true;
+  };
+  registerRuntimeChild(child);
+  assert.equal(runtimeChildSnapshot().active, 1);
+  assert.deepEqual(terminateRuntimeChildren({ killAfterMs: 1000 }), { signaled: 1, killAfterMs: 1000 });
+  assert.deepEqual(child.signals, ['SIGTERM']);
+  child.emit('close', null, 'SIGTERM');
+  assert.equal(runtimeChildSnapshot().active, 0);
 });
 
 test('JUnit duration parser is independent of testcase attribute order', () => {
@@ -743,6 +769,73 @@ test('dbInfo reports configured embedding stale timeout', async () => {
   });
 
   assert.equal(app.dbInfo().embeddings.staleAfterMs, 1234);
+});
+
+test('readiness reports SQLite policy, disk threshold, and queue backlog without exposing credentials', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_READINESS_MAX_QUEUED_JOBS: '1',
+    },
+    cwd: process.cwd(),
+  });
+  for (const sessionId of ['readiness-one', 'readiness-two']) {
+    app.appendRaw({
+      scope: 'repo',
+      scopeKey: 'readiness-repo',
+      sessionId,
+      role: 'assistant',
+      content: `Queued readiness fixture ${sessionId}.`,
+    });
+    app.submitDistillJob({ scope: 'repo', scopeKey: 'readiness-repo', sessionId });
+  }
+
+  const readiness = app.readiness();
+  assert.equal(readiness.ready, false);
+  assert.equal(readiness.checks.database.ok, true);
+  assert.equal(readiness.checks.operationQueue.queued, 2);
+  assert.equal(readiness.checks.operationQueue.maximumQueued, 1);
+  assert.equal(readiness.sqlite.journalMode, SQLITE_JOURNAL_MODE);
+  assert.equal(readiness.sqlite.synchronous, SQLITE_SYNCHRONOUS);
+  assert.equal(readiness.sqlite.busyTimeoutMs, SQLITE_BUSY_TIMEOUT_MS);
+  assert.ok(!JSON.stringify(readiness).includes('apiKey'));
+
+  const metrics = app.operationalMetrics();
+  assert.equal(metrics.queues.operationJobs.queued, 2);
+  assert.ok(metrics.queues.oldestQueuedWaitMs >= 0);
+  assert.equal(metrics.database.sqlite.foreignKeys, true);
+});
+
+test('schema migration creates a private pre-migration backup before mutating the database', async () => {
+  const dataDir = await makeTempDir();
+  const initial = new ContextForgeStore({ dataDir });
+  initial.close();
+  const dbPath = path.join(dataDir, 'contextforge.db');
+  const db = new Database(dbPath);
+  try {
+    db.prepare("UPDATE schema_meta SET value = ? WHERE key = 'schema_version'").run(String(SCHEMA_VERSION - 1));
+  } finally {
+    db.close();
+  }
+
+  const migrated = new ContextForgeStore({ dataDir });
+  try {
+    assert.equal(migrated.migrationBackup.fromSchemaVersion, SCHEMA_VERSION - 1);
+    assert.equal(migrated.migrationBackup.toSchemaVersion, SCHEMA_VERSION);
+    assert.equal((await fs.stat(migrated.migrationBackup.file)).mode & 0o777, PRIVATE_DATA_FILE_MODE);
+    const backup = new Database(migrated.migrationBackup.file, { readonly: true });
+    try {
+      assert.equal(
+        backup.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").get().value,
+        String(SCHEMA_VERSION - 1),
+      );
+    } finally {
+      backup.close();
+    }
+  } finally {
+    migrated.close();
+  }
 });
 
 test('ContextForgeStore.withTransaction returns results and rolls back on throw', async () => {
@@ -13064,6 +13157,8 @@ test('listScopeKeys returns real scopes from memories, candidates, and distill r
 });
 
 test('REMOTE_METHODS exposes resume, suggestion, auto-promotion, and reconciliation wrappers', () => {
+  assert.ok(REMOTE_METHODS.includes('readiness'));
+  assert.ok(REMOTE_METHODS.includes('operationalMetrics'));
   assert.ok(REMOTE_METHODS.includes('migrateScope'));
   assert.ok(REMOTE_METHODS.includes('syncResumeContext'));
   assert.ok(REMOTE_METHODS.includes('agentStart'));
@@ -14661,6 +14756,120 @@ test('CLI supports the v0 workflow with synthetic data', async () => {
   assert.equal(embeddingGc.includeInventory, false);
 });
 
+test('CLI backup, verify, and offline-confirmed restore preserve a verified SQLite snapshot', async () => {
+  const dataDir = await makeTempDir();
+  const backupDir = await makeTempDir();
+  const backupFile = path.join(backupDir, 'contextforge-backup.db');
+  const env = { ...process.env, CONTEXTFORGE_DATA_DIR: dataDir };
+  const remember = (key) =>
+    execFileAsync(
+      'node',
+      [
+        'src/cli.js',
+        'remember',
+        '--scope',
+        'repo',
+        '--scopeKey',
+        'backup-repo',
+        '--key',
+        key,
+        '--content',
+        `Backup fixture ${key}.`,
+      ],
+      { env },
+    );
+  await remember('before-backup');
+
+  const backup = JSON.parse(
+    (await execFileAsync('node', ['src/cli.js', 'backupDatabase', '--file', backupFile], { env })).stdout,
+  );
+  assert.equal(backup.kind, 'contextforge_backup');
+  assert.equal(backup.verification.ok, true);
+  assert.equal(backup.verification.quickCheck[0], 'ok');
+  assert.deepEqual(backup.verification.foreignKeyViolations, []);
+  assert.equal((await fs.stat(backupFile)).mode & 0o777, PRIVATE_DATA_FILE_MODE);
+  assert.equal((await fs.stat(`${backupFile}.metadata.json`)).mode & 0o777, PRIVATE_DATA_FILE_MODE);
+
+  const verified = JSON.parse(
+    (await execFileAsync('node', ['src/cli.js', 'verifyBackup', '--file', backupFile], { env })).stdout,
+  );
+  assert.equal(verified.ok, true);
+  assert.equal(verified.metadataHashMatches, true);
+
+  const tamperedFile = path.join(backupDir, 'tampered.db');
+  await fs.copyFile(backupFile, tamperedFile);
+  await fs.writeFile(
+    `${tamperedFile}.metadata.json`,
+    JSON.stringify({ ...verified.metadata, sha256: '0'.repeat(64) }),
+    { mode: 0o600 },
+  );
+  await assert.rejects(
+    execFileAsync('node', ['src/cli.js', 'verifyBackup', '--file', tamperedFile], { env }),
+    (error) => {
+      const tampered = JSON.parse(error.stdout);
+      assert.equal(tampered.ok, false);
+      assert.equal(tampered.metadataHashMatches, false);
+      return true;
+    },
+  );
+
+  await remember('after-backup');
+  const dryRun = JSON.parse(
+    (await execFileAsync('node', ['src/cli.js', 'restoreDatabase', '--file', backupFile], { env })).stdout,
+  );
+  assert.equal(dryRun.dryRun, true);
+  assert.equal(dryRun.requiresOfflineConfirmation, true);
+  await assert.rejects(
+    execFileAsync('node', ['src/cli.js', 'restoreDatabase', '--file', backupFile, '--dryRun', 'false'], { env }),
+    /confirmOffline=true/,
+  );
+
+  const restored = JSON.parse(
+    (
+      await execFileAsync(
+        'node',
+        [
+          'src/cli.js',
+          'restoreDatabase',
+          '--file',
+          backupFile,
+          '--dryRun',
+          'false',
+          '--confirmOffline',
+          'true',
+        ],
+        { env },
+      )
+    ).stdout,
+  );
+  assert.equal(restored.restored, true);
+  assert.equal(restored.verification.ok, true);
+  assert.ok(restored.preRestoreBackup);
+  assert.equal((await fs.stat(restored.preRestoreBackup)).mode & 0o777, PRIVATE_DATA_FILE_MODE);
+
+  const memories = JSON.parse(
+    (
+      await execFileAsync(
+        'node',
+        ['src/cli.js', 'listMemories', '--scope', 'repo', '--scopeKey', 'backup-repo'],
+        { env },
+      )
+    ).stdout,
+  );
+  assert.deepEqual(memories.map((memory) => memory.key), ['before-backup']);
+
+  await assert.rejects(
+    execFileAsync('node', ['src/cli.js', 'backupDatabase', '--file', path.join(backupDir, 'wrong.db')], {
+      env: {
+        ...env,
+        CONTEXTFORGE_STORAGE_MODE: 'remote',
+        CONTEXTFORGE_REMOTE_URL: 'http://127.0.0.1:9',
+      },
+    }),
+    /must run on the process that owns the canonical SQLite store/,
+  );
+});
+
 test('CLI submits, inspects, processes, and cancels durable operation jobs', async () => {
   const dataDir = await makeTempDir();
   const env = { ...process.env, CONTEXTFORGE_DATA_DIR: dataDir };
@@ -15384,6 +15593,136 @@ test('HTTP v0 callers see remote-client connection metadata', async () => {
   } finally {
     await remote.close();
   }
+});
+
+test('HTTP health, readiness, metrics, and request correlation expose bounded operations state', async () => {
+  const dataDir = await makeTempDir();
+  const remote = await startContextForgeServer({
+    port: 0,
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_REMOTE_TOKEN: 'operations-token',
+    },
+  });
+  try {
+    const health = await fetch(`${remote.url}/healthz`);
+    assert.equal(health.status, 200);
+    assert.deepEqual(await health.json(), { ok: true });
+
+    const ready = await fetch(`${remote.url}/readyz`, { headers: { 'x-request-id': 'ready-correlation-id' } });
+    assert.equal(ready.status, 200);
+    assert.equal(ready.headers.get('x-request-id'), 'ready-correlation-id');
+    const readiness = await ready.json();
+    assert.equal(readiness.ready, true);
+    assert.equal(readiness.draining, false);
+    assert.equal(readiness.checks.database.ok, true);
+    assert.equal(readiness.sqlite.journalMode, SQLITE_JOURNAL_MODE);
+
+    const apiHeaders = {
+      authorization: 'Bearer operations-token',
+      'content-type': 'application/json',
+    };
+    await fetch(`${remote.url}/v0/appendRaw`, {
+      method: 'POST',
+      headers: apiHeaders,
+      body: JSON.stringify({
+        scope: 'repo',
+        scopeKey: 'operations-repo',
+        sessionId: 'operations-session',
+        role: 'assistant',
+        content: 'Correlate request, job, session, and checkpoint operations.',
+      }),
+    });
+    const submitted = await fetch(`${remote.url}/v0/submitDistillJob`, {
+      method: 'POST',
+      headers: { ...apiHeaders, 'x-request-id': 'job-correlation-id' },
+      body: JSON.stringify({
+        scope: 'repo',
+        scopeKey: 'operations-repo',
+        sessionId: 'operations-session',
+      }),
+    });
+    assert.equal(submitted.status, 200);
+    const submission = await submitted.json();
+    assert.equal(submission.result.job.metadata.requestId, 'job-correlation-id');
+    assert.equal(submission.result.job.sessionId, 'operations-session');
+
+    await fetch(`${remote.url}/v0/remember`, {
+      method: 'POST',
+      headers: apiHeaders,
+      body: JSON.stringify({
+        scope: 'repo',
+        scopeKey: 'operations-repo',
+        key: 'metrics-memory',
+        content: 'Retrieval metrics should report bounded candidate scans.',
+      }),
+    });
+    const searched = await fetch(`${remote.url}/v0/search`, {
+      method: 'POST',
+      headers: apiHeaders,
+      body: JSON.stringify({
+        scope: 'repo',
+        scopeKey: 'operations-repo',
+        query: 'bounded candidate scans',
+        includeDiagnostics: true,
+      }),
+    });
+    assert.equal(searched.status, 200);
+
+    const unauthorizedMetrics = await fetch(`${remote.url}/metrics`);
+    assert.equal(unauthorizedMetrics.status, 401);
+    const metrics = await fetch(`${remote.url}/metrics`, {
+      headers: { authorization: 'Bearer operations-token' },
+    });
+    assert.equal(metrics.status, 200);
+    assert.match(metrics.headers.get('content-type'), /text\/plain/);
+    const text = await metrics.text();
+    assert.match(text, /contextforge_up 1/);
+    assert.match(text, /contextforge_operation_jobs\{status="queued"\} 1/);
+    assert.match(text, /contextforge_disk_available_bytes/);
+    assert.match(text, /contextforge_retrieval_requests_total 1/);
+    assert.match(text, /contextforge_retrieval_scanned_candidates_total 1/);
+    assert.ok(!text.includes(dataDir));
+  } finally {
+    await remote.close();
+  }
+});
+
+test('HTTP graceful close drains an active request before closing the ContextForge app', async () => {
+  let releaseRequest;
+  let markStarted;
+  let closed = false;
+  const started = new Promise((resolve) => {
+    markStarted = resolve;
+  });
+  const fakeApp = {
+    async dbInfo() {
+      markStarted();
+      await new Promise((resolve) => {
+        releaseRequest = resolve;
+      });
+      return { ok: true };
+    },
+    close() {
+      closed = true;
+    },
+  };
+  const remote = await startContextForgeServer({ app: fakeApp, port: 0, env: {} });
+  const responsePromise = fetch(`${remote.url}/v0/dbInfo`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{}',
+  });
+  await started;
+  const closePromise = remote.close({ timeoutMs: 1000 });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(closed, false);
+  releaseRequest();
+  const response = await responsePromise;
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).result, { ok: true });
+  await closePromise;
+  assert.equal(closed, true);
 });
 
 test('HTTP server serves admin UI assets', async () => {
