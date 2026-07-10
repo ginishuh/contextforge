@@ -19,6 +19,10 @@ Use `review` for candidate review, `operator` for server maintenance,
 `workspace-admin` for workspace topology, or `all` for compatibility with the
 former 60-tool surface.
 
+`migrate_scope` belongs to both `operator` and `workspace-admin`: it is storage
+maintenance as well as workspace lifecycle work. Other workspace mutations are
+excluded from `operator`.
+
 Configure the HTTP server with `CONTEXTFORGE_MCP_PROFILE` or an exact
 comma-separated `CONTEXTFORGE_MCP_TOOLS` allowlist. Configure direct stdio with
 the same environment variables or `node src/mcp.js --profile <name>` /

@@ -52,6 +52,9 @@ maintenance task is needed; use a separate operator/admin registration where
 the client supports it. Profile selection remains functional when this skill is
 not installed, but this skill is the authoritative detailed workflow guide.
 
+`migrate_scope` is also available to `operator` because scope migration is a
+storage-maintenance operation; workspace mutation tools remain excluded there.
+
 ## Scopes And Storage
 
 Always set scope intentionally:

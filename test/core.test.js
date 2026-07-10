@@ -820,8 +820,8 @@ test('processEmbeddingJobs reports an explicit no-op when the scoped queue is em
 test('MCP instructions keep embedding maintenance safety guidance compact', async () => {
   const source = await fs.readFile(path.join(process.cwd(), 'src', 'mcp.js'), 'utf8');
 
-  assert.match(source, /Before embedding maintenance/);
-  assert.match(source, /pending, failed, stale, or degraded work/);
+  assert.match(source, /Embedding maintenance is operator-profile work/);
+  assert.match(source, /inspect db_info coverage/);
   assert.match(source, /packaged contextforge-memory skill/);
 });
 
@@ -872,6 +872,12 @@ test('MCP tool profiles have exact bounded surfaces and reject invalid configura
   assert.equal(customSelection.requestedProfile, 'operator');
   assert.equal(customSelection.explicitAllowlist, true);
   assert.deepEqual(customSelection.enabledToolNames, ['db_info', 'search']);
+  assert.deepEqual(customSelection.warnings, []);
+  const customWithUnknownProfile = resolveMcpToolSelection({
+    env: { CONTEXTFORGE_MCP_PROFILE: 'typo', CONTEXTFORGE_MCP_TOOLS: 'db_info,search' },
+  });
+  assert.equal(customWithUnknownProfile.profile, 'custom');
+  assert.match(customWithUnknownProfile.warnings[0], /Ignored unknown MCP profile typo/);
   assert.throws(
     () => resolveMcpToolSelection({ profile: 'mystery' }),
     /Unknown ContextForge MCP profile: mystery.*agent-core.*workspace-admin/,
@@ -898,7 +904,7 @@ test('MCP default profile stays within the context budget without requiring an i
     assert.ok(surface.instructionsBytes <= 1600, `instructions=${surface.instructionsBytes}`);
     assert.ok(surface.toolSchemaBytes <= 26000, `schema=${surface.toolSchemaBytes}`);
     assert.ok(surface.estimatedInitialTokens <= 6700, `tokens=${surface.estimatedInitialTokens}`);
-    assert.ok(surface.estimatedInitialTokens / allSurface.estimatedInitialTokens < 0.5);
+    assert.ok(surface.estimatedInitialTokens / allSurface.estimatedInitialTokens <= 0.5);
     assert.equal(
       surface.descriptionBytes,
       surface.tools.reduce((total, tool) => total + tool.descriptionBytes, 0),

@@ -16,11 +16,11 @@ HTTP.
 
 | Profile | Tools | Instructions bytes | `tools/list` JSON bytes | Description bytes | Estimated tokens |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `agent-core` | 24 | 1,444 | 25,243 | 5,992 | 6,672 |
-| `review` | 37 | 1,444 | 37,455 | 8,038 | 9,725 |
-| `operator` | 54 | 1,444 | 53,194 | 11,128 | 13,660 |
-| `workspace-admin` | 11 | 1,444 | 8,888 | 2,061 | 2,583 |
-| `all` | 60 | 1,444 | 58,292 | 12,150 | 14,934 |
+| `agent-core` | 24 | 1,423 | 25,243 | 5,992 | 6,667 |
+| `review` | 37 | 1,423 | 37,455 | 8,038 | 9,720 |
+| `operator` | 54 | 1,423 | 53,194 | 11,128 | 13,655 |
+| `workspace-admin` | 11 | 1,423 | 8,888 | 2,061 | 2,578 |
+| `all` | 60 | 1,423 | 58,292 | 12,150 | 14,929 |
 
 `estimatedInitialTokens` is `ceil((instructionsBytes + toolSchemaBytes) / 4)`.
 It is a conservative transport-level comparison, not a claim about a specific
@@ -49,6 +49,9 @@ than an LLM benchmark:
 - explicit allowlists expose only recognized requested tools;
 - unknown profiles/tools fail before the MCP transport starts;
 - stdio and HTTP clients receive the same default profile and byte counts.
+
+`migrate_scope` intentionally appears in both `operator` and
+`workspace-admin`; all other workspace mutations stay out of `operator`.
 
 Actual model tool-choice accuracy depends on the host, model, system prompt,
 conversation, and tool descriptions. It belongs in a client/model evaluation

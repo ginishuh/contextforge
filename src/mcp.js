@@ -149,7 +149,14 @@ const WORKSPACE_ADMIN_TOOLS = Object.freeze([
   'remove_workspace_routing_rule',
 ]);
 
-const WORKSPACE_MUTATION_TOOLS = new Set(WORKSPACE_ADMIN_TOOLS.slice(5));
+const WORKSPACE_MUTATION_TOOLS = new Set([
+  'upsert_workspace_profile',
+  'deactivate_workspace_profile',
+  'upsert_workspace_member',
+  'remove_workspace_member',
+  'upsert_workspace_routing_rule',
+  'remove_workspace_routing_rule',
+]);
 const canonicalToolList = (names) => {
   const selected = new Set(names);
   return Object.freeze(ALL_MCP_TOOL_NAMES.filter((name) => selected.has(name)));
@@ -169,13 +176,14 @@ function normalizeToolAllowlist(value) {
 }
 
 export function resolveMcpToolSelection({ env = process.env, profile = null, tools = null } = {}) {
+  const explicitTools = normalizeToolAllowlist(tools ?? env.CONTEXTFORGE_MCP_TOOLS);
   const requestedProfile = profile || env.CONTEXTFORGE_MCP_PROFILE || 'agent-core';
-  if (!Object.hasOwn(MCP_TOOL_PROFILES, requestedProfile)) {
+  const knownProfile = Object.hasOwn(MCP_TOOL_PROFILES, requestedProfile);
+  if (!knownProfile && explicitTools.length === 0) {
     throw new Error(
       `Unknown ContextForge MCP profile: ${requestedProfile}. Available profiles: ${Object.keys(MCP_TOOL_PROFILES).join(', ')}.`,
     );
   }
-  const explicitTools = normalizeToolAllowlist(tools ?? env.CONTEXTFORGE_MCP_TOOLS);
   const selectedToolNames = explicitTools.length > 0 ? explicitTools : [...MCP_TOOL_PROFILES[requestedProfile]];
   const unknownTools = selectedToolNames.filter((name) => !ALL_MCP_TOOL_NAMES.includes(name));
   if (unknownTools.length > 0) {
@@ -186,6 +194,9 @@ export function resolveMcpToolSelection({ env = process.env, profile = null, too
     profile: explicitTools.length > 0 ? 'custom' : requestedProfile,
     requestedProfile,
     explicitAllowlist: explicitTools.length > 0,
+    warnings: !knownProfile
+      ? [`Ignored unknown MCP profile ${requestedProfile} because an explicit tool allowlist was provided.`]
+      : [],
     enabledToolNames,
     disabledToolNames: ALL_MCP_TOOL_NAMES.filter((name) => !enabledToolNames.includes(name)),
   };
@@ -212,7 +223,7 @@ const MCP_INSTRUCTIONS = [
   'bootstrap_context does not create sessions. Preserve adapter ids such as codex:<id> or claude_code:<id>; use begin_session only for manual append_raw streams. Keep local scope opt-in.',
   'Distill failure must not erase raw evidence. At closeout, retain checkpointId and review candidates before promotion. Audit persists review metadata but does not itself promote durable memory.',
   'Use durable submit/get job tools when provider work must survive disconnects; an operator must process queued jobs. Queued cancellation is guaranteed, running force-cancel is not, and candidate audit remains per-candidate rather than true provider batching.',
-  'Before embedding maintenance, inspect db_info or list_embedding_jobs and process only pending, failed, stale, or degraded work.',
+  'Embedding maintenance is operator-profile work; inspect db_info coverage before handing it to an operator.',
   'Profiles intentionally hide tools. Use the packaged contextforge-memory skill for detailed review, reconciliation, consolidation, embeddings, workspace administration, and closeout workflows.',
 ].join(' ');
 
