@@ -528,6 +528,9 @@ async function main() {
   if (result?.kind === 'contextforge_backup_verification' && result.ok !== true) {
     process.exitCode = 1;
   }
+  if (result?.kind === 'contextforge_restore' && result.verification && result.verification.ok !== true) {
+    process.exitCode = 1;
+  }
 }
 
 main().catch((error) => {

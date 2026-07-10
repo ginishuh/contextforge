@@ -448,7 +448,7 @@ function wrapRemoteAccessResult(result, transport) {
   return wrapped;
 }
 
-function createRemoteAccessApp(app, transport, onOperation = null) {
+function createRemoteAccessApp(app, transport, onOperation = null, context = {}) {
   return new Proxy(app, {
     get(target, property, receiver) {
       const value = Reflect.get(target, property, receiver);
@@ -457,7 +457,16 @@ function createRemoteAccessApp(app, transport, onOperation = null) {
       }
       return async (...args) => {
         const startedAt = Date.now();
-        const result = await value.apply(target, args);
+        const callArgs = [...args];
+        if (
+          context.requestId &&
+          ['submitDistillJob', 'submitAuditJob'].includes(String(property)) &&
+          callArgs[0] &&
+          typeof callArgs[0] === 'object'
+        ) {
+          callArgs[0] = { ...callArgs[0], requestId: context.requestId };
+        }
+        const result = await value.apply(target, callArgs);
         onOperation?.(String(property), result, Math.max(0, Date.now() - startedAt));
         return wrapRemoteAccessResult(result, transport);
       };
@@ -477,6 +486,9 @@ function serverStorageEnv(env) {
 export function createContextForgeServer({ app, env = process.env } = {}) {
   const serverApp = app || createContextForge({ env: serverStorageEnv(env), reuseStore: true });
   const authToken = env.CONTEXTFORGE_REMOTE_TOKEN || null;
+  const shutdownTimeoutMs =
+    serverApp.config?.operations?.shutdownTimeoutMs ||
+    parsePositiveInteger(env.CONTEXTFORGE_SHUTDOWN_TIMEOUT_MS, 30000);
   const maxBodyBytes = parseMaxBodyBytes(env);
   const adminUser = env.CONTEXTFORGE_ADMIN_USER || null;
   const adminPasswordHash = parseAdminPasswordHash(env);
@@ -603,6 +615,14 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
       return;
     }
 
+    if (draining) {
+      sendJson(response, 503, {
+        error: { name: 'ServerDrainingError', message: 'ContextForge is draining.' },
+        draining: true,
+      });
+      return;
+    }
+
     if (request.method === 'GET' && requestUrl.pathname === '/metrics') {
       if (!isRequestAuthorized(request, authToken, adminSessions)) {
         sendJson(response, 401, { error: { message: 'Unauthorized.' } });
@@ -711,7 +731,7 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
         return;
       }
       const mcpServer = createContextForgeMcpServer({
-        app: createRemoteAccessApp(serverApp, 'http-mcp', recordOperationMetrics),
+        app: createRemoteAccessApp(serverApp, 'http-mcp', recordOperationMetrics, { requestId }),
         env,
       });
       try {
@@ -782,6 +802,7 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
     draining = true;
   };
   server.contextForgeMetrics = serverMetrics;
+  server.contextForgeShutdownTimeoutMs = shutdownTimeoutMs;
   return server;
 }
 
@@ -802,7 +823,7 @@ export function startContextForgeServer({ host = '127.0.0.1', port = 8765, env =
         host,
         port: address.port,
         url: `http://${host}:${address.port}`,
-        close: ({ timeoutMs = Number(env.CONTEXTFORGE_SHUTDOWN_TIMEOUT_MS || 30000) } = {}) =>
+        close: ({ timeoutMs = server.contextForgeShutdownTimeoutMs } = {}) =>
           new Promise((closeResolve, closeReject) => {
             server.beginContextForgeDrain?.();
             terminateRuntimeChildren({ killAfterMs: Math.min(1000, timeoutMs) });

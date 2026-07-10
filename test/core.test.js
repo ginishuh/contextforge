@@ -60,6 +60,7 @@ import {
   SQLITE_PRIVATE_FILE_SUFFIXES,
   secureDataDirectoryPermissions,
 } from '../src/storage/permissions.js';
+import { backupSqliteDatabase } from '../src/storage/backup.js';
 import { ExternalProviderDisabledInTestError } from '../src/testing/external_provider.js';
 import { CONTEXTFORGE_VERSION } from '../src/version.js';
 
@@ -805,6 +806,40 @@ test('readiness reports SQLite policy, disk threshold, and queue backlog without
   assert.equal(metrics.queues.operationJobs.queued, 2);
   assert.ok(metrics.queues.oldestQueuedWaitMs >= 0);
   assert.equal(metrics.database.sqlite.foreignKeys, true);
+});
+
+test('readiness reports stale embedding coverage without evicting a recoverable instance', async () => {
+  const dataDir = await makeTempDir();
+  const provider = {
+    name: 'test-vector',
+    model: 'test-embedding',
+    dimensions: 3,
+    async embed(texts) {
+      return texts.map(() => [1, 0, 0]);
+    },
+  };
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_EMBEDDINGS_PROVIDER: 'openai',
+      CONTEXTFORGE_EMBEDDINGS_DIMENSIONS: '3',
+    },
+    cwd: process.cwd(),
+    embeddingProviders: { openai: provider },
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'readiness-embedding-repo',
+    key: 'pending-embedding',
+    content: 'A queued embedding is recoverable backlog.',
+  });
+
+  const readiness = app.readiness();
+  assert.equal(readiness.ready, true);
+  assert.equal(readiness.checks.embeddings.ok, true);
+  assert.equal(readiness.checks.embeddings.degraded, true);
+  assert.equal(readiness.checks.embeddings.pending, 1);
+  assert.equal(readiness.checks.embeddings.staleSources, 1);
 });
 
 test('schema migration creates a private pre-migration backup before mutating the database', async () => {
@@ -14796,6 +14831,30 @@ test('CLI backup, verify, and offline-confirmed restore preserve a verified SQLi
   assert.equal(verified.ok, true);
   assert.equal(verified.metadataHashMatches, true);
 
+  const previousBackup = await fs.readFile(backupFile);
+  const previousMetadata = await fs.readFile(`${backupFile}.metadata.json`);
+  await assert.rejects(
+    backupSqliteDatabase({
+      dataDir,
+      file: backupFile,
+      force: true,
+      backupRunner: async () => {
+        throw new Error('Synthetic backup failure before install.');
+      },
+    }),
+    /Synthetic backup failure/,
+  );
+  assert.deepEqual(await fs.readFile(backupFile), previousBackup);
+  assert.deepEqual(await fs.readFile(`${backupFile}.metadata.json`), previousMetadata);
+
+  const forcedBackup = await backupSqliteDatabase({ dataDir, file: backupFile, force: true });
+  assert.equal(forcedBackup.verification.ok, true);
+  const forcedVerification = JSON.parse(
+    (await execFileAsync('node', ['src/cli.js', 'verifyBackup', '--file', backupFile], { env })).stdout,
+  );
+  assert.equal(forcedVerification.ok, true);
+  assert.equal(forcedVerification.metadataHashMatches, true);
+
   const tamperedFile = path.join(backupDir, 'tampered.db');
   await fs.copyFile(backupFile, tamperedFile);
   await fs.writeFile(
@@ -15362,6 +15421,7 @@ test('MCP streamable HTTP endpoint exposes core tools with bearer auth', async (
     requestInit: {
       headers: {
         authorization: 'Bearer test-token',
+        'x-request-id': 'mcp-correlation-id',
       },
     },
   });
@@ -15456,6 +15516,15 @@ test('MCP streamable HTTP endpoint exposes core tools with bearer auth', async (
         content: 'Candidate: HTTP MCP can promote memory candidates by checkpoint id.',
       },
     });
+    const submittedJob = await client.callTool({
+      name: 'submit_distill_job',
+      arguments: {
+        scope: 'repo',
+        scopeKey: 'http-mcp-repo',
+        sessionId: 'http-mcp-session',
+      },
+    });
+    assert.equal(submittedJob.structuredContent.result.job.metadata.requestId, 'mcp-correlation-id');
     const checkpoint = await client.callTool({
       name: 'distill_checkpoint',
       arguments: {
@@ -15714,6 +15783,10 @@ test('HTTP graceful close drains an active request before closing the ContextFor
     body: '{}',
   });
   await started;
+  remote.server.beginContextForgeDrain();
+  const rejected = await fetch(`${remote.url}/v0/dbInfo`, { method: 'POST', body: '{}' });
+  assert.equal(rejected.status, 503);
+  assert.equal((await rejected.json()).draining, true);
   const closePromise = remote.close({ timeoutMs: 1000 });
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(closed, false);

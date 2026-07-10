@@ -31,6 +31,9 @@ CONTEXTFORGE_READINESS_MAX_QUEUED_JOBS=1000
 Provider credentials are never returned or actively exercised by readiness.
 Credential/provider smoke checks remain explicit operator actions so a health
 probe cannot spend money or trigger an external process.
+Pending/stale embedding coverage remains visible in the response and metrics,
+but does not by itself make the process unready; unavailable sqlite-vec or
+failed embedding jobs do.
 
 ## Metrics And Correlation
 
@@ -45,8 +48,8 @@ admin session as the remote API. It exposes bounded aggregates for:
 
 Every HTTP response includes `X-Request-Id`. A supplied `X-Request-Id` is
 preserved (bounded to 128 characters); otherwise the server generates one.
-Durable distill/audit submissions persist that request id with the existing job,
-session, and checkpoint identifiers.
+Durable distill/audit submissions over HTTP JSON or HTTP MCP persist that
+request id with the existing job, session, and checkpoint identifiers.
 
 ## SQLite Runtime Policy
 
@@ -85,6 +88,9 @@ opens the snapshot read-only and requires metadata hash equality,
 `PRAGMA quick_check = ok`, zero `PRAGMA foreign_key_check` rows, and a valid
 schema version not newer than this binary. Copy both the database and its
 `.metadata.json` file off-host.
+Forced replacement is staged and verified at temporary paths first. The prior
+database/metadata pair remains in place until the new pair is ready, and an
+install error rolls the prior pair back.
 
 ## Restore Verification
 
@@ -112,7 +118,8 @@ installs the snapshot, and verifies it again. Start the server only after
 ## Graceful Shutdown
 
 The server handles `SIGTERM` and `SIGINT` by entering drain mode, stopping new
-connections, allowing active HTTP requests to finish, closing idle connections,
+connections, returning 503 to new API/MCP/UI work on existing connections,
+allowing active HTTP requests to finish, closing idle connections,
 and then closing ContextForge/SQLite. During drain, `/readyz` reports 503 with
 `draining: true` when the connection can still reach the process.
 

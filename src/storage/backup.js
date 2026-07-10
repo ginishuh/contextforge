@@ -61,22 +61,30 @@ export function verifySqliteBackup({ file, requireMetadata = false } = {}) {
   }
 }
 
-export async function backupSqliteDatabase({ dataDir, file, force = false } = {}) {
+export async function backupSqliteDatabase({ dataDir, file, force = false, backupRunner = null } = {}) {
   const sourcePath = path.join(path.resolve(dataDir), 'contextforge.db');
   const backupPath = requireFile(file, 'file');
+  const metadataPath = `${backupPath}.metadata.json`;
   if (backupPath === sourcePath) throw new Error('Backup destination must differ from the live database.');
   if (fs.existsSync(backupPath) && !force) throw new Error(`Backup destination already exists: ${backupPath}`);
   fs.mkdirSync(path.dirname(backupPath), { recursive: true, mode: 0o700 });
-  if (fs.existsSync(backupPath)) fs.rmSync(backupPath);
+  const temporaryPath = `${backupPath}.tmp-${process.pid}-${randomUUID()}`;
+  const temporaryMetadataPath = `${temporaryPath}.metadata.json`;
   const source = new Database(sourcePath, { readonly: true, fileMustExist: true });
   try {
-    await source.backup(backupPath);
+    await (backupRunner ? backupRunner(source, temporaryPath) : source.backup(temporaryPath));
+  } catch (error) {
+    fs.rmSync(temporaryPath, { force: true });
+    throw error;
   } finally {
     source.close();
   }
-  fs.chmodSync(backupPath, 0o600);
-  const verification = verifySqliteBackup({ file: backupPath });
-  if (!verification.ok) throw new Error(`Backup verification failed: ${backupPath}`);
+  fs.chmodSync(temporaryPath, 0o600);
+  const verification = verifySqliteBackup({ file: temporaryPath });
+  if (!verification.ok) {
+    fs.rmSync(temporaryPath, { force: true });
+    throw new Error(`Backup verification failed before install: ${backupPath}`);
+  }
   const metadata = {
     kind: 'contextforge_backup_metadata',
     createdAt: new Date().toISOString(),
@@ -84,8 +92,50 @@ export async function backupSqliteDatabase({ dataDir, file, force = false } = {}
     sizeBytes: verification.sizeBytes,
     sha256: verification.sha256,
   };
-  const metadataPath = `${backupPath}.metadata.json`;
-  fs.writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, { mode: 0o600 });
+  fs.writeFileSync(temporaryMetadataPath, `${JSON.stringify(metadata, null, 2)}\n`, { mode: 0o600 });
+  const stagedVerification = verifySqliteBackup({ file: temporaryPath, requireMetadata: true });
+  if (!stagedVerification.ok) {
+    fs.rmSync(temporaryPath, { force: true });
+    fs.rmSync(temporaryMetadataPath, { force: true });
+    throw new Error(`Backup metadata verification failed before install: ${backupPath}`);
+  }
+
+  const replacementId = `${process.pid}-${randomUUID()}`;
+  const previousPath = `${backupPath}.previous-${replacementId}`;
+  const previousMetadataPath = `${metadataPath}.previous-${replacementId}`;
+  const hadPrevious = fs.existsSync(backupPath);
+  const hadPreviousMetadata = fs.existsSync(metadataPath);
+  let movedPrevious = false;
+  let movedPreviousMetadata = false;
+  let installedBackup = false;
+  let installedMetadata = false;
+  try {
+    if (hadPrevious) {
+      fs.renameSync(backupPath, previousPath);
+      movedPrevious = true;
+    }
+    if (hadPreviousMetadata) {
+      fs.renameSync(metadataPath, previousMetadataPath);
+      movedPreviousMetadata = true;
+    }
+    fs.renameSync(temporaryPath, backupPath);
+    installedBackup = true;
+    fs.renameSync(temporaryMetadataPath, metadataPath);
+    installedMetadata = true;
+  } catch (error) {
+    if (installedBackup) fs.rmSync(backupPath, { force: true });
+    if (installedMetadata) fs.rmSync(metadataPath, { force: true });
+    if (movedPrevious && fs.existsSync(previousPath)) fs.renameSync(previousPath, backupPath);
+    if (movedPreviousMetadata && fs.existsSync(previousMetadataPath)) {
+      fs.renameSync(previousMetadataPath, metadataPath);
+    }
+    throw error;
+  } finally {
+    fs.rmSync(temporaryPath, { force: true });
+    fs.rmSync(temporaryMetadataPath, { force: true });
+  }
+  fs.rmSync(previousPath, { force: true });
+  fs.rmSync(previousMetadataPath, { force: true });
   return {
     file: backupPath,
     metadataPath,
@@ -130,6 +180,14 @@ export async function restoreSqliteDatabase({ dataDir, file, dryRun = true, conf
   for (const suffix of ['-wal', '-shm']) fs.rmSync(`${targetPath}${suffix}`, { force: true });
   fs.renameSync(temporaryPath, targetPath);
   const restoredVerification = verifySqliteBackup({ file: targetPath });
+  if (!restoredVerification.ok) {
+    const error = new Error(
+      `Restored database failed final verification. Recover from pre-restore backup: ${preRestorePath}`,
+    );
+    error.code = 'CONTEXTFORGE_RESTORE_VERIFICATION_FAILED';
+    error.preRestoreBackup = fs.existsSync(preRestorePath) ? preRestorePath : null;
+    throw error;
+  }
   return {
     ...plan,
     dryRun: false,

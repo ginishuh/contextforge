@@ -4002,7 +4002,8 @@ export function createContextForge(options = {}) {
     readiness() {
       return useStore((store) => {
         const snapshot = store.operationalSnapshot();
-        const embeddingState = buildDbInfo(store).embeddings;
+        const dbState = buildDbInfo(store);
+        const embeddingState = dbState.embeddings;
         const checks = {
           database: {
             ok:
@@ -4028,9 +4029,12 @@ export function createContextForge(options = {}) {
             maximumQueued: config.operations.readinessMaxQueuedJobs,
           },
           embeddings: {
-            ok: !embeddingProvider || !embeddingState.degraded,
+            ok:
+              !embeddingProvider ||
+              (dbState.vector.sqliteVecAvailable && snapshot.queues.embeddingJobs.failed === 0),
             enabled: Boolean(embeddingProvider),
             degraded: embeddingState.degraded,
+            vectorAvailable: dbState.vector.sqliteVecAvailable,
             pending: snapshot.queues.embeddingJobs.pending,
             processing: snapshot.queues.embeddingJobs.processing,
             failed: snapshot.queues.embeddingJobs.failed,
