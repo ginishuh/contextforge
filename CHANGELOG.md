@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Corrected `audit_memory_candidates` MCP mutation annotations and response
+  metadata: the tool does not promote durable memory, but it persists candidate
+  review metadata and audit usage events and invokes the audit provider once per
+  selected candidate.
 - Added scope-key aliases plus an explicit `migrateScope` command for safely
   canonicalizing renamed or transferred repository scopes without read-union
   ambiguity.

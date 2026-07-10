@@ -44,8 +44,8 @@ const MCP_INSTRUCTIONS = [
   'Search result types have different trust roles: memory is reviewed durable fact or decision; checkpoint is credible recent handoff state for continuity, planning, prior intent, recent decisions, and unfinished work, but mutable live-state claims must be verified with git/GitHub/CI/runtime/migrations before acting; memory_candidate is unreviewed promotion material and not durable truth.',
   'bootstrap_context returns a compact memoryMap separately from raw retrieval hits. Use the map for durable-memory orientation, then call expand_memory_cluster only for clusters whose atomic details are needed.',
   'For task start or loose continuation prompts such as "지난 환경 작업과 동기화", "어제 하던 거 이어서", "previous work", or "continue", call bootstrap_context first; it includes latest checkpoint handoff independent of search ranking. Use sync_resume_context only when you know the exact sessionId and need session working state or raw tail.',
-  'For closeout distillation, pass auditTrigger to distill_checkpoint. Candidate audit is automatic and batched: session pending candidates are audited after closeout triggers or once the configured batch threshold is reached. Audit results are stored on candidates; automatic promotion only controls whether approved strict-safe results are written to durable memory.',
-  'When an agent needs to inspect audited recommendations, call audit_memory_candidates with sessionId or checkpointId. It returns stored audit proposals and audits unaudited candidates in the same scoped batch when needed, but never mutates durable memory.',
+  'For closeout distillation, pass auditTrigger to distill_checkpoint. Candidate audit automatically selects a bounded session batch after closeout triggers or once the configured threshold is reached, then invokes the provider once per selected candidate. Audit results are stored on candidates; automatic promotion only controls whether approved strict-safe results are written to durable memory.',
+  'When an agent needs to inspect audited recommendations, call audit_memory_candidates with sessionId or checkpointId. It returns stored audit proposals and audits unaudited candidates in the same scoped selection batch when needed. It persists candidate audit metadata and usage events but never promotes or mutates durable memory.',
   'For strict closeout-scoped safe automatic promotion, call auto_promote_memory_candidates only when the user wants write-side automatic promotion and always include sessionId or checkpointId. By default use dryRun=true. Use dryRun=false only when CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true is intentionally configured; never use scope-wide backlog fallback and never auto-promote preference candidates.',
   'Preference-like candidates are tracked as merged occurrences; use list_preference_occurrences to review repeated evidence and weakened corrections, but do not treat occurrence evidence alone as durable preference truth.',
   'For user corrections such as "너 잘못 알고 있잖아", "그거 아니야", "그건 X가 아니라 Y야", or "기억 수정해", call reconcile_memory. Show the basis for prior knowledge, assess conflicts, and only apply safe corrections when the user explicitly asks to fix memory.',
@@ -1183,7 +1183,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Audit Memory Candidates',
       description:
-        'Return stored audited recommendations and run the configured audit provider on unaudited closeout-scoped pending memory candidates when needed. Requires sessionId or checkpointId, never scans scope fallback, and never promotes or changes candidate status.',
+        'Return stored audited recommendations and run the configured audit provider once per selected unaudited closeout-scoped pending memory candidate when needed. Requires sessionId or checkpointId, never scans scope fallback, and never promotes or changes candidate status. Persists candidate review metadata and audit usage events.',
       inputSchema: {
         ...scopedSchema,
         sessionId: z.string().optional(),
@@ -1203,8 +1203,10 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
       },
       annotations: {
         title: 'Audit Memory Candidates',
-        readOnlyHint: true,
+        readOnlyHint: false,
+        destructiveHint: false,
         idempotentHint: false,
+        openWorldHint: true,
       },
     },
     async (args) => jsonResult(await app.auditMemoryCandidates(args)),

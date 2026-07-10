@@ -256,14 +256,16 @@ and bootstrap would otherwise expose only a thin latest slice.
 At closeout triggers only, make sure durable memory candidates are audited:
 
 1. When distilling closeout evidence, pass `auditTrigger` to `distill_checkpoint`
-   so ContextForge runs the configured batched candidate audit automatically.
+   so ContextForge selects a bounded candidate batch automatically and invokes
+   the configured audit provider once per selected candidate.
 2. Automatic candidate audit is scoped to the current `sessionId` or explicit
    `checkpointId`. It never scans the whole scope backlog.
 3. Audit results are stored on pending candidates. Automatic promotion controls
    only whether audit-approved strict-safe results are written to durable memory.
 4. Use `audit_memory_candidates` to inspect stored audited recommendations or to
-   audit unaudited candidates in the same closeout batch. It must not mutate
-   durable memory.
+   audit unaudited candidates in the same closeout selection batch. It persists
+   candidate review metadata and audit usage events, but must not promote or
+   mutate durable memory.
 5. Promote only reviewed, stable, scoped, non-secret facts.
 6. Prefer `promote_memory_candidate` by `candidateId`.
 7. If `suggest_memory_promotions` reports a duplicate, refinement, supersedes,
