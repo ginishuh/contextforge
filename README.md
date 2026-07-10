@@ -805,7 +805,10 @@ are bounded by `scanLimit` and report conservative per-table truncation flags,
 while the processing-job safety check always uses complete status counts. When
 `nextCursor` is present, pass it as `--cursor` to continue the index,
 terminal-job, and vector-only keyset scans; an empty plan is final only when
-`nextCursor` is null. GC responses keep the nested inventory summary-only by
+`nextCursor` is null. For non-dry GC, handle `needsRescan=true` first by
+repeating the call with the same input cursor (or no cursor when the first page
+was capped); advance to `nextCursor` only after `needsRescan=false`. GC
+responses keep the nested inventory summary-only by
 default to bound MCP/remote payloads; use `--includeInventory true` only when
 the full scanned page is required for diagnosis.
 

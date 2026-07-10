@@ -4844,7 +4844,7 @@ test('embedding maintenance inventory and GC remove only eligible artifacts in b
       completedJobRetentionDays: 1,
     });
     assert.equal(scopedInventory.eligible.vectorOnly, 0);
-    assert.equal(scopedInventory.skippedUnknownScopeVectorRows, 1);
+    assert.equal(scopedInventory.skippedUnknownScopeVectorRows, null);
     const limitedInventory = app.embeddingInventory({ scope: 'repo', scopeKey, scanLimit: 1 });
     assert.equal(limitedInventory.scanned.jobs, 1);
     assert.equal(limitedInventory.truncated.jobs, true);
@@ -5008,6 +5008,65 @@ test('embedding GC requires an extra confirmation for majority retired indexes',
     });
     assert.equal(confirmed.blocked, false);
     assert.equal(confirmed.deleted.indexRows, 2);
+  } finally {
+    app.close();
+  }
+});
+
+test('embedding GC rescans a batch-capped page before advancing its cursor', async () => {
+  const dataDir = await makeTempDir();
+  const scopeKey = 'repo-batch-capped-gc';
+  const provider = {
+    name: 'test-vector',
+    model: 'test-embedding',
+    dimensions: 3,
+    async embed(texts) {
+      return texts.map(() => [1, 0, 0]);
+    },
+  };
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_EMBEDDINGS_PROVIDER: 'openai',
+      CONTEXTFORGE_EMBEDDINGS_DIMENSIONS: '3',
+    },
+    cwd: process.cwd(),
+    embeddingProviders: { openai: provider },
+  });
+  try {
+    for (const key of ['one', 'two', 'three']) {
+      app.remember({ scope: 'repo', scopeKey, key, content: `Inactive vector ${key}.` });
+    }
+    await app.rebuildEmbeddings({ scope: 'repo', scopeKey });
+    for (const key of ['one', 'two', 'three']) {
+      app.deactivateMemory({ scope: 'repo', scopeKey, key, reason: 'Batch-cap fixture.' });
+    }
+
+    const deleted = [];
+    let cursor = null;
+    let result;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      result = app.pruneEmbeddingArtifacts({
+        scope: 'repo',
+        scopeKey,
+        scanLimit: 10,
+        batchSize: 1,
+        dryRun: false,
+        ...(cursor ? { cursor } : {}),
+      });
+      deleted.push(result.deleted.indexRows);
+      if (result.needsRescan) {
+        assert.equal(result.nextCursor, cursor);
+        continue;
+      }
+      cursor = result.nextCursor;
+      if (!cursor) break;
+    }
+
+    assert.deepEqual(deleted, [1, 1, 1]);
+    assert.equal(result.needsRescan, false);
+    assert.equal(result.nextCursor, null);
+    assert.equal(app.embeddingInventory({ scope: 'repo', scopeKey }).eligible.total, 0);
   } finally {
     app.close();
   }

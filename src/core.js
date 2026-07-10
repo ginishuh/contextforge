@@ -3515,8 +3515,8 @@ export function createContextForge(options = {}) {
       byReason[reason] = (byReason[reason] || 0) + 1;
       bySourceType[record.sourceType] = (bySourceType[record.sourceType] || 0) + 1;
     }
-    const vectorPage = cursorState.vector.done
-      ? { items: [], hasMore: false, state: cursorState.vector }
+    const vectorPage = narrowed || cursorState.vector.done
+      ? { items: [], hasMore: false, state: narrowed ? { done: true, after: null } : cursorState.vector }
       : embeddingMaintenancePage(
           store.listOrphanEmbeddingVectorIds({ limit: scanLimit + 1, after: cursorState.vector.after?.[0] || null }),
           scanLimit,
@@ -3585,7 +3585,7 @@ export function createContextForge(options = {}) {
       bySourceType,
       jobStatus,
       processingJobs: jobStatus.processing || 0,
-      skippedUnknownScopeVectorRows: narrowed ? discoveredVectorOnlySourceIds.length : 0,
+      skippedUnknownScopeVectorRows: narrowed ? null : 0,
       artifacts,
       vectorOnlySourceIds,
       jobs,
@@ -7076,6 +7076,7 @@ export function createContextForge(options = {}) {
         }));
         remaining -= vectorOnly.length;
         const jobs = eligibleJobs.slice(0, remaining);
+        const eligibleOnPage = eligibleArtifacts.length + inventory.vectorOnlySourceIds.length + eligibleJobs.length;
         const reindexSuggestedSourceIds = artifacts
           .filter((item) => item.reason === 'content_hash_mismatch')
           .map((item) => item.sourceId);
@@ -7087,6 +7088,9 @@ export function createContextForge(options = {}) {
           jobs,
           total: artifacts.length + vectorOnly.length + jobs.length,
         };
+        const batchCapped = plan.total < eligibleOnPage;
+        const needsRescan = !dryRun && batchCapped;
+        const nextCursor = needsRescan ? options.cursor || null : inventory.nextCursor;
         const base = {
           kind: 'embedding_maintenance_gc',
           dryRun,
@@ -7096,7 +7100,10 @@ export function createContextForge(options = {}) {
           includeInventory,
           batchSize,
           inventory: includeInventory ? inventory : inventorySummary,
-          nextCursor: inventory.nextCursor,
+          nextCursor,
+          needsRescan,
+          batchCapped,
+          eligibleOnPage,
           plan,
           skippedRetiredArtifacts: inventory.artifacts.length - eligibleArtifacts.length,
           skippedRetiredJobs: inventory.jobs.length - eligibleJobs.length,
@@ -7117,6 +7124,9 @@ export function createContextForge(options = {}) {
               : []),
             ...(reindexSuggestedSourceIds.length
               ? ['Content-hash mismatch removals require embedding job processing or an intentional rebuild.']
+              : []),
+            ...(needsRescan
+              ? ['The current scan page exceeded batchSize; repeat with the same input cursor before advancing.']
               : []),
           ],
         };

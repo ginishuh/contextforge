@@ -736,6 +736,9 @@ vector-only row는 scope 근거도 함께 사라지므로 scoped inventory/GC에
 processing job 안전 검사는 항상 전체 status count를 사용한다. `nextCursor`가
 있으면 `--cursor`로 넘겨 index, terminal job, vector-only keyset scan을 이어간다.
 plan이 비어도 `nextCursor`가 null일 때만 전체 순회가 끝난 것이다. GC 응답은
+non-dry 실행에서 `needsRescan=true`를 먼저 처리해야 한다. 이때는 같은 입력
+cursor(첫 page면 cursor 없음)로 반복하고, `needsRescan=false`가 된 뒤에만
+`nextCursor`로 전진한다.
 MCP/remote payload를 제한하려고 nested inventory를 기본 summary-only로 반환하며,
 진단에 전체 scan page가 필요할 때만 `--includeInventory true`를 사용한다.
 

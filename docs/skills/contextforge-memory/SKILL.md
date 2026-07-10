@@ -385,7 +385,9 @@ For derived-data cleanup:
    `retiredRisk.code` is `mass_retired`, require a separately reviewed
    `confirmMassRetired: true` before applying.
 7. Follow `nextCursor` until it is null. A bounded page with an empty plan is
-   not proof that a later index/job/vector page has no eligible rows.
+   not proof that a later index/job/vector page has no eligible rows. For
+   non-dry GC, repeat the same input cursor while `needsRescan` is true and only
+   advance after the current page fits within the applied batch.
 
 Use `prune_raw_events` only according to retention policy; durable memory and checkpoints are preserved separately.
 
