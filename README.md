@@ -93,6 +93,12 @@ Codex / Claude Code / OpenClaw
 - `remote`: first-class VPS or server-backed canonical memory for multiple
   machines.
 
+On POSIX systems, ContextForge creates and repairs the active data directory to
+mode `0700` and the SQLite database plus existing `-wal`/`-shm` sidecars to
+`0600`. `dbInfo.permissions` reports the applied policy. Windows does not use
+POSIX modes; ContextForge reports `windows_acl_inherited`, so run it under a
+dedicated account and restrict the parent directory ACL when the host is shared.
+
 ContextForge starts project-local for zero-friction setup, but remote mode is a
 first-class canonical deployment model for users who work from multiple machines
 or want several agents to share the same source of truth. Set
@@ -564,10 +570,14 @@ settings, select `codex_exec` or OpenAI-compatible distillation, pick preset or
 manual distillation models, tune distillation thresholds, review memory
 candidates, promote candidates manually, correct durable memories, bulk reject
 or deactivate bad memory material, and deactivate wrong memories with
-provenance. Runtime settings saved in the UI override env defaults for new
-calls without restarting the server. API keys are write-only in the UI/API:
-callers can set, replace, clear, and test them, but stored values are never
-returned. Optional admin password login is cookie-session based; bearer-token
+provenance. Non-secret runtime settings saved in the UI override env defaults
+for new calls without restarting the server. Keep provider credentials in
+`CONTEXTFORGE_OPENAI_COMPATIBLE_API_KEY` by default. DB-backed API keys are
+write-only in the UI/API but are plaintext inside SQLite; storing a new value is
+therefore disabled unless the server explicitly sets
+`CONTEXTFORGE_ALLOW_PLAINTEXT_RUNTIME_SECRETS=true`. Existing stored secrets
+continue to work and make `getRuntimeSettings` return a
+`plaintext_runtime_secret_stored` warning until they are cleared. Optional admin password login is cookie-session based; bearer-token
 access remains available for API clients. Admin UI cookies use
 `CONTEXTFORGE_ADMIN_COOKIE_SECURE=auto` by default. Direct HTTP access gets a
 non-`Secure` cookie so local operator sessions work. Forwarded headers are

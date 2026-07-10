@@ -33,6 +33,11 @@ import { searchMemories } from '../src/retrieval/search.js';
 import { REMOTE_METHODS } from '../src/remote/client.js';
 import { startContextForgeServer } from '../src/server.js';
 import { ContextForgeStore, SCHEMA_VERSION } from '../src/storage/sqlite.js';
+import {
+  PRIVATE_DATA_DIRECTORY_MODE,
+  PRIVATE_DATA_FILE_MODE,
+  secureDataDirectoryPermissions,
+} from '../src/storage/permissions.js';
 import { ExternalProviderDisabledInTestError } from '../src/testing/external_provider.js';
 import { CONTEXTFORGE_VERSION } from '../src/version.js';
 
@@ -540,6 +545,51 @@ test('dbInfo initializes a fresh SQLite store', async () => {
   assert.equal(info.connection.summary, 'direct-local local-process');
   assert.equal(info.connection.storageMode, 'project-local');
   assert.match(info.dbPath, /contextforge\.db$/);
+  assert.equal(info.permissions.enforced, process.platform !== 'win32');
+  assert.equal(
+    info.permissions.reason,
+    process.platform === 'win32' ? 'windows_acl_inherited' : 'posix_mode_enforced',
+  );
+});
+
+test('data directory and SQLite files use private POSIX modes despite a loose umask', async (t) => {
+  if (process.platform === 'win32') {
+    t.skip('Windows uses inherited ACLs instead of POSIX mode enforcement.');
+    return;
+  }
+  const dataDir = await makeTempDir();
+  const dbPath = path.join(dataDir, 'contextforge.db');
+  const previousUmask = process.umask(0);
+  try {
+    await fs.chmod(dataDir, 0o777);
+    secureDataDirectoryPermissions(dataDir);
+    await fs.chmod(dbPath, 0o666);
+    await fs.writeFile(`${dbPath}-wal`, 'synthetic', { mode: 0o666 });
+    await fs.writeFile(`${dbPath}-shm`, 'synthetic', { mode: 0o666 });
+    secureDataDirectoryPermissions(dataDir);
+
+    assert.equal((await fs.stat(dataDir)).mode & 0o777, PRIVATE_DATA_DIRECTORY_MODE);
+    for (const filePath of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+      assert.equal((await fs.stat(filePath)).mode & 0o777, PRIVATE_DATA_FILE_MODE);
+    }
+
+    await fs.unlink(`${dbPath}-wal`);
+    await fs.unlink(`${dbPath}-shm`);
+    const store = new ContextForgeStore({ dataDir });
+    assert.equal((await fs.stat(store.dbPath)).mode & 0o777, PRIVATE_DATA_FILE_MODE);
+    store.close();
+  } finally {
+    process.umask(previousUmask);
+  }
+});
+
+test('Windows storage permission status reports inherited ACL semantics', async () => {
+  const dataDir = await makeTempDir();
+  const result = secureDataDirectoryPermissions(dataDir, { platform: 'win32' });
+
+  assert.equal(result.enforced, false);
+  assert.equal(result.reason, 'windows_acl_inherited');
+  assert.equal(result.dbPath, path.join(dataDir, 'contextforge.db'));
 });
 
 test('ContextForgeStore refuses a newer schema before modifying the database', async () => {
@@ -7577,6 +7627,7 @@ test('runtime settings are DB-backed, redacted, and hot-apply to session status'
       CONTEXTFORGE_DATA_DIR: dataDir,
       CONTEXTFORGE_DISTILL_PROVIDER: 'mock',
       CONTEXTFORGE_DISTILL_MIN_INTERVAL_MS: '600000',
+      CONTEXTFORGE_ALLOW_PLAINTEXT_RUNTIME_SECRETS: 'true',
     },
     cwd: process.cwd(),
   });
@@ -7610,6 +7661,7 @@ test('runtime settings are DB-backed, redacted, and hot-apply to session status'
   assert.equal(updated.effective.openAiCompatible.apiKey, undefined);
   assert.equal(updated.stored['openAiCompatible.apiKey'].value, null);
   assert.equal(updated.stored['openAiCompatible.apiKey'].secretPresent, true);
+  assert.ok(updated.warnings.some((warning) => warning.code === 'plaintext_runtime_secret_stored'));
   assert.throws(
     () =>
       app.updateRuntimeSettings({
@@ -7627,6 +7679,7 @@ test('runtime settings are DB-backed, redacted, and hot-apply to session status'
   assert.equal(cleared.effective.openAiCompatible.secretPresent, false);
   assert.equal(cleared.effective.openAiCompatible.apiKey, undefined);
   assert.equal(cleared.stored['openAiCompatible.apiKey'], undefined);
+  assert.deepEqual(cleared.warnings, []);
 
   app.appendRaw({
     scope: 'repo',
@@ -7643,6 +7696,40 @@ test('runtime settings are DB-backed, redacted, and hot-apply to session status'
   assert.equal(status.thresholds.minIntervalMs, 1);
   assert.equal(status.thresholds.charThreshold, 1);
   assert.equal(status.shouldDistill, true);
+});
+
+test('runtime secrets require plaintext opt-in and prefer environment references', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_OPENAI_COMPATIBLE_API_KEY: 'env-only-secret',
+    },
+    cwd: process.cwd(),
+  });
+
+  const settings = app.getRuntimeSettings();
+  assert.equal(settings.effective.openAiCompatible.secretPresent, true);
+  assert.deepEqual(settings.stored, {});
+  assert.deepEqual(settings.warnings, []);
+
+  assert.throws(
+    () =>
+      app.updateRuntimeSettings({
+        secrets: { openAiCompatibleApiKey: 'must-not-be-stored' },
+      }),
+    (error) => {
+      assert.equal(error.code, 'CONTEXTFORGE_PLAINTEXT_RUNTIME_SECRET_OPT_IN_REQUIRED');
+      assert.match(error.message, /CONTEXTFORGE_OPENAI_COMPATIBLE_API_KEY/);
+      assert.match(error.message, /CONTEXTFORGE_ALLOW_PLAINTEXT_RUNTIME_SECRETS=true/);
+      return true;
+    },
+  );
+
+  const db = new Database(path.join(dataDir, 'contextforge.db'));
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM runtime_settings WHERE secret = 1').get().count, 0);
+  db.close();
+  app.close();
 });
 
 test('codex_exec prompt preserves previous structured checkpoint handoff', async () => {
@@ -7746,6 +7833,7 @@ test('openai_compatible provider distills through a fake DeepSeek-style chat com
     env: {
       CONTEXTFORGE_DATA_DIR: dataDir,
       CONTEXTFORGE_DISTILL_PROVIDER: 'mock',
+      CONTEXTFORGE_ALLOW_PLAINTEXT_RUNTIME_SECRETS: 'true',
     },
     cwd: process.cwd(),
     fetchImpl: async (url, request) => {
@@ -7843,6 +7931,7 @@ test('openai_compatible json_schema mode sends a strict-safe checkpoint schema',
   const app = createContextForge({
     env: {
       CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_ALLOW_PLAINTEXT_RUNTIME_SECRETS: 'true',
     },
     cwd: process.cwd(),
     fetchImpl: async (url, request) => {
@@ -7971,6 +8060,7 @@ test('openai_compatible provider repairs invalid JSON output and records retry m
   const app = createContextForge({
     env: {
       CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_ALLOW_PLAINTEXT_RUNTIME_SECRETS: 'true',
     },
     cwd: process.cwd(),
     fetchImpl: async (url, request) => {
@@ -8040,6 +8130,7 @@ test('openai_compatible provider preserves raw evidence when provider output is 
   const app = createContextForge({
     env: {
       CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_ALLOW_PLAINTEXT_RUNTIME_SECRETS: 'true',
     },
     cwd: process.cwd(),
     fetchImpl: async () => ({

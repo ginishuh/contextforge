@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Hardened local SQLite storage by enforcing `0700` on POSIX data directories
+  and `0600` on database/WAL/SHM files, reporting the active permission policy
+  in `dbInfo`, and documenting inherited ACL semantics on Windows. Plaintext
+  runtime-secret writes are now disabled by default; environment credentials
+  are recommended, while explicit DB storage requires an opt-in and returns a
+  persistent warning.
 - Unified MCP and CLI runtime version reporting with the canonical
   `package.json` version, including `contextforge --version` support and
   transport-level contract tests.
