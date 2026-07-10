@@ -412,6 +412,17 @@ distill은 raw evidence를 checkpoint와 memory candidate로 압축한다. audit
 `codex_exec`는 Codex CLI를 실행해 JSON-only checkpoint output을 받고,
 로컬 schema validation을 통과한 결과만 저장한다.
 
+Provider 실행은 provider 이름별로 프로세스 전역 concurrency cap을 공유한다.
+기본값은 provider당 `2`이며 `CONTEXTFORGE_PROVIDER_CONCURRENCY_LIMIT`로 조정할
+수 있다. 같은 session의 동시 distill 재시도와 같은 closeout source의 candidate
+audit 재시도는 하나의 실행·write로 합쳐진다. 이 guard는 단일 Node.js process
+범위이며 restart를 넘는 durable job은 별도 async job 모델의 책임이다.
+
+Remote long-running call은 `CONTEXTFORGE_REMOTE_TIMEOUT_MS`를 서버에 전달한다.
+설정된 provider timeout이 client timeout보다 짧지 않으면 provider를 실행하기
+전에 명확한 timeout contract 오류 또는 candidate-audit 상태를 반환한다. Provider timeout 뒤에는 child process가
+`SIGTERM`/`SIGKILL` 후 실제로 close될 때까지 concurrency slot을 해제하지 않는다.
+
 예시:
 
 ```bash

@@ -92,6 +92,15 @@ const UNSCOPED_REMOTE_METHODS = new Set([
 
 const OPTIONALLY_SCOPED_REMOTE_METHODS = new Set(['listDueDistillSessions', 'processDueDistills']);
 
+const LONG_RUNNING_PROVIDER_METHODS = new Set([
+  'agentCloseout',
+  'auditMemoryCandidates',
+  'autoPromoteMemoryCandidates',
+  'distillCheckpoint',
+  'processConsolidations',
+  'processDueDistills',
+]);
+
 function remoteUrl(baseUrl, method) {
   const url = new URL(baseUrl);
   url.pathname = `${url.pathname.replace(/\/$/, '')}/v0/${method}`;
@@ -138,10 +147,13 @@ export class RemoteContextForgeClient {
     }
 
     try {
+      const requestOptions = LONG_RUNNING_PROVIDER_METHODS.has(method)
+        ? { ...(options || {}), _clientTimeoutMs: this.config.remote.timeoutMs }
+        : options || {};
       const response = await this.fetchImpl(remoteUrl(this.config.remote.url, method), {
         method: 'POST',
         headers,
-        body: JSON.stringify(options || {}),
+        body: JSON.stringify(requestOptions),
         signal: controller.signal,
       });
       const text = await response.text();
