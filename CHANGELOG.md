@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added a canonical operation registry that generates remote methods,
+  capability/scope authorization metadata, MCP dispatch, and MCP read-only
+  semantics. Extracted bounded pagination and SQLite compatibility migration
+  manifests into application/storage modules, added domain contract tests, and
+  introduced a CI source-lint/non-growth gate for the remaining large files.
 - Added deny-by-default capability- and scope-limited API token policies shared
   by HTTP JSON and HTTP MCP. Policies support environment-referenced or hashed
   secrets, explicit `read`/`write`/`review`/`operator` capabilities, exact or

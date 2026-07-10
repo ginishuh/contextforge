@@ -255,7 +255,10 @@ npm install
 Run the test suite:
 
 ```bash
+npm run lint
 npm test
+# or run both
+npm run verify
 ```
 
 For bounded indexed-search behavior, diagnostics, and the 100-to-100,000-memory
