@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { createContextForge } from './core.js';
+import { CONTEXTFORGE_VERSION } from './version.js';
 
 const scopeSchema = z.enum(['shared', 'repo', 'local']);
 const workspaceModeSchema = z.enum(['off', 'auto', 'strict']);
@@ -64,7 +65,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
   const server = new McpServer(
     {
       name: 'contextforge',
-      version: '0.0.0',
+      version: CONTEXTFORGE_VERSION,
     },
     {
       instructions: MCP_INSTRUCTIONS,

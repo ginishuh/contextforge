@@ -22,6 +22,7 @@ import {
 } from './ingest/agents.js';
 import { runRetrievalEval } from './eval/retrieval.js';
 import { startContextForgeServer } from './server.js';
+import { CONTEXTFORGE_VERSION } from './version.js';
 
 function parseArgs(argv) {
   const command = argv[2];
@@ -383,9 +384,16 @@ async function main() {
         : ingestAgentRoutedSessions(app, coreOptions),
   };
 
+  if (command === '--version' || command === 'version') {
+    console.log(CONTEXTFORGE_VERSION);
+    return;
+  }
+
   if (!command || command === 'help' || command === '--help') {
     printJson({
-      commands: [...Object.keys(commands), 'serve'],
+      name: 'contextforge',
+      version: CONTEXTFORGE_VERSION,
+      commands: [...Object.keys(commands), 'serve', 'version'],
     });
     return;
   }

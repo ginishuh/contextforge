@@ -33,6 +33,7 @@ import { REMOTE_METHODS } from '../src/remote/client.js';
 import { startContextForgeServer } from '../src/server.js';
 import { ContextForgeStore, SCHEMA_VERSION } from '../src/storage/sqlite.js';
 import { ExternalProviderDisabledInTestError } from '../src/testing/external_provider.js';
+import { CONTEXTFORGE_VERSION } from '../src/version.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -118,6 +119,30 @@ function collectStrictObjectSchemaViolations(value, pathParts = []) {
   }
   return violations;
 }
+
+test('package, lockfile, CLI, and release docs share the canonical version', async () => {
+  const packageManifest = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  const packageLock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
+  const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
+  const koreanReadme = await fs.readFile(new URL('../README.ko.md', import.meta.url), 'utf8');
+
+  assert.equal(CONTEXTFORGE_VERSION, packageManifest.version);
+  assert.equal(packageLock.version, packageManifest.version);
+  assert.equal(packageLock.packages[''].version, packageManifest.version);
+  assert.match(readme, new RegExp(`Current ${packageManifest.version.replaceAll('.', '\\.')} builds`));
+  assert.match(readme, new RegExp(`## What's New In ${packageManifest.version.replaceAll('.', '\\.')}`));
+  assert.ok(koreanReadme.includes('현재 package version: `' + packageManifest.version + '`'));
+
+  for (const command of ['--version', 'version']) {
+    const result = await execFileAsync('node', ['src/cli.js', command], { cwd: process.cwd() });
+    assert.equal(result.stdout.trim(), packageManifest.version);
+  }
+  const help = await execFileAsync('node', ['src/cli.js', '--help'], { cwd: process.cwd() });
+  const helpPayload = JSON.parse(help.stdout);
+  assert.equal(helpPayload.name, 'contextforge');
+  assert.equal(helpPayload.version, packageManifest.version);
+  assert.ok(helpPayload.commands.includes('version'));
+});
 
 test('interruptible ingest sleep wakes when stopped', async () => {
   const sleeper = createInterruptibleSleep();
@@ -12572,6 +12597,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
 
   try {
     await client.connect(transport);
+    assert.deepEqual(client.getServerVersion(), { name: 'contextforge', version: CONTEXTFORGE_VERSION });
     const toolList = await client.listTools();
     const toolNames = toolList.tools.map((tool) => tool.name).sort();
     assert.deepEqual(toolNames, [
@@ -12934,6 +12960,7 @@ test('MCP streamable HTTP endpoint exposes core tools with bearer auth', async (
 
   try {
     await client.connect(transport);
+    assert.deepEqual(client.getServerVersion(), { name: 'contextforge', version: CONTEXTFORGE_VERSION });
     const toolList = await client.listTools();
     assert.ok(toolList.tools.some((tool) => tool.name === 'remember'));
 

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Unified MCP and CLI runtime version reporting with the canonical
+  `package.json` version, including `contextforge --version` support and
+  transport-level contract tests.
 - Restored Unicode lexical retrieval for Korean and mixed-language queries,
   including embeddings-off search across memory keys, content, and tags while
   preserving path, API, and error-identifier token behavior.

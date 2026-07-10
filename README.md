@@ -260,6 +260,7 @@ CONTEXTFORGE_LIVE_TESTS=true npm run test:live
 Inspect or initialize the local store:
 
 ```bash
+node src/cli.js --version
 node src/cli.js dbInfo
 ```
 
