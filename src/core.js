@@ -3445,6 +3445,8 @@ export function createContextForge(options = {}) {
       ...scope,
       query: options.query,
       limit: options.limit,
+      candidateLimit: options.candidateLimit,
+      legacyFullScan: options.legacyFullScan,
       searchScopes: options.searchScopes,
       sharedScopeKey: options.sharedScopeKey || config.defaultSharedScopeKey,
       queryEmbedding,

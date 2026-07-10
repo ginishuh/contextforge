@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Removed the default scope-wide durable-memory lexical scan from retrieval.
+  Search now scores bounded FTS/vector candidates with hard result/candidate
+  caps, preserves Unicode/path/API/error ranking, exposes per-result latency and
+  scanned/candidate source counts, and keeps the former substring full scan as
+  an explicit diagnostic option. Added reproducible 100/1k/10k/100k and
+  optional vector/hybrid benchmarks.
 - Added bounded MCP tool profiles (`agent-core`, `review`, `operator`,
   `workspace-admin`, and `all`) with a 24-tool default, exact allowlist support,
   stdio/HTTP parity, startup validation, and a surface-report command that

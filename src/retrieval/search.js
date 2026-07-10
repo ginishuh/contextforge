@@ -130,122 +130,225 @@ function vectorRetrieval(match) {
   };
 }
 
-export function searchMemories(store, { scopeType, scopeKey, query, limit = 10, searchScopes, sharedScopeKey, queryEmbedding }) {
+export const RETRIEVAL_LIMITS = Object.freeze({
+  defaultResultLimit: 10,
+  maxResultLimit: 100,
+  minCandidateLimit: 50,
+  defaultCandidateLimit: 200,
+  maxCandidateLimit: 500,
+});
+
+function boundedPositiveInteger(value, fallback, max) {
+  const parsed = Number(value == null ? fallback : value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error('retrieval limits must be positive integers.');
+  }
+  return Math.min(parsed, max);
+}
+
+function elapsedMilliseconds(startedAt) {
+  return Number((process.hrtime.bigint() - startedAt) / 1000n) / 1000;
+}
+
+function safeVectorSearch(source, search, diagnostics) {
+  try {
+    return search();
+  } catch (error) {
+    diagnostics.degradedSources.push({ source, message: String(error?.message || error) });
+    return [];
+  }
+}
+
+export function searchMemories(
+  store,
+  {
+    scopeType,
+    scopeKey,
+    query,
+    limit = RETRIEVAL_LIMITS.defaultResultLimit,
+    candidateLimit = RETRIEVAL_LIMITS.defaultCandidateLimit,
+    legacyFullScan = false,
+    searchScopes,
+    sharedScopeKey,
+    queryEmbedding,
+  },
+) {
+  const startedAt = process.hrtime.bigint();
   const queryTokens = unique(tokenize(query));
   if (queryTokens.length === 0 && !queryEmbedding) {
     return [];
   }
 
+  const requestedLimit = Number(limit);
+  const resultLimit = boundedPositiveInteger(
+    limit,
+    RETRIEVAL_LIMITS.defaultResultLimit,
+    RETRIEVAL_LIMITS.maxResultLimit,
+  );
+  const maxCandidateRows = boundedPositiveInteger(
+    candidateLimit,
+    RETRIEVAL_LIMITS.defaultCandidateLimit,
+    RETRIEVAL_LIMITS.maxCandidateLimit,
+  );
+  const candidateWindow = Math.min(Math.max(resultLimit * 4, RETRIEVAL_LIMITS.minCandidateLimit), maxCandidateRows);
   const scopes = normalizeSearchScopes({ scopeType, scopeKey, searchScopes, sharedScopeKey });
   const ftsQuery = toFtsQuery(queryTokens);
+  const diagnostics = {
+    elapsedMs: 0,
+    requestedLimit,
+    resultLimit,
+    candidateLimit: candidateWindow,
+    scopeCount: scopes.length,
+    scannedRows: 0,
+    candidateRows: 0,
+    returnedRows: 0,
+    legacyFullScan: Boolean(legacyFullScan),
+    degradedSources: [],
+    sources: {
+      fts: 0,
+      vectorMemory: 0,
+      vectorCheckpoint: 0,
+      vectorCandidate: 0,
+      legacyLexical: 0,
+    },
+  };
+  const allResults = [];
 
-  return scopes
-    .flatMap((source) => {
-      const ftsMatches = store.searchMemoryIndex && ftsQuery
-        ? store.searchMemoryIndex({
-            scopeType: source.scopeType,
-            scopeKey: source.scopeKey,
-            ftsQuery,
-            limit: Math.max(limit * 4, 50),
-          })
-        : [];
-      const vectorMatches = store.searchMemoryVectorIndex && queryEmbedding
-        ? store.searchMemoryVectorIndex({
-            scopeType: source.scopeType,
-            scopeKey: source.scopeKey,
-            embedding: queryEmbedding,
-            limit: Math.max(limit * 4, 50),
-          })
-        : [];
-      const checkpointVectorMatches = store.searchCheckpointVectorIndex && queryEmbedding
-        ? store.searchCheckpointVectorIndex({
-            scopeType: source.scopeType,
-            scopeKey: source.scopeKey,
-            embedding: queryEmbedding,
-            limit: Math.max(limit * 4, 50),
-          })
-        : [];
-      const candidateVectorMatches = store.searchMemoryCandidateVectorIndex && queryEmbedding
-        ? store.searchMemoryCandidateVectorIndex({
-            scopeType: source.scopeType,
-            scopeKey: source.scopeKey,
-            embedding: queryEmbedding,
-            limit: Math.max(limit * 4, 50),
-          })
-        : [];
-      const ftsById = new Map(ftsMatches.map((match) => [match.memory.id, match]));
-      const vectorById = new Map(vectorMatches.map((match) => [match.memory.id, match]));
-      const ftsIds = new Set(ftsById.keys());
-      const vectorIds = new Set(vectorById.keys());
-      const lexicalCandidates =
-        queryTokens.length > 0 && store.listMemories
-          ? store.listMemories(source)
-          : [];
-      const candidateMemories = [
-        ...ftsMatches.map((match) => match.memory),
-        ...vectorMatches.map((match) => match.memory),
-        ...lexicalCandidates,
-      ];
-      const memoriesById = new Map(candidateMemories.map((memory) => [memory.id, memory]));
+  for (const source of scopes) {
+    const ftsMatches = store.searchMemoryIndex && ftsQuery
+      ? store.searchMemoryIndex({
+          scopeType: source.scopeType,
+          scopeKey: source.scopeKey,
+          ftsQuery,
+          limit: candidateWindow,
+        })
+      : [];
+    const vectorMatches = store.searchMemoryVectorIndex && queryEmbedding
+      ? safeVectorSearch(
+          'vectorMemory',
+          () =>
+            store.searchMemoryVectorIndex({
+              scopeType: source.scopeType,
+              scopeKey: source.scopeKey,
+              embedding: queryEmbedding,
+              limit: candidateWindow,
+            }),
+          diagnostics,
+        )
+      : [];
+    const checkpointVectorMatches = store.searchCheckpointVectorIndex && queryEmbedding
+      ? safeVectorSearch(
+          'vectorCheckpoint',
+          () =>
+            store.searchCheckpointVectorIndex({
+              scopeType: source.scopeType,
+              scopeKey: source.scopeKey,
+              embedding: queryEmbedding,
+              limit: candidateWindow,
+            }),
+          diagnostics,
+        )
+      : [];
+    const candidateVectorMatches = store.searchMemoryCandidateVectorIndex && queryEmbedding
+      ? safeVectorSearch(
+          'vectorCandidate',
+          () =>
+            store.searchMemoryCandidateVectorIndex({
+              scopeType: source.scopeType,
+              scopeKey: source.scopeKey,
+              embedding: queryEmbedding,
+              limit: candidateWindow,
+            }),
+          diagnostics,
+        )
+      : [];
+    const lexicalCandidates =
+      legacyFullScan && queryTokens.length > 0 && store.listMemories ? store.listMemories(source) : [];
 
-      const memoryResults = [...memoriesById.values()].map((memory) => {
-        const match = scoreMemory(memory, queryTokens);
-        const ftsMatch = ftsById.get(memory.id);
-        const vectorMatch = vectorById.get(memory.id);
-        const score = match.score * 100 + ftsScore(ftsMatch?.ftsRank) + vectorScore(vectorMatch?.distance);
-        return {
-          type: 'memory',
-          score,
-          why: match.matched,
-          retrieval: {
-            method:
-              ftsIds.has(memory.id) && vectorIds.has(memory.id)
-                ? 'hybrid:fts5+vector+lexical'
-                : ftsIds.has(memory.id)
-                  ? 'fts5+lexical'
-                  : vectorIds.has(memory.id)
-                    ? 'vector'
-                    : 'lexical',
-            ftsRank: ftsMatch?.ftsRank ?? null,
-            vectorDistance: vectorMatch?.distance ?? null,
-            vectorModel: vectorMatch?.model ?? null,
-            vectorDimensions: vectorMatch?.dimensions ?? null,
-          },
-          source: {
-            scopeType: source.scopeType,
-            scopeKey: source.scopeKey,
-            role: source.role,
-          },
-          memory,
-        };
-      });
-      const checkpointResults = checkpointVectorMatches.map((match) => ({
-        type: 'checkpoint',
-        score: vectorScore(match.distance),
-        why: [],
-        retrieval: vectorRetrieval(match),
+    diagnostics.sources.fts += ftsMatches.length;
+    diagnostics.sources.vectorMemory += vectorMatches.length;
+    diagnostics.sources.vectorCheckpoint += checkpointVectorMatches.length;
+    diagnostics.sources.vectorCandidate += candidateVectorMatches.length;
+    diagnostics.sources.legacyLexical += lexicalCandidates.length;
+    diagnostics.scannedRows +=
+      ftsMatches.length +
+      vectorMatches.length +
+      checkpointVectorMatches.length +
+      candidateVectorMatches.length +
+      lexicalCandidates.length;
+
+    const ftsById = new Map(ftsMatches.map((match) => [match.memory.id, match]));
+    const vectorById = new Map(vectorMatches.map((match) => [match.memory.id, match]));
+    const ftsIds = new Set(ftsById.keys());
+    const vectorIds = new Set(vectorById.keys());
+    const candidateMemories = [
+      ...ftsMatches.map((match) => match.memory),
+      ...vectorMatches.map((match) => match.memory),
+      ...lexicalCandidates,
+    ];
+    const memoriesById = new Map(candidateMemories.map((memory) => [memory.id, memory]));
+
+    const memoryResults = [...memoriesById.values()].map((memory) => {
+      const match = scoreMemory(memory, queryTokens);
+      const ftsMatch = ftsById.get(memory.id);
+      const vectorMatch = vectorById.get(memory.id);
+      const score = match.score * 100 + ftsScore(ftsMatch?.ftsRank) + vectorScore(vectorMatch?.distance);
+      return {
+        type: 'memory',
+        score,
+        why: match.matched,
+        retrieval: {
+          method:
+            ftsIds.has(memory.id) && vectorIds.has(memory.id)
+              ? 'hybrid:fts5+vector+lexical'
+              : ftsIds.has(memory.id)
+                ? 'fts5+lexical'
+                : vectorIds.has(memory.id)
+                  ? 'vector'
+                  : 'lexical',
+          ftsRank: ftsMatch?.ftsRank ?? null,
+          vectorDistance: vectorMatch?.distance ?? null,
+          vectorModel: vectorMatch?.model ?? null,
+          vectorDimensions: vectorMatch?.dimensions ?? null,
+        },
         source: {
           scopeType: source.scopeType,
           scopeKey: source.scopeKey,
           role: source.role,
         },
-        checkpoint: match.checkpoint,
-      }));
-      const candidateResults = candidateVectorMatches.map((match) => ({
-        type: 'memory_candidate',
-        score: vectorScore(match.distance),
-        why: [],
-        retrieval: vectorRetrieval(match),
-        source: {
-          scopeType: source.scopeType,
-          scopeKey: source.scopeKey,
-          role: source.role,
-        },
-        candidate: match.candidate,
-      }));
+        memory,
+      };
+    });
+    const checkpointResults = checkpointVectorMatches.map((match) => ({
+      type: 'checkpoint',
+      score: vectorScore(match.distance),
+      why: [],
+      retrieval: vectorRetrieval(match),
+      source: {
+        scopeType: source.scopeType,
+        scopeKey: source.scopeKey,
+        role: source.role,
+      },
+      checkpoint: match.checkpoint,
+    }));
+    const candidateResults = candidateVectorMatches.map((match) => ({
+      type: 'memory_candidate',
+      score: vectorScore(match.distance),
+      why: [],
+      retrieval: vectorRetrieval(match),
+      source: {
+        scopeType: source.scopeType,
+        scopeKey: source.scopeKey,
+        role: source.role,
+      },
+      candidate: match.candidate,
+    }));
 
-      return [...memoryResults, ...checkpointResults, ...candidateResults];
-    })
+    diagnostics.candidateRows += memoriesById.size + checkpointResults.length + candidateResults.length;
+    allResults.push(...memoryResults, ...checkpointResults, ...candidateResults);
+  }
+
+  const results = allResults
     .filter((result) => result.score > 0)
     .sort(
       (a, b) =>
@@ -254,5 +357,11 @@ export function searchMemories(store, { scopeType, scopeKey, query, limit = 10, 
         resultImportance(b) - resultImportance(a) ||
         resultTimestamp(b).localeCompare(resultTimestamp(a)),
     )
-    .slice(0, limit);
+    .slice(0, resultLimit);
+  diagnostics.elapsedMs = Number(elapsedMilliseconds(startedAt).toFixed(3));
+  diagnostics.returnedRows = results.length;
+  for (const result of results) {
+    result.retrieval.diagnostics = diagnostics;
+  }
+  return results;
 }

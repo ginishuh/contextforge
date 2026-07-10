@@ -256,6 +256,10 @@ Run the test suite:
 npm test
 ```
 
+For bounded indexed-search behavior, diagnostics, and the 100-to-100,000-memory
+synthetic benchmark, see
+[Retrieval Performance](docs/retrieval-performance.md).
+
 Normal tests run in fail-closed test mode: real Codex/Python provider runners
 and default external provider fetches are rejected unless a fake is injected.
 JUnit and JSON duration artifacts are written to `artifacts/test/`; the default
