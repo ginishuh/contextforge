@@ -21,6 +21,7 @@ import {
   watchAgentRoutedSessions,
 } from './ingest/agents.js';
 import { runRetrievalEval } from './eval/retrieval.js';
+import { runQualityEval } from './eval/quality.js';
 import { startContextForgeServer } from './server.js';
 import { backupSqliteDatabase, restoreSqliteDatabase, verifySqliteBackup } from './storage/backup.js';
 import { CONTEXTFORGE_VERSION } from './version.js';
@@ -206,6 +207,7 @@ function toCoreOptions(options) {
     ttlDays: options.ttlDays == null ? undefined : Number(options.ttlDays),
     file: options.file,
     fixture: options.fixture,
+    baseline: options.baseline,
     repoRegistry: options.repoRegistry || options.registry || options.repoRegistryFile,
     agent: options.agent,
     adapter: options.adapter,
@@ -381,6 +383,7 @@ async function main() {
     rebuildEmbeddings: (app, coreOptions) => app.rebuildEmbeddings(coreOptions),
     processEmbeddingJobs: (app, coreOptions) => app.processEmbeddingJobs(coreOptions),
     evalRetrieval: (_app, coreOptions) => runRetrievalEval(coreOptions),
+    evalQuality: (_app, coreOptions) => runQualityEval(coreOptions),
     listEmbeddingJobs: (app, coreOptions, rawOptions) =>
       app.listEmbeddingJobs(preserveCoreLimitDefault(coreOptions, rawOptions)),
     listScopeKeys: (app, coreOptions) => app.listScopeKeys(coreOptions),
@@ -523,6 +526,9 @@ async function main() {
   }
   printJson(result);
   if (result?.kind === 'retrieval_eval' && Number(result.failed || 0) > 0) {
+    process.exitCode = 1;
+  }
+  if (result?.kind === 'memory_quality_eval' && result.passed !== true) {
     process.exitCode = 1;
   }
   if (result?.kind === 'contextforge_backup_verification' && result.ok !== true) {

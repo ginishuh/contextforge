@@ -87,6 +87,30 @@ jobs:
 
       - run: npm run lint
 
+  quality-eval:
+    name: Offline quality eval
+    needs: changes
+    if: (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && needs.changes.outputs.run-tests == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run eval:quality
+
+      - name: Upload quality eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-eval-report
+          path: artifacts/eval/quality-report.json
+          if-no-files-found: error
+
   test:
     name: Test on Node ${{ matrix.node-version }}
     needs: changes
@@ -142,6 +166,7 @@ jobs:
       - changes
       - workflow-lint
       - source-lint
+      - quality-eval
       - test
       - dependency-audit
     if: (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && always()
@@ -157,6 +182,10 @@ jobs:
           fi
           if [[ "${{ needs.changes.outputs.run-tests }}" == "true" && "${{ needs.source-lint.result }}" != "success" ]]; then
             echo "source-lint failed"
+            exit 1
+          fi
+          if [[ "${{ needs.changes.outputs.run-tests }}" == "true" && "${{ needs.quality-eval.result }}" != "success" ]]; then
+            echo "offline quality eval failed"
             exit 1
           fi
           if [[ "${{ needs.changes.outputs.run-tests }}" == "true" && "${{ needs.test.result }}" != "success" ]]; then

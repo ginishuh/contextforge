@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added deterministic offline retrieval/distillation/candidate quality evals
+  with Recall@k, MRR, nDCG, multilingual and scope-leakage slices, exact-string
+  preservation, source-linked hallucination checks, truncation retrieval hooks,
+  candidate precision/classification, reviewed baselines, regression thresholds,
+  explainable failure details, and a CI report artifact.
 - Added a canonical operation registry that generates remote methods,
   capability/scope authorization metadata, MCP dispatch, and MCP read-only
   semantics. Extracted bounded pagination and SQLite compatibility migration

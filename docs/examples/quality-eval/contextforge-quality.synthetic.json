@@ -1,0 +1,193 @@
+{
+  "name": "contextforge-offline-quality",
+  "retrievalFixtures": [
+    "../workspace-eval/wastelite.synthetic.json",
+    "multilingual-retrieval.synthetic.json"
+  ],
+  "distillationCases": [
+    {
+      "id": "operational-handoff-preservation",
+      "rawEvidence": [
+        {
+          "id": "raw-1",
+          "content": "2026-07-10 decision: keep SQLite at /srv/contextforge/contextforge.db because restore is local-first. Run node src/cli.js backupDatabase --file /srv/contextforge/backup.db every 6 hours. If free disk is below 104857600 bytes, stop pruning and report SQLITE_BUSY. Next action: verify /readyz before restart."
+        }
+      ],
+      "expectedFacts": {
+        "names": ["SQLite"],
+        "numbers": ["2026-07-10", "6 hours", "104857600"],
+        "paths": ["/srv/contextforge/contextforge.db", "/srv/contextforge/backup.db", "/readyz"],
+        "commands": ["node src/cli.js backupDatabase --file /srv/contextforge/backup.db"],
+        "errors": ["SQLITE_BUSY"],
+        "decisions": ["keep SQLite"],
+        "rationale": ["restore is local-first"],
+        "conditions": ["free disk is below 104857600 bytes"],
+        "nextActions": ["verify /readyz before restart"]
+      },
+      "requiredLiveStateWarnings": ["verify current disk space", "verify /readyz"],
+      "requiredRetrievalHooks": ["/srv/contextforge/contextforge.db", "SQLITE_BUSY"],
+      "forbiddenClaims": ["PostgreSQL", "automatic cloud upload"],
+      "output": {
+        "summaryShort": "Keep SQLite and verify backup/readiness before restart.",
+        "summaryText": "2026-07-10 decision: keep SQLite at /srv/contextforge/contextforge.db because restore is local-first. Run node src/cli.js backupDatabase --file /srv/contextforge/backup.db every 6 hours. If free disk is below 104857600 bytes, stop pruning and report SQLITE_BUSY. Next action: verify /readyz before restart.",
+        "liveStateWarnings": ["verify current disk space before pruning", "verify /readyz before restart"],
+        "retrievalHooks": ["/srv/contextforge/contextforge.db", "SQLITE_BUSY"],
+        "claims": [
+          {
+            "text": "Backup runs every 6 hours.",
+            "sources": ["raw-1"],
+            "requiredEvidenceTerms": ["every 6 hours", "backupDatabase"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "truncated-window-retrieval-hook",
+      "inputTruncated": true,
+      "rawEvidence": [
+        {
+          "id": "raw-tail-42",
+          "content": "Input window truncated. Resume exact investigation from raw-tail-42 and search for CONTEXTFORGE_SCHEMA_TOO_NEW before changing schema metadata."
+        }
+      ],
+      "expectedFacts": {
+        "errors": ["CONTEXTFORGE_SCHEMA_TOO_NEW"],
+        "conditions": ["Input window truncated"],
+        "nextActions": ["Resume exact investigation from raw-tail-42"]
+      },
+      "requiredLiveStateWarnings": ["verify schema version"],
+      "requiredRetrievalHooks": ["raw-tail-42", "CONTEXTFORGE_SCHEMA_TOO_NEW"],
+      "forbiddenClaims": ["downgrade is safe"],
+      "output": {
+        "summaryShort": "Truncated window requires raw evidence lookup.",
+        "summaryText": "Input window truncated. Resume exact investigation from raw-tail-42 and search for CONTEXTFORGE_SCHEMA_TOO_NEW.",
+        "liveStateWarnings": ["verify schema version before changing metadata"],
+        "retrievalHooks": ["raw-tail-42", "CONTEXTFORGE_SCHEMA_TOO_NEW"],
+        "claims": [
+          {
+            "text": "The input window was truncated.",
+            "sources": ["raw-tail-42"],
+            "requiredEvidenceTerms": ["window truncated", "raw-tail-42"]
+          }
+        ]
+      }
+    }
+  ],
+  "candidateCases": [
+    {
+      "id": "stable-runbook",
+      "type": "runbook",
+      "expectedAction": "promote",
+      "expectedClassification": "new",
+      "candidate": {
+        "key": "backup-verification-runbook",
+        "content": "Verify every backup with the restore check before rotating the previous backup.",
+        "reason": "Reusable backup and restore runbook.",
+        "category": "runbook",
+        "confidence": 0.95,
+        "stability": 0.95,
+        "promotionRecommendation": "promote"
+      }
+    },
+    {
+      "id": "one-off-local-detail",
+      "type": "note",
+      "expectedAction": "reject",
+      "expectedClassification": "too_specific",
+      "candidate": {
+        "key": "pr-999-ci-status",
+        "content": "PR #999 CI passed on the temporary local runner.",
+        "reason": "One-off PR status belongs only in checkpoint context.",
+        "category": "temporary",
+        "candidateType": "temporary",
+        "confidence": 0.95,
+        "stability": 0.95,
+        "promotionRecommendation": "promote"
+      }
+    },
+    {
+      "id": "repeated-preference",
+      "type": "preference",
+      "expectedAction": "promote",
+      "expectedRecurring": true,
+      "evidenceCount": 3,
+      "candidate": {
+        "key": "review-language-preference",
+        "content": "Write engineering review summaries in Korean.",
+        "reason": "The same stable preference appeared in three independent synthetic events.",
+        "category": "preference",
+        "confidence": 0.95,
+        "stability": 0.95,
+        "promotionRecommendation": "promote"
+      }
+    },
+    {
+      "id": "duplicate-memory",
+      "type": "decision",
+      "expectedAction": "merge",
+      "expectedClassification": "duplicate",
+      "existingMemories": [
+        {
+          "key": "raw-retention-rule",
+          "content": "Distill failure must not erase raw evidence.",
+          "category": "decision",
+          "importance": 9
+        }
+      ],
+      "candidate": {
+        "key": "duplicate-raw-retention-rule",
+        "content": "Distill failure must not erase raw evidence.",
+        "reason": "Exact duplicate of the durable retention rule.",
+        "category": "decision",
+        "confidence": 0.95,
+        "stability": 0.95,
+        "promotionRecommendation": "promote"
+      }
+    },
+    {
+      "id": "conflicting-memory",
+      "type": "correction",
+      "expectedAction": "update",
+      "expectedClassification": "conflict",
+      "existingMemories": [
+        {
+          "key": "provider-timeout",
+          "content": "The provider timeout is 30 seconds.",
+          "category": "api-contract",
+          "importance": 8
+        }
+      ],
+      "candidate": {
+        "key": "provider-timeout",
+        "content": "The provider timeout is 45 seconds.",
+        "reason": "This conflicts with the existing timeout contract and requires a reviewed update.",
+        "category": "api-contract",
+        "suggestedAction": "conflict",
+        "confidence": 0.9,
+        "stability": 0.9,
+        "promotionRecommendation": "promote"
+      }
+    }
+  ],
+  "trustOrderingCases": [
+    {
+      "id": "recent-handoff-before-durable-and-candidate",
+      "sources": [
+        { "id": "memory", "type": "durable_memory" },
+        { "id": "checkpoint", "type": "recent_checkpoint", "ageHours": 1 },
+        { "id": "candidate", "type": "memory_candidate" }
+      ],
+      "expectedBefore": [["checkpoint", "memory"], ["memory", "candidate"]]
+    },
+    {
+      "id": "stale-checkpoint-does-not-beat-durable",
+      "maxCheckpointAgeHours": 24,
+      "sources": [
+        { "id": "memory", "type": "durable_memory" },
+        { "id": "stale_checkpoint", "type": "recent_checkpoint", "ageHours": 168 },
+        { "id": "candidate", "type": "memory_candidate" }
+      ],
+      "expectedBefore": [["memory", "stale_checkpoint"], ["stale_checkpoint", "candidate"]]
+    }
+  ]
+}

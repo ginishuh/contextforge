@@ -16,6 +16,31 @@ function normalizedText(value) {
   return String(value || '').toLowerCase();
 }
 
+function reciprocalRank(resultKeys, relevantKeys) {
+  const index = resultKeys.findIndex((key) => relevantKeys.includes(key));
+  return index === -1 ? 0 : 1 / (index + 1);
+}
+
+function discountedCumulativeGain(resultKeys, relevance) {
+  return resultKeys.reduce((total, key, index) => {
+    const grade = Number(relevance[key] || 0);
+    return total + (2 ** grade - 1) / Math.log2(index + 2);
+  }, 0);
+}
+
+function normalizedDiscountedCumulativeGain(resultKeys, relevance, topN) {
+  const idealGrades = Object.values(relevance)
+    .map(Number)
+    .sort((left, right) => right - left)
+    .slice(0, topN);
+  const ideal = idealGrades.reduce((total, grade, index) => total + (2 ** grade - 1) / Math.log2(index + 2), 0);
+  return ideal === 0 ? 1 : discountedCumulativeGain(resultKeys.slice(0, topN), relevance) / ideal;
+}
+
+function average(values) {
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+}
+
 function resultText(result) {
   return [result.key, result.category, result.content, ...(result.why || []).map((hit) => hit.token)]
     .filter(Boolean)
@@ -124,6 +149,11 @@ async function evaluateQuery(app, fixture, querySpec) {
   const expected = querySpec.expected || {};
   const requiredTerms = arrayOfStrings(expected.mustContain);
   const expectedScopeRoles = arrayOfStrings(expected.expectedScopeRoles);
+  const relevantKeys = arrayOfStrings(expected.relevantKeys);
+  const forbiddenKeys = arrayOfStrings(expected.forbiddenKeys);
+  const forbiddenScopes = arrayOfStrings(expected.forbiddenScopes);
+  const exactStrings = arrayOfStrings(expected.exactStrings);
+  const startedAt = performance.now();
   const bootstrap = await app.bootstrapContext({
     scope: primaryScope,
     scopeKey: primaryScopeKey,
@@ -134,8 +164,11 @@ async function evaluateQuery(app, fixture, querySpec) {
     includeWorkspaceHandoffs: Boolean(querySpec.includeWorkspaceHandoffs || fixture.includeWorkspaceHandoffs),
     query: querySpec.query,
     consultReason: querySpec.consultReason || fixture.consultReason || 'startup',
+    includeShared: Boolean(querySpec.includeShared),
+    sharedScopeKey: querySpec.sharedScopeKey || fixture.sharedScopeKey,
     limit: querySpec.limit || fixture.limit || topN,
   });
+  const durationMs = performance.now() - startedAt;
   const primaryResults = (bootstrap.results || []).slice(0, topN);
   const workspaceResults = (bootstrap.workspace?.results || []).slice(0, topN);
   const combinedResults = [...primaryResults, ...workspaceResults];
@@ -147,18 +180,48 @@ async function evaluateQuery(app, fixture, querySpec) {
   const missingRequiredTerms = requiredTerms.filter((term) => !combinedText.includes(normalizedText(term)));
   const matchedScopeRoles = expectedScopeRoles.filter((role) => presentRoles.has(role));
   const missingScopeRoles = expectedScopeRoles.filter((role) => !presentRoles.has(role));
-  const passed = missingRequiredTerms.length === 0 && missingScopeRoles.length === 0;
+  const resultKeys = combinedResults.map((result) => result.key);
+  const relevantReturned = relevantKeys.filter((key) => resultKeys.includes(key));
+  const recallAtK = relevantKeys.length ? relevantReturned.length / relevantKeys.length : 1;
+  const mrr = relevantKeys.length ? reciprocalRank(resultKeys, relevantKeys) : 1;
+  const relevance = expected.relevance || Object.fromEntries(relevantKeys.map((key) => [key, 1]));
+  const ndcgAtK = normalizedDiscountedCumulativeGain(resultKeys, relevance, topN);
+  const leakedKeys = forbiddenKeys.filter((key) => resultKeys.includes(key));
+  const returnedScopeIdentities = topScopes.map((scope) => scopeIdentity(scope.scopeType, scope.scopeKey));
+  const leakedScopes = forbiddenScopes.filter((scope) => returnedScopeIdentities.includes(scope));
+  const matchedExactStrings = exactStrings.filter((term) => combinedText.includes(normalizedText(term)));
+  const missingExactStrings = exactStrings.filter((term) => !combinedText.includes(normalizedText(term)));
+  const passed =
+    missingRequiredTerms.length === 0 &&
+    missingScopeRoles.length === 0 &&
+    leakedKeys.length === 0 &&
+    leakedScopes.length === 0 &&
+    missingExactStrings.length === 0;
 
   return {
     query: querySpec.query,
     passed,
     topN,
+    language: querySpec.language || 'unspecified',
+    durationMs,
     resultWindow: {
       primary: primaryResults.length,
       workspace: workspaceResults.length,
     },
     topScopes,
-    resultKeys: combinedResults.map((result) => result.key),
+    resultKeys,
+    metrics: {
+      recallAtK,
+      reciprocalRank: mrr,
+      ndcgAtK,
+      returned: resultKeys.length,
+    },
+    relevantKeys,
+    relevantReturned,
+    leakedKeys,
+    leakedScopes,
+    matchedExactStrings,
+    missingExactStrings,
     matchedRequiredTerms,
     missingRequiredTerms,
     matchedScopeRoles,
@@ -189,6 +252,20 @@ export async function evaluateRetrievalFixture(fixture, options = {}) {
       details.push(await evaluateQuery(app, fixture, query));
     }
     const failed = details.filter((detail) => !detail.passed).length;
+    const languages = Object.fromEntries(
+      [...new Set(details.map((detail) => detail.language))].map((language) => {
+        const matching = details.filter((detail) => detail.language === language);
+        return [
+          language,
+          {
+            queries: matching.length,
+            recallAtK: average(matching.map((detail) => detail.metrics.recallAtK)),
+            mrr: average(matching.map((detail) => detail.metrics.reciprocalRank)),
+            ndcgAtK: average(matching.map((detail) => detail.metrics.ndcgAtK)),
+          },
+        ];
+      }),
+    );
     return {
       kind: 'retrieval_eval',
       fixture: fixture.name || fixture.workspaceKey || fixture.workspace?.workspaceKey || null,
@@ -196,6 +273,24 @@ export async function evaluateRetrievalFixture(fixture, options = {}) {
       queries: details.length,
       passed: details.length - failed,
       failed,
+      metrics: {
+        recallAtK: average(details.map((detail) => detail.metrics.recallAtK)),
+        mrr: average(details.map((detail) => detail.metrics.reciprocalRank)),
+        ndcgAtK: average(details.map((detail) => detail.metrics.ndcgAtK)),
+        scopeLeakageCount: details.reduce((sum, detail) => sum + detail.leakedScopes.length, 0),
+        forbiddenKeyCount: details.reduce((sum, detail) => sum + detail.leakedKeys.length, 0),
+        exactStringRate: average(
+          details.map((detail) =>
+            detail.matchedExactStrings.length + detail.missingExactStrings.length === 0
+              ? 1
+              : detail.matchedExactStrings.length /
+                (detail.matchedExactStrings.length + detail.missingExactStrings.length),
+          ),
+        ),
+        averageLatencyMs: average(details.map((detail) => detail.durationMs)),
+        maxReturned: Math.max(0, ...details.map((detail) => detail.metrics.returned)),
+        byLanguage: languages,
+      },
       details,
     };
   } finally {
