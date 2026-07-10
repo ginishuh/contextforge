@@ -592,6 +592,15 @@ ContextForge MCP는 repo/shared/local scope를 명시적으로 다룬다.
 `claude_code:<id>`, `opencode:<id>`, `grok:<id>`, `cursor_cli:<id>` 같은
 adapter-prefixed session id를 사용해야 한다.
 
+## Lexical retrieval
+
+Lexical 검색은 Unicode NFKC 정규화 후 Unicode letter, number, combining mark를
+token으로 인식한다. Path, API, error identifier를 위해 `_./:-` 구분자도 보존한다.
+따라서 embeddings가 꺼져 있어도 순수 한국어와 한영 혼합 query를 key, content,
+tag에서 검색할 수 있다. 다만 형태소 분석이나 언어별 stemming은 하지 않으며,
+공백·문장부호 경계와 explainable exact/prefix/substring matching을 사용한다.
+활용형이나 개념 유사도 검색에는 embedding 경로를 권장한다.
+
 ## Embeddings
 
 retrieval 품질을 위해 embedding index를 권장한다.

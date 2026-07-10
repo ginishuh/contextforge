@@ -1,8 +1,11 @@
+function normalizeLexicalText(text) {
+  return String(text || '').normalize('NFKC').toLowerCase();
+}
+
 function tokenize(text) {
-  return String(text || '')
-    .toLowerCase()
-    .split(/[^a-z0-9_./:-]+/)
-    .filter((token) => token.length > 1);
+  return normalizeLexicalText(text)
+    .split(/[^\p{L}\p{N}\p{M}_./:-]+/u)
+    .filter((token) => token.length > 1 || /[^\x00-\x7f]/u.test(token));
 }
 
 function unique(values) {
@@ -11,7 +14,7 @@ function unique(values) {
 
 function toFtsQuery(tokens) {
   return tokens
-    .map((token) => token.replace(/"/g, '').replace(/[^a-z0-9_]+/g, ' '))
+    .map((token) => token.replace(/[^\p{L}\p{N}\p{M}_]+/gu, ' '))
     .flatMap((token) => token.split(/\s+/).filter(Boolean))
     .map((token) => `"${token}"*`)
     .join(' OR ');
@@ -43,7 +46,7 @@ function scoreMemory(memory, queryTokens) {
     const hitFields = [];
     for (const [name, value] of Object.entries(fields)) {
       const fieldTokens = tokenize(value);
-      const lowerValue = String(value || '').toLowerCase();
+      const lowerValue = normalizeLexicalText(value);
       const matchType = fieldTokens.some((fieldToken) => fieldToken === token)
         ? 'exact'
         : fieldTokens.some((fieldToken) => fieldToken.startsWith(token))

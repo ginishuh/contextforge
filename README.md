@@ -1433,7 +1433,13 @@ ContextForge uses `CONTEXTFORGE_SHARED_SCOPE_KEY` or `global`.
 
 Search uses a SQLite FTS5 index as an explainable retrieval surface over the
 canonical `memories` table. Results include `why` match metadata and
-`retrieval` rank metadata so callers can debug why an item was returned.
+`retrieval` rank metadata so callers can debug why an item was returned. The
+lexical tokenizer normalizes text with Unicode NFKC, recognizes Unicode letters,
+numbers, and combining marks, and preserves `_./:-` for paths, APIs, and error
+identifiers. This is not a language-specific morphological analyzer: Korean and
+other languages use punctuation/whitespace token boundaries plus explainable
+exact, prefix, and substring matching. Embeddings remain the semantic retrieval
+path for inflectional or conceptual matches.
 
 Fetch one memory by key:
 

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Restored Unicode lexical retrieval for Korean and mixed-language queries,
+  including embeddings-off search across memory keys, content, and tags while
+  preserving path, API, and error-identifier token behavior.
 - Corrected `audit_memory_candidates` MCP mutation annotations and response
   metadata: the tool does not promote durable memory, but it persists candidate
   review metadata and audit usage events and invokes the audit provider once per
