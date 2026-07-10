@@ -20,6 +20,12 @@ const consultReasonSchema = z.enum([
 const metadataSchema = z.record(z.string(), z.unknown());
 const optionalTags = z.array(z.string()).optional();
 const workspaceRuleJsonSchema = z.record(z.string(), z.array(z.string()));
+const closeoutTriggerSchema = z.enum([
+  'agent_merged_pr',
+  'user_merged_then_synced',
+  'user_declared_work_done',
+  'manual_closeout',
+]);
 
 const scopedSchema = {
   scope: scopeSchema.optional(),
@@ -46,6 +52,7 @@ const MCP_INSTRUCTIONS = [
   'bootstrap_context returns a compact memoryMap separately from raw retrieval hits. Use the map for durable-memory orientation, then call expand_memory_cluster only for clusters whose atomic details are needed.',
   'For task start or loose continuation prompts such as "지난 환경 작업과 동기화", "어제 하던 거 이어서", "previous work", or "continue", call bootstrap_context first; it includes latest checkpoint handoff independent of search ranking. Use sync_resume_context only when you know the exact sessionId and need session working state or raw tail.',
   'For closeout distillation, pass auditTrigger to distill_checkpoint. Candidate audit automatically selects a bounded session batch after closeout triggers or once the configured threshold is reached, then invokes the provider once per selected candidate. Audit results are stored on candidates; automatic promotion only controls whether approved strict-safe results are written to durable memory.',
+  'For provider work that must survive client disconnects, submit_distill_job or submit_audit_job, then poll get_job. A separate operator must run process_jobs; queued cancellation is guaranteed, but a running provider call is not force-cancelled.',
   'When an agent needs to inspect audited recommendations, call audit_memory_candidates with sessionId or checkpointId. It returns stored audit proposals and audits unaudited candidates in the same scoped selection batch when needed. It persists candidate audit metadata and usage events but never promotes or mutates durable memory.',
   'For strict closeout-scoped safe automatic promotion, call auto_promote_memory_candidates only when the user wants write-side automatic promotion and always include sessionId or checkpointId. By default use dryRun=true. Use dryRun=false only when CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true is intentionally configured; never use scope-wide backlog fallback and never auto-promote preference candidates.',
   'Preference-like candidates are tracked as merged occurrences; use list_preference_occurrences to review repeated evidence and weakened corrections, but do not treat occurrence evidence alone as durable preference truth.',
@@ -459,6 +466,157 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
       },
     },
     async (args) => jsonResult(await app.sessionStatus(args)),
+  );
+
+  server.registerTool(
+    'submit_distill_job',
+    {
+      title: 'Submit Distill Job',
+      description:
+        'Durably queue a checkpoint distillation and return immediately. Duplicate submissions for the same scoped source window and policy reuse one job unless an explicit idempotencyKey is supplied.',
+      inputSchema: {
+        ...scopedSchema,
+        sessionId: z.string(),
+        conversationId: z.string().optional(),
+        provider: z.string().optional(),
+        maxEvents: z.number().int().positive().optional(),
+        maxChars: z.number().int().positive().optional(),
+        level: z.number().int().nonnegative().optional(),
+        auditTrigger: closeoutTriggerSchema.optional(),
+        idempotencyKey: z.string().optional(),
+        maxAttempts: z.number().int().positive().optional(),
+        priority: z.number().int().optional(),
+        retryFailed: z.boolean().optional(),
+        submittedBy: z.string().optional(),
+      },
+      annotations: {
+        title: 'Submit Distill Job',
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.submitDistillJob(args)),
+  );
+
+  server.registerTool(
+    'submit_audit_job',
+    {
+      title: 'Submit Candidate Audit Job',
+      description:
+        'Durably queue closeout-scoped candidate audits and return immediately. The current worker invokes the configured provider once per selected candidate; true provider batching is not implied.',
+      inputSchema: {
+        ...scopedSchema,
+        sessionId: z.string().optional(),
+        checkpointId: z.string().optional(),
+        trigger: closeoutTriggerSchema,
+        limit: z.number().int().positive().optional(),
+        scanLimit: z.number().int().positive().optional(),
+        minConfidence: z.number().optional(),
+        minStability: z.number().optional(),
+        allowedCategories: z.array(z.string()).optional(),
+        promotionRecommendation: z.string().optional(),
+        force: z.boolean().optional(),
+        idempotencyKey: z.string().optional(),
+        maxAttempts: z.number().int().positive().optional(),
+        priority: z.number().int().optional(),
+        retryFailed: z.boolean().optional(),
+        submittedBy: z.string().optional(),
+      },
+      annotations: {
+        title: 'Submit Candidate Audit Job',
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.submitAuditJob(args)),
+  );
+
+  server.registerTool(
+    'get_job',
+    {
+      title: 'Get Operation Job',
+      description: 'Read one durable distill or candidate-audit job, including state, attempts, lease, result, and failure details.',
+      inputSchema: {
+        ...scopedSchema,
+        jobId: z.string(),
+      },
+      annotations: {
+        title: 'Get Operation Job',
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.getJob(args)),
+  );
+
+  server.registerTool(
+    'list_jobs',
+    {
+      title: 'List Operation Jobs',
+      description: 'List bounded durable distill and candidate-audit jobs, optionally narrowed by scope, operation, state, session, or checkpoint.',
+      inputSchema: {
+        ...scopedSchema,
+        operation: z.enum(['distill_checkpoint', 'audit_memory_candidates']).optional(),
+        status: z.enum(['queued', 'running', 'succeeded', 'failed', 'cancelled']).optional(),
+        sessionId: z.string().optional(),
+        checkpointId: z.string().optional(),
+        limit: z.number().int().positive().max(500).optional(),
+        order: z.enum(['asc', 'desc']).optional(),
+      },
+      annotations: {
+        title: 'List Operation Jobs',
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.listJobs(args)),
+  );
+
+  server.registerTool(
+    'process_jobs',
+    {
+      title: 'Process Operation Jobs',
+      description:
+        'Claim and execute one bounded durable job batch as an operator worker. Expired leases are recovered before claims. This call waits for claimed provider work to finish.',
+      inputSchema: {
+        operation: z.enum(['distill_checkpoint', 'audit_memory_candidates']).optional(),
+        operations: z.array(z.enum(['distill_checkpoint', 'audit_memory_candidates'])).optional(),
+        limit: z.number().int().positive().max(25).optional(),
+        leaseMs: z.number().int().min(1000).optional(),
+        workerId: z.string().optional(),
+      },
+      annotations: {
+        title: 'Process Operation Jobs',
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.processJobs(args)),
+  );
+
+  server.registerTool(
+    'cancel_job',
+    {
+      title: 'Cancel Queued Operation Job',
+      description:
+        'Cancel a queued durable operation job. Running provider calls are reported as running_not_interruptible and are not force-terminated.',
+      inputSchema: {
+        ...scopedSchema,
+        jobId: z.string(),
+        reason: z.string().optional(),
+      },
+      annotations: {
+        title: 'Cancel Queued Operation Job',
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.cancelJob(args)),
   );
 
   server.registerTool(
@@ -892,13 +1050,14 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'List LLM Usage Events',
       description:
-        'List persisted normalized LLM usage events for a scope, optionally filtered by session, distill run, checkpoint, candidate, operation, or provider.',
+        'List persisted normalized LLM usage events for a scope, optionally filtered by session, durable job, distill run, checkpoint, candidate, operation, or provider.',
       inputSchema: {
         ...scopedSchema,
         sessionId: z.string().optional(),
         distillRunId: z.string().optional(),
         checkpointId: z.string().optional(),
         candidateId: z.string().optional(),
+        jobId: z.string().optional(),
         operation: z.string().optional(),
         provider: z.string().optional(),
         limit: z.number().int().positive().optional(),
@@ -925,6 +1084,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
         distillRunId: z.string().optional(),
         checkpointId: z.string().optional(),
         candidateId: z.string().optional(),
+        jobId: z.string().optional(),
         operation: z.string().optional(),
         provider: z.string().optional(),
         limit: z.number().int().positive().optional(),

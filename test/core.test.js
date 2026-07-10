@@ -7466,6 +7466,535 @@ test('concurrent duplicate distillCheckpoint calls share one run and checkpoint'
   assert.equal(app.listDistillRuns(options).length, 1);
 });
 
+test('durable distill jobs deduplicate submission and persist result provenance', async () => {
+  const dataDir = await makeTempDir();
+  let invocations = 0;
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'durable_job_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      durable_job_provider: async () => {
+        invocations += 1;
+        return {
+          summaryShort: 'Durable job checkpoint.',
+          summaryText: 'The queued operation survived outside the submitting request.',
+          decisions: ['Queue provider work before execution.'],
+          todos: [],
+          openQuestions: [],
+          memoryCandidates: [],
+          metadata: {
+            provider: 'durable_job_provider',
+            usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 },
+          },
+        };
+      },
+    },
+  });
+  const source = { scope: 'repo', scopeKey: 'durable-job-repo', sessionId: 'durable-job-session' };
+  app.appendRaw({ ...source, role: 'assistant', content: 'Queue this evidence for durable distillation.' });
+
+  const first = app.submitDistillJob({ ...source, apiKey: 'must-not-persist' });
+  const duplicate = app.submitDistillJob(source);
+  assert.equal(first.status, 'queued');
+  assert.equal(first.jobId, duplicate.jobId);
+  assert.equal(duplicate.deduplicated, true);
+  assert.equal(JSON.stringify(first.job).includes('must-not-persist'), false);
+  assert.equal(invocations, 0);
+  assert.equal(app.dbInfo().tables.operationJobs, 1);
+
+  const batch = await app.processJobs({ workerId: 'test-worker', limit: 1, leaseMs: 1000 });
+  assert.equal(batch.claimed, 1);
+  assert.equal(batch.succeeded, 1);
+  assert.equal(invocations, 1);
+  const completed = app.getJob({ jobId: first.jobId });
+  assert.equal(completed.status, 'succeeded');
+  assert.equal(completed.attempts, 1);
+  assert.equal(completed.result.summaryShort, 'Durable job checkpoint.');
+
+  const [checkpoint] = app.listCheckpoints(source);
+  assert.equal(completed.checkpointId, checkpoint.id);
+  assert.equal(checkpoint.metadata.operationJobId, first.jobId);
+  const [run] = app.listDistillRuns(source);
+  assert.equal(run.jobId, first.jobId);
+  const usage = app.listLlmUsageEvents({ ...source, jobId: first.jobId });
+  assert.equal(usage.length, 1);
+  assert.equal(usage[0].jobId, first.jobId);
+
+  const recoveredResult = await app.distillCheckpoint({ ...source, jobId: first.jobId });
+  assert.equal(recoveredResult.id, checkpoint.id);
+  assert.equal(invocations, 1);
+});
+
+test('durable jobs retry retryable provider failures only up to maxAttempts', async () => {
+  const dataDir = await makeTempDir();
+  let invocations = 0;
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'retryable_job_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      retryable_job_provider: async () => {
+        invocations += 1;
+        throw new ProviderTimeoutError('retryable_job_provider', 10);
+      },
+    },
+  });
+  const source = { scope: 'repo', scopeKey: 'retryable-job-repo', sessionId: 'retryable-job-session' };
+  app.appendRaw({ ...source, role: 'assistant', content: 'Keep raw evidence while retries fail.' });
+  const submitted = app.submitDistillJob({ ...source, maxAttempts: 2 });
+
+  const first = await app.processJobs({ workerId: 'retry-worker-1', leaseMs: 1000 });
+  assert.equal(first.failed, 1);
+  assert.equal(first.requeued, 1);
+  assert.equal(first.jobs[0].status, 'queued');
+  assert.equal(first.jobs[0].error.retryable, true);
+  const second = await app.processJobs({ workerId: 'retry-worker-2', leaseMs: 1000 });
+  assert.equal(second.failed, 1);
+  assert.equal(second.requeued, 0);
+  assert.equal(second.jobs[0].status, 'failed');
+  assert.equal(second.jobs[0].attempts, 2);
+  assert.equal(invocations, 2);
+  assert.equal((await app.processJobs({ workerId: 'retry-worker-3' })).claimed, 0);
+  assert.equal(app.getJob({ jobId: submitted.jobId }).status, 'failed');
+  assert.equal(app.listRawEvents(source).length, 1);
+});
+
+test('operation job leases recover after crashes and queued cancellation is explicit', async () => {
+  const dataDir = await makeTempDir();
+  const store = new ContextForgeStore({ dataDir });
+  const base = {
+    operation: 'distill_checkpoint',
+    scopeType: 'repo',
+    scopeKey: 'lease-recovery-repo',
+    sessionId: 'lease-recovery-session',
+    payload: { sessionId: 'lease-recovery-session' },
+    maxAttempts: 2,
+  };
+  const leased = store.enqueueOperationJob({ ...base, idempotencyKey: 'lease-recovery' }).job;
+  const claimed = store.claimOperationJobs({
+    workerId: 'crashed-worker',
+    leaseMs: 50,
+    now: new Date('2026-01-01T00:00:00.000Z'),
+  });
+  assert.equal(claimed[0].id, leased.id);
+  const recovered = store.claimOperationJobs({
+    workerId: 'replacement-worker',
+    leaseMs: 50,
+    now: new Date('2026-01-01T00:00:00.100Z'),
+  });
+  assert.equal(recovered[0].id, leased.id);
+  assert.equal(recovered[0].attempts, 2);
+  store.recoverExpiredOperationJobs({ now: '2026-01-01T00:00:00.200Z' });
+  const exhausted = store.getOperationJob({ jobId: leased.id });
+  assert.equal(exhausted.status, 'failed');
+  assert.equal(exhausted.error.code, 'CONTEXTFORGE_JOB_LEASE_EXPIRED');
+
+  const queued = store.enqueueOperationJob({ ...base, idempotencyKey: 'cancel-queued' }).job;
+  const cancelled = store.cancelOperationJob({ jobId: queued.id, reason: 'Synthetic cancellation.' });
+  assert.equal(cancelled.cancelled, true);
+  assert.equal(cancelled.job.status, 'cancelled');
+  const running = store.enqueueOperationJob({ ...base, idempotencyKey: 'cancel-running' }).job;
+  store.claimOperationJobs({ workerId: 'active-worker', leaseMs: 1000 });
+  const notInterrupted = store.cancelOperationJob({ jobId: running.id });
+  assert.equal(notInterrupted.cancelled, false);
+  assert.equal(notInterrupted.reason, 'running_not_interruptible');
+  store.close();
+});
+
+test('operation job attempt fencing rejects stale completion with a reused workerId', async () => {
+  const dataDir = await makeTempDir();
+  const store = new ContextForgeStore({ dataDir });
+  const queued = store.enqueueOperationJob({
+    operation: 'distill_checkpoint',
+    scopeType: 'repo',
+    scopeKey: 'same-worker-fence-repo',
+    sessionId: 'same-worker-fence-session',
+    idempotencyKey: 'same-worker-fence',
+    payload: { sessionId: 'same-worker-fence-session' },
+    maxAttempts: 2,
+  }).job;
+  const startedAt = new Date();
+  const [first] = store.claimOperationJobs({
+    workerId: 'stable-worker-id',
+    leaseMs: 50,
+    now: startedAt,
+  });
+  const [replacement] = store.claimOperationJobs({
+    workerId: 'stable-worker-id',
+    leaseMs: 60000,
+    now: new Date(startedAt.getTime() + 100),
+  });
+  assert.equal(first.attempts, 1);
+  assert.equal(replacement.attempts, 2);
+  const replacementExpiry = replacement.leaseExpiresAt;
+
+  const staleHeartbeat = store.extendOperationJobLease({
+    jobId: queued.id,
+    workerId: 'stable-worker-id',
+    attempt: 1,
+    leaseMs: 60000,
+  });
+  assert.equal(staleHeartbeat, null);
+  assert.equal(store.getOperationJob({ jobId: queued.id }).leaseExpiresAt, replacementExpiry);
+  assert.throws(() =>
+    store.completeOperationJob({
+      jobId: queued.id,
+      workerId: 'stable-worker-id',
+      attempt: 1,
+      result: { stale: true },
+    }),
+  );
+  const completed = store.completeOperationJob({
+    jobId: queued.id,
+    workerId: 'stable-worker-id',
+    attempt: 2,
+    result: { stale: false },
+  });
+  assert.equal(completed.status, 'succeeded');
+  assert.deepEqual(completed.result, { stale: false });
+  store.close();
+});
+
+test('operation job workers renew leases while provider work is still running', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'heartbeat_job_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      heartbeat_job_provider: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 1600));
+        return {
+          summaryShort: 'Heartbeat checkpoint.',
+          summaryText: 'The worker renewed its lease during provider execution.',
+          decisions: [],
+          todos: [],
+          openQuestions: [],
+          memoryCandidates: [],
+        };
+      },
+    },
+  });
+  const source = { scope: 'repo', scopeKey: 'heartbeat-job-repo', sessionId: 'heartbeat-job-session' };
+  app.appendRaw({ ...source, role: 'assistant', content: 'Keep the job lease alive.' });
+  app.submitDistillJob(source);
+
+  const firstWorker = app.processJobs({ workerId: 'heartbeat-worker', leaseMs: 1000 });
+  await new Promise((resolve) => setTimeout(resolve, 1250));
+  const competingWorker = await app.processJobs({ workerId: 'competing-worker', leaseMs: 1000 });
+  assert.equal(competingWorker.claimed, 0);
+  const completed = await firstWorker;
+  assert.equal(completed.succeeded, 1);
+});
+
+test('lost operation job leases fence stale checkpoint side effects', async () => {
+  const dataDir = await makeTempDir();
+  let invocations = 0;
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'fenced_job_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      fenced_job_provider: async () => {
+        invocations += 1;
+        return {
+          summaryShort: 'Fenced checkpoint.',
+          summaryText: 'Only the current lease owner may commit this checkpoint.',
+          decisions: [],
+          todos: [],
+          openQuestions: [],
+          memoryCandidates: [],
+        };
+      },
+    },
+  });
+  const source = { scope: 'repo', scopeKey: 'fenced-job-repo', sessionId: 'fenced-job-session' };
+  app.appendRaw({ ...source, role: 'assistant', content: 'Fence stale worker side effects.' });
+  const submitted = app.submitDistillJob(source);
+  const store = new ContextForgeStore({ dataDir });
+  const startedAt = new Date();
+  const [staleClaim] = store.claimOperationJobs({
+    workerId: 'stale-worker',
+    leaseMs: 50,
+    now: startedAt,
+  });
+  const [replacementClaim] = store.claimOperationJobs({
+    workerId: 'replacement-worker',
+    leaseMs: 60000,
+    now: new Date(startedAt.getTime() + 100),
+  });
+  store.close();
+  assert.equal(staleClaim.attempts, 1);
+  assert.equal(replacementClaim.attempts, 2);
+
+  await assert.rejects(
+    () =>
+      app.distillCheckpoint({
+        ...source,
+        jobId: submitted.jobId,
+        _jobLeaseOwner: 'stale-worker',
+        _jobLeaseAttempt: 1,
+      }),
+    (error) => error.code === 'CONTEXTFORGE_JOB_LEASE_LOST',
+  );
+  assert.equal(app.listCheckpoints(source).length, 0);
+  assert.equal(app.getWorkingSummary(source), null);
+
+  const checkpoint = await app.distillCheckpoint({
+    ...source,
+    jobId: submitted.jobId,
+    _jobLeaseOwner: 'replacement-worker',
+    _jobLeaseAttempt: 2,
+  });
+  assert.equal(checkpoint.summaryShort, 'Fenced checkpoint.');
+  assert.equal(app.listCheckpoints(source).length, 1);
+  assert.equal(invocations, 2);
+});
+
+test('durable distill jobs do not swallow lease loss during embedded closeout audit', async () => {
+  const dataDir = await makeTempDir();
+  let submittedJobId;
+  let auditInvocations = 0;
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'embedded_audit_lease_provider',
+    },
+    cwd: process.cwd(),
+    autoPromoteAuditor: async () => {
+      auditInvocations += 1;
+      if (auditInvocations === 1) {
+        const takeoverStore = new ContextForgeStore({ dataDir });
+        const takeoverAt = new Date(Date.now() + 600000);
+        const [recovered] = takeoverStore.recoverExpiredOperationJobs({ now: takeoverAt.toISOString() });
+        takeoverStore.close();
+        assert.equal(recovered.id, submittedJobId);
+        assert.equal(recovered.status, 'queued');
+      }
+      return {
+        approved: true,
+        decision: 'approve',
+        reason: 'This stale audit result must be discarded.',
+        riskCodes: [],
+        metadata: { provider: 'embedded_audit_provider' },
+      };
+    },
+    distillProviders: {
+      embedded_audit_lease_provider: async () => ({
+        summaryShort: 'Embedded audit lease checkpoint.',
+        summaryText: 'The audit loses its job lease after checkpoint commit.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'embedded-audit-lease',
+            content: 'Lease loss must escape embedded closeout audit.',
+            category: 'runbook',
+            candidateType: 'runbook',
+            confidence: 0.96,
+            stability: 0.96,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+        ],
+      }),
+    },
+  });
+  const source = { scope: 'repo', scopeKey: 'embedded-audit-lease-repo', sessionId: 'embedded-audit-lease-session' };
+  app.appendRaw({ ...source, role: 'assistant', content: 'Create a closeout candidate before lease takeover.' });
+  const submitted = app.submitDistillJob({ ...source, auditTrigger: 'manual_closeout', maxAttempts: 2 });
+  submittedJobId = submitted.jobId;
+  const processed = await app.processJobs({ workerId: 'stable-closeout-worker', leaseMs: 1000 });
+  assert.equal(processed.failed, 1);
+  assert.equal(processed.succeeded, 0);
+  assert.equal(processed.jobs[0].status, 'queued');
+  assert.equal(processed.jobs[0].attempts, 1);
+  let [candidate] = app.listMemoryCandidates({ ...source, status: 'pending' });
+  assert.equal(candidate.reviewedAt, null);
+
+  const replacement = await app.processJobs({ workerId: 'stable-closeout-worker', leaseMs: 1000 });
+  assert.equal(replacement.succeeded, 1);
+  assert.equal(replacement.jobs[0].status, 'succeeded');
+  assert.equal(replacement.jobs[0].attempts, 2);
+  assert.equal(replacement.jobs[0].result.checkpointId != null, true);
+  [candidate] = app.listMemoryCandidates({ ...source, status: 'pending' });
+  assert.ok(candidate.reviewedAt);
+  assert.equal(auditInvocations, 2);
+  const [recoveredRun] = app.listDistillRuns(source);
+  assert.equal(recoveredRun.status, 'succeeded');
+  assert.equal(recoveredRun.outputMetadata.candidateAuditRecovered, true);
+});
+
+test('durable distill jobs retry embedded closeout audit provider failures', async () => {
+  const dataDir = await makeTempDir();
+  let auditInvocations = 0;
+  let distillInvocations = 0;
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'embedded_audit_retry_provider',
+      CONTEXTFORGE_AUTO_PROMOTE_AUDIT_MIN_BATCH_CANDIDATES: '6',
+    },
+    cwd: process.cwd(),
+    autoPromoteAuditor: async () => {
+      auditInvocations += 1;
+      if (auditInvocations <= 5) throw new ProviderTimeoutError('embedded_audit_provider', 10);
+      return {
+        approved: true,
+        decision: 'approve',
+        reason: 'Embedded audit retry succeeded.',
+        riskCodes: [],
+        metadata: { provider: 'embedded_audit_provider' },
+      };
+    },
+    distillProviders: {
+      embedded_audit_retry_provider: async () => {
+        distillInvocations += 1;
+        return {
+          summaryShort: `Embedded audit retry checkpoint ${distillInvocations}.`,
+          summaryText: 'The job checkpoint remains unique while an older checkpoint candidate audit retries.',
+          decisions: [],
+          todos: [],
+          openQuestions: [],
+          memoryCandidates:
+            distillInvocations === 1
+              ? Array.from({ length: 5 }, (_, index) => ({
+                    key: `embedded-audit-retry-${index + 1}`,
+                    content: `Retry older checkpoint candidate ${index + 1} without redistilling the job checkpoint.`,
+                    category: 'runbook',
+                    candidateType: 'runbook',
+                    confidence: 0.96,
+                    stability: 0.96,
+                    sensitivity: 'low',
+                    promotionRecommendation: 'promote',
+                  }))
+              : [],
+        };
+      },
+    },
+  });
+  const source = { scope: 'repo', scopeKey: 'embedded-audit-retry-repo', sessionId: 'embedded-audit-retry-session' };
+  app.appendRaw({ ...source, role: 'assistant', content: 'Create an older checkpoint candidate.' });
+  await app.distillCheckpoint(source);
+  app.appendRaw({ ...source, role: 'assistant', content: 'Create the job checkpoint before auditing the older candidate.' });
+  app.submitDistillJob({ ...source, auditTrigger: 'manual_closeout', maxAttempts: 2 });
+
+  const first = await app.processJobs({ workerId: 'embedded-retry-worker-1', leaseMs: 1000 });
+  assert.equal(first.failed, 1);
+  assert.equal(first.requeued, 1);
+  assert.equal(first.jobs[0].status, 'queued');
+  assert.equal(first.jobs[0].result.candidateAudit.needsRetry, true);
+  assert.equal(first.jobs[0].result.candidateAudit.retryableFailureCount, 5);
+  assert.equal(app.listCheckpoints(source).length, 2);
+
+  const second = await app.processJobs({ workerId: 'embedded-retry-worker-2', leaseMs: 1000 });
+  assert.equal(second.succeeded, 1);
+  assert.equal(second.jobs[0].status, 'succeeded');
+  assert.equal(second.jobs[0].attempts, 2);
+  assert.equal(second.jobs[0].result.candidateAudit.needsRetry, false);
+  const checkpoints = app.listCheckpoints(source);
+  assert.equal(checkpoints.length, 2);
+  assert.equal(checkpoints.filter((checkpoint) => checkpoint.metadata.operationJobId).length, 1);
+  const candidates = app.listMemoryCandidates({ ...source, status: 'pending' });
+  assert.equal(candidates.length, 5);
+  assert.ok(candidates.every((candidate) => candidate.reviewMetadata.audit.decision === 'approve'));
+  assert.equal(auditInvocations, 10);
+  assert.equal(distillInvocations, 2);
+});
+
+test('durable audit jobs persist job provenance without promoting memory', async () => {
+  const dataDir = await makeTempDir();
+  let auditInvocations = 0;
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'audit_job_source_provider',
+    },
+    cwd: process.cwd(),
+    autoPromoteAuditor: async () => {
+      auditInvocations += 1;
+      if (auditInvocations === 1) {
+        throw new ProviderTimeoutError('audit_job_provider', 10);
+      }
+      return {
+        approved: true,
+        decision: 'approve',
+        reason: 'Synthetic durable audit approval.',
+        riskCodes: [],
+        metadata: {
+          provider: 'audit_job_provider',
+          usage: { prompt_tokens: 8, completion_tokens: 2, total_tokens: 10 },
+        },
+      };
+    },
+    distillProviders: {
+      audit_job_source_provider: async () => ({
+        summaryShort: 'Audit job source.',
+        summaryText: 'A candidate waits for the durable audit worker.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'durable-audit-runbook',
+            content: 'Submit audit provider work through a durable job.',
+            category: 'runbook',
+            candidateType: 'runbook',
+            confidence: 0.96,
+            stability: 0.96,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+        ],
+      }),
+    },
+  });
+  const source = { scope: 'repo', scopeKey: 'durable-audit-repo', sessionId: 'durable-audit-session' };
+  app.appendRaw({ ...source, role: 'assistant', content: 'Create one audit candidate.' });
+  await app.distillCheckpoint(source);
+  app.appendRaw({ ...source, role: 'assistant', content: 'Create the latest closeout checkpoint.' });
+  const checkpoint = await app.distillCheckpoint(source);
+  const submitted = app.submitAuditJob({
+    ...source,
+    trigger: 'manual_closeout',
+    maxAttempts: 2,
+  });
+  const checkpointSubmission = app.submitAuditJob({
+    scope: source.scope,
+    scopeKey: source.scopeKey,
+    checkpointId: checkpoint.id,
+    trigger: 'manual_closeout',
+    maxAttempts: 2,
+  });
+  assert.equal(checkpointSubmission.jobId, submitted.jobId);
+  assert.equal(submitted.job.metadata.sourceFingerprint.candidateIds.length, 1);
+  assert.equal(auditInvocations, 0);
+  const firstAttempt = await app.processJobs({ workerId: 'audit-worker-1', operation: 'audit_memory_candidates' });
+  assert.equal(firstAttempt.failed, 1);
+  assert.equal(firstAttempt.requeued, 1);
+  assert.equal(firstAttempt.jobs[0].status, 'queued');
+  assert.equal(firstAttempt.jobs[0].result.audit.needsRetry, true);
+  const processed = await app.processJobs({ workerId: 'audit-worker-2', operation: 'audit_memory_candidates' });
+  assert.equal(processed.succeeded, 1);
+  assert.equal(auditInvocations, 2);
+  const [candidate] = app.listMemoryCandidates({ ...source, checkpointId: checkpoint.id, status: 'pending' });
+  assert.equal(candidate.reviewMetadata.auditMetadata.operationJobId, submitted.jobId);
+  assert.equal(app.getMemory({ ...source, key: 'durable-audit-runbook' }), null);
+  const usage = app.listLlmUsageEvents({ ...source, jobId: submitted.jobId });
+  assert.equal(usage.length, 1);
+  assert.equal(usage[0].operation, 'candidate_audit');
+});
+
 test('provider timeout mismatch fails before execution and records non-retryable run state', async () => {
   const dataDir = await makeTempDir();
   let invocations = 0;
@@ -11573,6 +12102,12 @@ test('REMOTE_METHODS exposes resume, suggestion, auto-promotion, and reconciliat
   assert.ok(REMOTE_METHODS.includes('llmUsageRollup'));
   assert.ok(REMOTE_METHODS.includes('listDueDistillSessions'));
   assert.ok(REMOTE_METHODS.includes('processDueDistills'));
+  assert.ok(REMOTE_METHODS.includes('submitDistillJob'));
+  assert.ok(REMOTE_METHODS.includes('submitAuditJob'));
+  assert.ok(REMOTE_METHODS.includes('getJob'));
+  assert.ok(REMOTE_METHODS.includes('listJobs'));
+  assert.ok(REMOTE_METHODS.includes('processJobs'));
+  assert.ok(REMOTE_METHODS.includes('cancelJob'));
   assert.ok(REMOTE_METHODS.includes('listMemories'));
   assert.ok(REMOTE_METHODS.includes('suggestMemoryPromotions'));
   assert.ok(REMOTE_METHODS.includes('auditMemoryCandidates'));
@@ -13086,6 +13621,65 @@ test('CLI supports the v0 workflow with synthetic data', async () => {
   assert.match(usageEvents.stdout, /\[/);
 });
 
+test('CLI submits, inspects, processes, and cancels durable operation jobs', async () => {
+  const dataDir = await makeTempDir();
+  const env = { ...process.env, CONTEXTFORGE_DATA_DIR: dataDir };
+  const sourceArgs = ['--scope', 'repo', '--scopeKey', 'cli-job-repo', '--sessionId', 'cli-job-session'];
+  await execFileAsync(
+    'node',
+    ['src/cli.js', 'appendRaw', ...sourceArgs, '--role', 'assistant', '--content', 'CLI durable job evidence.'],
+    { env },
+  );
+  const submitted = JSON.parse(
+    (await execFileAsync('node', ['src/cli.js', 'submitDistillJob', ...sourceArgs], { env })).stdout,
+  );
+  assert.equal(submitted.status, 'queued');
+  const listed = JSON.parse(
+    (await execFileAsync('node', ['src/cli.js', 'listJobs', '--status', 'queued'], { env })).stdout,
+  );
+  assert.equal(listed[0].id, submitted.jobId);
+  const processed = JSON.parse(
+    (await execFileAsync('node', ['src/cli.js', 'processJobs', '--workerId', 'cli-worker'], { env })).stdout,
+  );
+  assert.equal(processed.succeeded, 1);
+  const completed = JSON.parse(
+    (await execFileAsync('node', ['src/cli.js', 'getJob', '--jobId', submitted.jobId], { env })).stdout,
+  );
+  assert.equal(completed.status, 'succeeded');
+
+  const cancellable = JSON.parse(
+    (
+      await execFileAsync(
+        'node',
+        [
+          'src/cli.js',
+          'submitDistillJob',
+          '--scope',
+          'repo',
+          '--scopeKey',
+          'cli-job-repo',
+          '--sessionId',
+          'cli-cancel-session',
+          '--idempotencyKey',
+          'cli-cancel-job',
+        ],
+        { env },
+      )
+    ).stdout,
+  );
+  const cancelled = JSON.parse(
+    (
+      await execFileAsync(
+        'node',
+        ['src/cli.js', 'cancelJob', '--jobId', cancellable.jobId, '--reason', 'CLI cancellation test.'],
+        { env },
+      )
+    ).stdout,
+  );
+  assert.equal(cancelled.cancelled, true);
+  assert.equal(cancelled.job.status, 'cancelled');
+});
+
 test('MCP stdio server exposes core tools for synthetic integration', async () => {
   const dataDir = await makeTempDir();
   const repoPath = await makeGitRepo('git@github.com:example/mcp-repo.git');
@@ -13114,6 +13708,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'auto_promote_memory_candidates',
       'begin_session',
       'bootstrap_context',
+      'cancel_job',
       'correct_memory',
       'db_info',
       'deactivate_memory',
@@ -13121,6 +13716,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'distill_checkpoint',
       'distill_usage',
       'expand_memory_cluster',
+      'get_job',
       'get_memory',
       'get_runtime_settings',
       'get_session_working_context',
@@ -13130,6 +13726,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'list_due_consolidations',
       'list_due_distill_sessions',
       'list_embedding_jobs',
+      'list_jobs',
       'list_llm_usage_events',
       'list_memory_candidates',
       'list_memory_events',
@@ -13141,6 +13738,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'process_consolidations',
       'process_due_distills',
       'process_embedding_jobs',
+      'process_jobs',
       'promote_memory',
       'promote_memory_candidate',
       'prune_raw_events',
@@ -13155,6 +13753,8 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'search',
       'session_status',
       'skip_memory_update_candidate',
+      'submit_audit_job',
+      'submit_distill_job',
       'suggest_memory_promotions',
       'sync_resume_context',
       'upsert_session_working_context',
@@ -13177,6 +13777,16 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.ok(processDueDistillsTool.inputSchema.properties.dryRun);
     assert.ok(processDueDistillsTool.inputSchema.properties.limit);
     assert.ok(processDueDistillsTool.description.includes('catch-up batch'));
+    const submitDistillJobTool = toolList.tools.find((tool) => tool.name === 'submit_distill_job');
+    assert.ok(submitDistillJobTool.inputSchema.properties.idempotencyKey);
+    assert.ok(submitDistillJobTool.description.includes('return immediately'));
+    const submitAuditJobTool = toolList.tools.find((tool) => tool.name === 'submit_audit_job');
+    assert.ok(submitAuditJobTool.description.includes('once per selected candidate'));
+    const processJobsTool = toolList.tools.find((tool) => tool.name === 'process_jobs');
+    assert.ok(processJobsTool.inputSchema.properties.leaseMs);
+    assert.equal(processJobsTool.annotations.readOnlyHint, false);
+    const cancelJobTool = toolList.tools.find((tool) => tool.name === 'cancel_job');
+    assert.ok(cancelJobTool.description.includes('not force-terminated'));
     const listDueConsolidationsTool = toolList.tools.find((tool) => tool.name === 'list_due_consolidations');
     assert.ok(listDueConsolidationsTool.inputSchema.properties.target);
     assert.ok(listDueConsolidationsTool.inputSchema.properties.windowKind);
@@ -13199,6 +13809,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.ok(llmUsageRollupTool.inputSchema.properties.includeEvents);
     const listLlmUsageEventsTool = toolList.tools.find((tool) => tool.name === 'list_llm_usage_events');
     assert.ok(listLlmUsageEventsTool.inputSchema.properties.distillRunId);
+    assert.ok(listLlmUsageEventsTool.inputSchema.properties.jobId);
     assert.ok(listLlmUsageEventsTool.inputSchema.properties.provider);
     const processEmbeddingJobsTool = toolList.tools.find((tool) => tool.name === 'process_embedding_jobs');
     assert.ok(processEmbeddingJobsTool.inputSchema.properties.retryFailed);
@@ -14236,6 +14847,47 @@ test('remote storage mode delegates core calls and preserves scope semantics', a
     assert.equal(info.connection.summary, 'remote-client over http-api to http-server');
     assert.equal(info.connection.server.mode, 'http-server');
     assert.equal(info.connection.server.storageMode, 'project-local');
+  } finally {
+    await remote.close();
+  }
+});
+
+test('remote durable job submission survives the submitting client request', async () => {
+  const dataDir = await makeTempDir();
+  const remote = await startContextForgeServer({
+    port: 0,
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+    },
+  });
+  const remoteEnv = {
+    CONTEXTFORGE_STORAGE_MODE: 'remote',
+    CONTEXTFORGE_REMOTE_URL: remote.url,
+    CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+  };
+  try {
+    const app = createContextForge({ env: remoteEnv, cwd: process.cwd() });
+    const source = { scope: 'repo', scopeKey: 'remote-job-repo', sessionId: 'remote-job-session' };
+    await app.appendRaw({ ...source, role: 'assistant', content: 'Persist this before the client goes away.' });
+
+    const response = await fetch(`${remote.url}/v0/submitDistillJob`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer test-token', 'content-type': 'application/json' },
+      body: JSON.stringify(source),
+    });
+    assert.equal(response.status, 200);
+    const submitted = (await response.json()).result;
+    assert.equal(submitted.status, 'queued');
+
+    const replacementClient = createContextForge({ env: remoteEnv, cwd: process.cwd() });
+    const queued = await replacementClient.getJob({ jobId: submitted.jobId });
+    assert.equal(queued.status, 'queued');
+    const processed = await replacementClient.processJobs({ workerId: 'remote-replacement-worker' });
+    assert.equal(processed.succeeded, 1);
+    const completed = await replacementClient.getJob({ jobId: submitted.jobId });
+    assert.equal(completed.status, 'succeeded');
+    assert.match(completed.result.summaryShort, /^Mock checkpoint/);
   } finally {
     await remote.close();
   }

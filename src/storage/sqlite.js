@@ -5,7 +5,7 @@ import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { secureDataDirectoryPermissions } from './permissions.js';
 
-export const SCHEMA_VERSION = 18;
+export const SCHEMA_VERSION = 19;
 
 export class UnsupportedSchemaVersionError extends Error {
   constructor(existingVersion, supportedVersion) {
@@ -17,6 +17,16 @@ export class UnsupportedSchemaVersionError extends Error {
     this.code = 'CONTEXTFORGE_SCHEMA_TOO_NEW';
     this.existingSchemaVersion = existingVersion;
     this.supportedSchemaVersion = supportedVersion;
+  }
+}
+
+export class OperationJobLeaseLostError extends Error {
+  constructor(jobId) {
+    super(`Operation job lease is no longer owned by this worker: ${jobId}`);
+    this.name = 'OperationJobLeaseLostError';
+    this.code = 'CONTEXTFORGE_JOB_LEASE_LOST';
+    this.retryable = true;
+    this.jobId = jobId;
   }
 }
 
@@ -110,6 +120,7 @@ function hydrateDistillRun(row) {
     scopeKey: row.scope_key,
     sessionId: row.session_id,
     conversationId: row.conversation_id,
+    jobId: row.job_id || null,
     provider: row.provider,
     status: row.status,
     sourceEventCount: row.source_event_count,
@@ -136,6 +147,7 @@ function hydrateLlmUsageEvent(row) {
     distillRunId: row.distill_run_id,
     checkpointId: row.checkpoint_id,
     candidateId: row.candidate_id,
+    jobId: row.job_id || null,
     inputTokens: row.input_tokens,
     cachedInputTokens: row.cached_input_tokens,
     uncachedInputTokens: row.uncached_input_tokens,
@@ -147,6 +159,40 @@ function hydrateLlmUsageEvent(row) {
     startedAt: row.started_at,
     completedAt: row.completed_at,
     elapsedMs: row.elapsed_ms,
+  };
+}
+
+function hydrateOperationJob(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    operation: row.operation,
+    scopeType: row.scope_type,
+    scopeKey: row.scope_key,
+    sessionId: row.session_id,
+    checkpointId: row.checkpoint_id,
+    idempotencyKey: row.idempotency_key,
+    status: row.status,
+    payload: parseJson(row.payload_json, {}),
+    result: parseJson(row.result_json, null),
+    attempts: row.attempts,
+    maxAttempts: row.max_attempts,
+    priority: row.priority,
+    leaseOwner: row.lease_owner,
+    leaseExpiresAt: row.lease_expires_at,
+    error: row.error_message
+      ? {
+          name: row.error_name || 'Error',
+          message: row.error_message,
+          code: row.error_code || null,
+          retryable: row.retryable == null ? null : Boolean(row.retryable),
+        }
+      : null,
+    metadata: parseJson(row.metadata_json, {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
   };
 }
 
@@ -545,6 +591,7 @@ const SCOPE_MIGRATION_TABLES = [
   'raw_events',
   'checkpoints',
   'distill_runs',
+  'operation_jobs',
   'working_summaries',
   'session_working_context',
   'memory_candidate_index',
@@ -699,12 +746,41 @@ export class ContextForgeStore {
         created_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS operation_jobs (
+        id TEXT PRIMARY KEY,
+        operation TEXT NOT NULL CHECK (operation IN ('distill_checkpoint', 'audit_memory_candidates')),
+        scope_type TEXT NOT NULL CHECK (scope_type IN ('shared', 'repo', 'local')),
+        scope_key TEXT NOT NULL,
+        session_id TEXT,
+        checkpoint_id TEXT,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
+        payload_json TEXT NOT NULL DEFAULT '{}',
+        result_json TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+        max_attempts INTEGER NOT NULL DEFAULT 3 CHECK (max_attempts > 0),
+        priority INTEGER NOT NULL DEFAULT 0,
+        lease_owner TEXT,
+        lease_expires_at TEXT,
+        error_name TEXT,
+        error_message TEXT,
+        error_code TEXT,
+        retryable INTEGER CHECK (retryable IN (0, 1)),
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        started_at TEXT,
+        completed_at TEXT,
+        FOREIGN KEY (checkpoint_id) REFERENCES checkpoints(id) ON DELETE SET NULL
+      );
+
       CREATE TABLE IF NOT EXISTS distill_runs (
         id TEXT PRIMARY KEY,
         scope_type TEXT NOT NULL CHECK (scope_type IN ('shared', 'repo', 'local')),
         scope_key TEXT NOT NULL,
         session_id TEXT NOT NULL,
         conversation_id TEXT,
+        job_id TEXT,
         provider TEXT NOT NULL,
         status TEXT NOT NULL CHECK (status IN ('started', 'succeeded', 'failed')),
         source_event_count INTEGER NOT NULL DEFAULT 0,
@@ -728,6 +804,7 @@ export class ContextForgeStore {
         distill_run_id TEXT,
         checkpoint_id TEXT,
         candidate_id TEXT,
+        job_id TEXT,
         input_tokens INTEGER,
         cached_input_tokens INTEGER,
         uncached_input_tokens INTEGER,
@@ -972,6 +1049,12 @@ export class ContextForgeStore {
         ON checkpoints(scope_type, scope_key, session_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_distill_runs_session
         ON distill_runs(scope_type, scope_key, session_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_operation_jobs_status
+        ON operation_jobs(status, priority DESC, created_at);
+      CREATE INDEX IF NOT EXISTS idx_operation_jobs_scope
+        ON operation_jobs(scope_type, scope_key, status, created_at);
+      CREATE INDEX IF NOT EXISTS idx_operation_jobs_session
+        ON operation_jobs(scope_type, scope_key, session_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_llm_usage_events_scope
         ON llm_usage_events(scope_type, scope_key, started_at);
       CREATE INDEX IF NOT EXISTS idx_llm_usage_events_session
@@ -1023,6 +1106,17 @@ export class ContextForgeStore {
     this.ensureColumn('checkpoints', 'source', "TEXT NOT NULL DEFAULT 'distill'");
     this.ensureColumn('checkpoints', 'source_ref', 'TEXT');
     this.ensureColumn('checkpoints', 'metadata_json', "TEXT NOT NULL DEFAULT '{}'");
+    this.ensureColumn('distill_runs', 'job_id', 'TEXT');
+    this.ensureColumn('llm_usage_events', 'job_id', 'TEXT');
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_distill_runs_job
+        ON distill_runs(job_id);
+      CREATE INDEX IF NOT EXISTS idx_llm_usage_events_job
+        ON llm_usage_events(job_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_checkpoints_operation_job
+        ON checkpoints(json_extract(metadata_json, '$.operationJobId'))
+        WHERE json_extract(metadata_json, '$.operationJobId') IS NOT NULL;
+    `);
     this.ensureColumn('memories', 'status', "TEXT NOT NULL DEFAULT 'active'");
     this.ensureColumn('memories', 'supersedes_memory_id', 'TEXT');
     this.ensureColumn('memories', 'deactivated_at', 'TEXT');
@@ -1078,6 +1172,7 @@ export class ContextForgeStore {
         rawEvents: count('raw_events'),
         checkpoints: count('checkpoints'),
         distillRuns: count('distill_runs'),
+        operationJobs: count('operation_jobs'),
         llmUsageEvents: count('llm_usage_events'),
         runtimeSettings: count('runtime_settings'),
         workingSummaries: count('working_summaries'),
@@ -2543,6 +2638,27 @@ export class ContextForgeStore {
       .map(hydrateRawEvent);
   }
 
+  getRawEventFingerprint({ scopeType, scopeKey, sessionId }) {
+    const row = this.db
+      .prepare(`
+        SELECT
+          COUNT(*) AS raw_event_count,
+          (
+            SELECT id FROM raw_events
+            WHERE scope_type = ? AND scope_key = ? AND session_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+          ) AS last_raw_event_id
+        FROM raw_events
+        WHERE scope_type = ? AND scope_key = ? AND session_id = ?
+      `)
+      .get(scopeType, scopeKey, sessionId, scopeType, scopeKey, sessionId);
+    return {
+      rawEventCount: Number(row?.raw_event_count || 0),
+      lastRawEventId: row?.last_raw_event_id || null,
+    };
+  }
+
   listRecentRawEvents({ scopeType, scopeKey, sessionId, limit = 5 }) {
     const parsedLimit = Number(limit);
     if (!Number.isInteger(parsedLimit) || parsedLimit <= 0) {
@@ -3467,11 +3583,386 @@ export class ContextForgeStore {
     return checkpoint;
   }
 
+  enqueueOperationJob({
+    operation,
+    scopeType,
+    scopeKey,
+    sessionId = null,
+    checkpointId = null,
+    idempotencyKey,
+    payload = {},
+    maxAttempts = 3,
+    priority = 0,
+    metadata = {},
+    retryFailed = false,
+  }) {
+    const timestamp = nowIso();
+    const inserted = this.db
+      .prepare(`
+        INSERT INTO operation_jobs (
+          id, operation, scope_type, scope_key, session_id, checkpoint_id,
+          idempotency_key, status, payload_json, max_attempts, priority,
+          metadata_json, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(idempotency_key) DO NOTHING
+        RETURNING *
+      `)
+      .get(
+        randomUUID(),
+        operation,
+        scopeType,
+        scopeKey,
+        sessionId,
+        checkpointId,
+        idempotencyKey,
+        json(payload, {}),
+        Number(maxAttempts),
+        Number(priority),
+        json(metadata, {}),
+        timestamp,
+        timestamp,
+      );
+    if (inserted) {
+      return { job: hydrateOperationJob(inserted), deduplicated: false, requeued: false };
+    }
+
+    const existing = this.getOperationJobByIdempotencyKey(idempotencyKey);
+    if (
+      retryFailed &&
+      existing &&
+      ['failed', 'cancelled'].includes(existing.status) &&
+      existing.attempts < existing.maxAttempts &&
+      (existing.status === 'cancelled' || existing.error?.retryable === true)
+    ) {
+      const row = this.db
+        .prepare(`
+          UPDATE operation_jobs
+          SET status = 'queued',
+              result_json = NULL,
+              lease_owner = NULL,
+              lease_expires_at = NULL,
+              error_name = NULL,
+              error_message = NULL,
+              error_code = NULL,
+              retryable = NULL,
+              updated_at = ?,
+              started_at = NULL,
+              completed_at = NULL
+          WHERE id = ?
+          RETURNING *
+        `)
+        .get(timestamp, existing.id);
+      return { job: hydrateOperationJob(row), deduplicated: true, requeued: true };
+    }
+    return { job: existing, deduplicated: true, requeued: false };
+  }
+
+  getOperationJob({ jobId, scopeType = null, scopeKey = null }) {
+    const filters = ['id = ?'];
+    const values = [jobId];
+    if (scopeType) {
+      filters.push('scope_type = ?');
+      values.push(scopeType);
+    }
+    if (scopeKey) {
+      filters.push('scope_key = ?');
+      values.push(scopeKey);
+    }
+    return hydrateOperationJob(
+      this.db.prepare(`SELECT * FROM operation_jobs WHERE ${filters.join(' AND ')}`).get(...values),
+    );
+  }
+
+  getOperationJobByIdempotencyKey(idempotencyKey) {
+    return hydrateOperationJob(
+      this.db.prepare('SELECT * FROM operation_jobs WHERE idempotency_key = ?').get(idempotencyKey),
+    );
+  }
+
+  listOperationJobs({
+    scopeType = null,
+    scopeKey = null,
+    operation = null,
+    status = null,
+    sessionId = null,
+    checkpointId = null,
+    limit = 100,
+    order = 'desc',
+  } = {}) {
+    const filters = [];
+    const values = [];
+    for (const [column, value] of [
+      ['scope_type', scopeType],
+      ['scope_key', scopeKey],
+      ['operation', operation],
+      ['status', status],
+      ['session_id', sessionId],
+      ['checkpoint_id', checkpointId],
+    ]) {
+      if (value) {
+        filters.push(`${column} = ?`);
+        values.push(value);
+      }
+    }
+    const parsedLimit = Math.min(500, Math.max(1, Number(limit) || 100));
+    values.push(parsedLimit);
+    const direction = order === 'asc' ? 'ASC' : 'DESC';
+    const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+    return this.db
+      .prepare(`
+        SELECT * FROM operation_jobs
+        ${where}
+        ORDER BY created_at ${direction}, id ${direction}
+        LIMIT ?
+      `)
+      .all(...values)
+      .map(hydrateOperationJob);
+  }
+
+  recoverExpiredOperationJobs({ now = nowIso() } = {}) {
+    const expired = this.db
+      .prepare(`
+        SELECT * FROM operation_jobs
+        WHERE status = 'running'
+          AND lease_expires_at IS NOT NULL
+          AND lease_expires_at <= ?
+        ORDER BY lease_expires_at ASC, id ASC
+      `)
+      .all(now);
+    const recovered = [];
+    for (const row of expired) {
+      const exhausted = Number(row.attempts) >= Number(row.max_attempts);
+      const updated = this.db
+        .prepare(`
+          UPDATE operation_jobs
+          SET status = ?,
+              lease_owner = NULL,
+              lease_expires_at = NULL,
+              error_name = 'JobLeaseExpiredError',
+              error_message = 'Operation job lease expired before completion.',
+              error_code = 'CONTEXTFORGE_JOB_LEASE_EXPIRED',
+              retryable = ?,
+              updated_at = ?,
+              completed_at = ?
+          WHERE id = ? AND status = 'running'
+          RETURNING *
+        `)
+        .get(exhausted ? 'failed' : 'queued', exhausted ? 0 : 1, now, exhausted ? now : null, row.id);
+      if (updated) recovered.push(hydrateOperationJob(updated));
+    }
+    return recovered;
+  }
+
+  claimOperationJobs({ workerId, limit = 1, leaseMs = 300000, operations = null, now = new Date() }) {
+    const nowText = now.toISOString();
+    this.recoverExpiredOperationJobs({ now: nowText });
+    const operationList = Array.isArray(operations) ? operations.filter(Boolean) : [];
+    const filters = ["status = 'queued'"];
+    const values = [];
+    if (operationList.length > 0) {
+      filters.push(`operation IN (${operationList.map(() => '?').join(', ')})`);
+      values.push(...operationList);
+    }
+    const parsedLimit = Math.min(25, Math.max(1, Number(limit) || 1));
+    values.push(parsedLimit);
+    const candidates = this.db
+      .prepare(`
+        SELECT id FROM operation_jobs
+        WHERE ${filters.join(' AND ')}
+        ORDER BY priority DESC, created_at ASC, id ASC
+        LIMIT ?
+      `)
+      .all(...values);
+    const leaseExpiresAt = new Date(now.getTime() + Number(leaseMs)).toISOString();
+    const claimed = [];
+    for (const candidate of candidates) {
+      const row = this.db
+        .prepare(`
+          UPDATE operation_jobs
+          SET status = 'running',
+              attempts = attempts + 1,
+              lease_owner = ?,
+              lease_expires_at = ?,
+              error_name = NULL,
+              error_message = NULL,
+              error_code = NULL,
+              retryable = NULL,
+              result_json = NULL,
+              updated_at = ?,
+              started_at = COALESCE(started_at, ?),
+              completed_at = NULL
+          WHERE id = ? AND status = 'queued'
+          RETURNING *
+        `)
+        .get(workerId, leaseExpiresAt, nowText, nowText, candidate.id);
+      if (row) claimed.push(hydrateOperationJob(row));
+    }
+    return claimed;
+  }
+
+  completeOperationJob({ jobId, workerId, attempt, checkpointId = null, result = {}, metadata = {} }) {
+    const timestamp = nowIso();
+    const row = this.db
+      .prepare(`
+        UPDATE operation_jobs
+        SET status = 'succeeded',
+            checkpoint_id = COALESCE(?, checkpoint_id),
+            result_json = ?,
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            error_name = NULL,
+            error_message = NULL,
+            error_code = NULL,
+            retryable = NULL,
+            metadata_json = ?,
+            updated_at = ?,
+            completed_at = ?
+        WHERE id = ?
+          AND status = 'running'
+          AND lease_owner = ?
+          AND attempts = ?
+          AND lease_expires_at > ?
+        RETURNING *
+      `)
+      .get(
+        checkpointId,
+        json(result, {}),
+        json(metadata, {}),
+        timestamp,
+        timestamp,
+        jobId,
+        workerId,
+        Number(attempt),
+        timestamp,
+      );
+    if (!row) throw new Error(`Running operation job lease not found: ${jobId}`);
+    return hydrateOperationJob(row);
+  }
+
+  extendOperationJobLease({ jobId, workerId, attempt, leaseMs, now = new Date() }) {
+    const nowText = now.toISOString();
+    const leaseExpiresAt = new Date(now.getTime() + Number(leaseMs)).toISOString();
+    return hydrateOperationJob(
+      this.db
+        .prepare(`
+          UPDATE operation_jobs
+          SET lease_expires_at = ?, updated_at = ?
+          WHERE id = ?
+            AND status = 'running'
+            AND lease_owner = ?
+            AND attempts = ?
+            AND lease_expires_at > ?
+          RETURNING *
+        `)
+        .get(leaseExpiresAt, nowText, jobId, workerId, Number(attempt), nowText),
+    );
+  }
+
+  assertOperationJobLease({ jobId, workerId, attempt, now = new Date() }) {
+    const row = this.db
+      .prepare(`
+        SELECT * FROM operation_jobs
+        WHERE id = ?
+          AND status = 'running'
+          AND lease_owner = ?
+          AND attempts = ?
+          AND lease_expires_at > ?
+      `)
+      .get(jobId, workerId, Number(attempt), now.toISOString());
+    if (!row) throw new OperationJobLeaseLostError(jobId);
+    return hydrateOperationJob(row);
+  }
+
+  insertCheckpointForOperationJob(input, { jobId, workerId, attempt }) {
+    if (input?.metadata?.operationJobId !== jobId) {
+      throw new Error('Checkpoint operationJobId must match the claimed job id.');
+    }
+    return this.withTransaction(() => {
+      this.assertOperationJobLease({ jobId, workerId, attempt });
+      return this.insertCheckpoint(input);
+    });
+  }
+
+  failOperationJob({ jobId, workerId, attempt, error, retryable = false, result = {}, metadata = {} }) {
+    const timestamp = nowIso();
+    const row = this.db
+      .prepare(`
+        UPDATE operation_jobs
+        SET status = CASE WHEN ? = 1 AND attempts < max_attempts THEN 'queued' ELSE 'failed' END,
+            result_json = ?,
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            error_name = ?,
+            error_message = ?,
+            error_code = ?,
+            retryable = ?,
+            metadata_json = ?,
+            updated_at = ?,
+            completed_at = CASE WHEN ? = 1 AND attempts < max_attempts THEN NULL ELSE ? END
+        WHERE id = ?
+          AND status = 'running'
+          AND lease_owner = ?
+          AND attempts = ?
+          AND lease_expires_at > ?
+        RETURNING *
+      `)
+      .get(
+        retryable ? 1 : 0,
+        json(result, {}),
+        error?.name || 'Error',
+        error?.message || String(error),
+        error?.code || null,
+        retryable ? 1 : 0,
+        json(metadata, {}),
+        timestamp,
+        retryable ? 1 : 0,
+        timestamp,
+        jobId,
+        workerId,
+        Number(attempt),
+        timestamp,
+      );
+    if (!row) throw new Error(`Running operation job lease not found: ${jobId}`);
+    return hydrateOperationJob(row);
+  }
+
+  cancelOperationJob({ jobId, scopeType = null, scopeKey = null, reason = null }) {
+    const existing = this.getOperationJob({ jobId, scopeType, scopeKey });
+    if (!existing) return { job: null, cancelled: false, reason: 'not_found' };
+    if (existing.status !== 'queued') {
+      return {
+        job: existing,
+        cancelled: false,
+        reason: existing.status === 'running' ? 'running_not_interruptible' : `already_${existing.status}`,
+      };
+    }
+    const timestamp = nowIso();
+    const row = this.db
+      .prepare(`
+        UPDATE operation_jobs
+        SET status = 'cancelled',
+            error_name = 'JobCancelledError',
+            error_message = ?,
+            error_code = 'CONTEXTFORGE_JOB_CANCELLED',
+            retryable = 0,
+            updated_at = ?,
+            completed_at = ?
+        WHERE id = ? AND status = 'queued'
+        RETURNING *
+      `)
+      .get(reason || 'Operation job was cancelled before execution.', timestamp, timestamp, jobId);
+    return row
+      ? { job: hydrateOperationJob(row), cancelled: true, reason: 'cancelled_before_execution' }
+      : { job: this.getOperationJob({ jobId, scopeType, scopeKey }), cancelled: false, reason: 'claim_race' };
+  }
+
   startDistillRun({
     scopeType,
     scopeKey,
     sessionId,
     conversationId = null,
+    jobId = null,
     provider,
     sourceEventCount = 0,
     inputMetadata = {},
@@ -3479,10 +3970,10 @@ export class ContextForgeStore {
     const row = this.db
       .prepare(`
         INSERT INTO distill_runs (
-          id, scope_type, scope_key, session_id, conversation_id, provider,
+          id, scope_type, scope_key, session_id, conversation_id, job_id, provider,
           status, source_event_count, input_metadata_json, created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, 'started', ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'started', ?, ?, ?)
         RETURNING *
       `)
       .get(
@@ -3491,6 +3982,7 @@ export class ContextForgeStore {
         scopeKey,
         sessionId,
         conversationId,
+        jobId,
         provider,
         Number(sourceEventCount),
         json(inputMetadata, {}),
@@ -3505,12 +3997,42 @@ export class ContextForgeStore {
         UPDATE distill_runs
         SET status = 'succeeded',
             output_metadata_json = ?,
+            error_message = NULL,
+            error_stack = NULL,
             completed_at = ?
         WHERE id = ?
         RETURNING *
       `)
       .get(json(outputMetadata, {}), nowIso(), id);
     return hydrateDistillRun(row);
+  }
+
+  getLatestDistillRunByJobId(jobId) {
+    return hydrateDistillRun(
+      this.db
+        .prepare(`
+          SELECT * FROM distill_runs
+          WHERE job_id = ?
+          ORDER BY created_at DESC, id DESC
+          LIMIT 1
+        `)
+        .get(jobId),
+    );
+  }
+
+  findCheckpointByJobId({ scopeType, scopeKey, jobId }) {
+    return hydrateCheckpoint(
+      this.db
+        .prepare(`
+          SELECT * FROM checkpoints
+          WHERE scope_type = ?
+            AND scope_key = ?
+            AND json_extract(metadata_json, '$.operationJobId') = ?
+          ORDER BY created_at DESC, id DESC
+          LIMIT 1
+        `)
+        .get(scopeType, scopeKey, jobId),
+    );
   }
 
   failDistillRun({ id, error, outputMetadata = {} }) {
@@ -3546,6 +4068,7 @@ export class ContextForgeStore {
     distillRunId = null,
     checkpointId = null,
     candidateId = null,
+    jobId = null,
     inputTokens = null,
     cachedInputTokens = null,
     uncachedInputTokens = null,
@@ -3565,12 +4088,12 @@ export class ContextForgeStore {
       .prepare(`
         INSERT INTO llm_usage_events (
           id, scope_type, scope_key, operation, provider, model, status,
-          session_id, distill_run_id, checkpoint_id, candidate_id,
+          session_id, distill_run_id, checkpoint_id, candidate_id, job_id,
           input_tokens, cached_input_tokens, uncached_input_tokens,
           output_tokens, reasoning_tokens, total_tokens, usage_json,
           estimated, started_at, completed_at, elapsed_ms
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         RETURNING *
       `)
       .get(
@@ -3585,6 +4108,7 @@ export class ContextForgeStore {
         distillRunId,
         checkpointId,
         candidateId,
+        jobId,
         inputTokens == null ? null : Number(inputTokens),
         cachedInputTokens == null ? null : Number(cachedInputTokens),
         uncachedInputTokens == null ? null : Number(uncachedInputTokens),
@@ -3607,6 +4131,7 @@ export class ContextForgeStore {
     distillRunId = null,
     checkpointId = null,
     candidateId = null,
+    jobId = null,
     operation = null,
     provider = null,
     limit = null,
@@ -3629,6 +4154,10 @@ export class ContextForgeStore {
     if (candidateId) {
       filters.push('candidate_id = ?');
       values.push(candidateId);
+    }
+    if (jobId) {
+      filters.push('job_id = ?');
+      values.push(jobId);
     }
     if (operation) {
       filters.push('operation = ?');

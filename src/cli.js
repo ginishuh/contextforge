@@ -127,9 +127,21 @@ function toCoreOptions(options) {
     sharedScopeKey: options.sharedScopeKey,
     includeProvenance: options.includeProvenance === true || options.includeProvenance === 'true',
     sessionId: options.sessionId,
+    jobId: options.jobId,
+    workerId: options.workerId,
+    idempotencyKey: options.idempotencyKey,
+    submittedBy: options.submittedBy,
     conversationId: options.conversationId,
     role: options.role,
     priority: options.priority == null ? undefined : Number(options.priority),
+    maxAttempts: options.maxAttempts == null ? undefined : Number(options.maxAttempts),
+    leaseMs: options.leaseMs == null ? undefined : Number(options.leaseMs),
+    operations: options.operations
+      ? String(options.operations)
+          .split(',')
+          .map((item) => item.trim())
+          .filter(Boolean)
+      : undefined,
     provider: options.provider,
     metadata,
     sourceCheckpointId: options.sourceCheckpointId,
@@ -291,6 +303,13 @@ async function main() {
     doctorCodexExec: (app, coreOptions) => app.checkCodexExec(coreOptions),
     beginSession: (app, coreOptions) => app.beginSession(coreOptions),
     sessionStatus: (app, coreOptions) => app.sessionStatus(coreOptions),
+    submitDistillJob: (app, coreOptions) => app.submitDistillJob(coreOptions),
+    submitAuditJob: (app, coreOptions) => app.submitAuditJob(coreOptions),
+    getJob: (app, coreOptions) => app.getJob(coreOptions),
+    listJobs: (app, coreOptions) => app.listJobs(coreOptions),
+    processJobs: (app, coreOptions, rawOptions) =>
+      app.processJobs(preserveCoreLimitDefault(coreOptions, rawOptions)),
+    cancelJob: (app, coreOptions) => app.cancelJob(coreOptions),
     listDueDistillSessions: (app, coreOptions, rawOptions) =>
       app.listDueDistillSessions(preserveCoreLimitDefault(coreOptions, rawOptions)),
     processDueDistills: (app, coreOptions, rawOptions) =>

@@ -25,6 +25,12 @@ const REMOTE_METHODS = [
   'checkCodexExec',
   'beginSession',
   'sessionStatus',
+  'submitDistillJob',
+  'submitAuditJob',
+  'getJob',
+  'listJobs',
+  'processJobs',
+  'cancelJob',
   'listDueDistillSessions',
   'processDueDistills',
   'listDueConsolidations',
@@ -88,9 +94,16 @@ const UNSCOPED_REMOTE_METHODS = new Set([
   'listScopeKeys',
   'listRecentDistillRuns',
   'pruneRawEvents',
+  'processJobs',
 ]);
 
-const OPTIONALLY_SCOPED_REMOTE_METHODS = new Set(['listDueDistillSessions', 'processDueDistills']);
+const OPTIONALLY_SCOPED_REMOTE_METHODS = new Set([
+  'getJob',
+  'listJobs',
+  'cancelJob',
+  'listDueDistillSessions',
+  'processDueDistills',
+]);
 
 const LONG_RUNNING_PROVIDER_METHODS = new Set([
   'agentCloseout',
@@ -99,6 +112,7 @@ const LONG_RUNNING_PROVIDER_METHODS = new Set([
   'distillCheckpoint',
   'processConsolidations',
   'processDueDistills',
+  'processJobs',
 ]);
 
 function remoteUrl(baseUrl, method) {

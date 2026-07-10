@@ -235,6 +235,25 @@ can preserve work status, live-state observations, changes, verification,
 risks, and next actions. Do not promote structured live state directly into
 durable memory unless it is stable, reviewed, and no cheaper live source exists.
 
+For distill or candidate-audit provider work that must survive a client
+disconnect or server restart:
+
+1. Submit with `submit_distill_job` or `submit_audit_job` and keep the returned
+   `jobId`.
+2. Poll with `get_job`; use `list_jobs` for bounded operator inspection.
+3. A server-side operator must run `process_jobs`. Submission does not execute
+   the provider inside the client request.
+4. Duplicate source-window/policy submissions reuse a job by default. Supply a
+   deliberate `idempotencyKey` only when the caller needs a distinct run.
+5. `cancel_job` guarantees cancellation only while a job is queued. A running
+   provider call returns `running_not_interruptible` and is not force-killed.
+6. Candidate audit jobs still call the provider once per selected candidate;
+   the durable queue is not a true provider batch contract.
+7. Provider execution is at-least-once. Lease-attempt fencing blocks stale
+   checkpoint/audit commits, but a lost lease may already have incurred model
+   cost. After `maxAttempts` exhaustion, review the failure before using a new
+   `idempotencyKey`; `retryFailed` does not reset the budget.
+
 ## Checkpoint Consolidation
 
 Use checkpoint consolidation when a repo or thread has many short checkpoints

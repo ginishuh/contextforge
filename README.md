@@ -1537,6 +1537,36 @@ node src/cli.js processDueDistills --dryRun true --limit 5
 oldest-first batch, defaults to `--limit 5`, and respects the same normal
 distillation thresholds plus the default idle window.
 
+Queue provider work durably when it must outlive the submitting request:
+
+```bash
+node src/cli.js submitDistillJob \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --sessionId demo-session
+
+node src/cli.js processJobs --workerId worker-1 --limit 2
+node src/cli.js getJob --jobId <job-id>
+node src/cli.js listJobs --status failed
+node src/cli.js cancelJob --jobId <queued-job-id>
+```
+
+`submitAuditJob` provides the same durable path for closeout-scoped candidate
+audits and requires `sessionId` or `checkpointId` plus a closeout `trigger`.
+Submissions are idempotent for the same scoped source window and policy unless
+the caller supplies `idempotencyKey`. Workers claim bounded batches, renew
+leases while providers run, recover expired leases after crashes, and retry
+retryable failures up to `maxAttempts`. Queued cancellation is guaranteed;
+running provider calls report `running_not_interruptible` and are not
+force-killed. Candidate audits are still one provider call per selected
+candidate; this API does not claim true provider batching.
+
+Provider execution is at-least-once: a process that loses its lease may already
+have incurred provider cost, but lease-attempt fencing prevents it from
+committing checkpoint or audit side effects. After `maxAttempts` is exhausted,
+submit a deliberately new `idempotencyKey` only after reviewing the terminal
+failure; `retryFailed` does not reset an exhausted attempt budget.
+
 Inspect or create scope/time-window checkpoint consolidation:
 
 ```bash
@@ -1708,6 +1738,12 @@ The MCP server exposes a narrow tool surface over the same core API:
 - `append_raw`
 - `prune_raw_events`
 - `distill_checkpoint`
+- `submit_distill_job`
+- `submit_audit_job`
+- `get_job`
+- `list_jobs`
+- `process_jobs`
+- `cancel_job`
 - `distill_usage`
 - `list_due_distill_sessions`
 - `process_due_distills`
@@ -1912,8 +1948,8 @@ non-zero, times out, or returns malformed JSON, ContextForge records a failed
 Provider failures record whether they are retryable. Same-session concurrent
 distill retries share one in-flight run, and candidate audit retries are
 serialized by closeout source so one provider result produces one metadata
-write. These guards are process-local; durable cross-restart jobs belong to the
-separate async job model.
+write. These fast-path guards are process-local. For work that must survive a
+client disconnect or server restart, use the durable operation-job API below.
 
 Remote long-running calls send their client timeout to the canonical server.
 When a configured provider timeout is not shorter than that client timeout,

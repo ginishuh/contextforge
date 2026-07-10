@@ -40,6 +40,74 @@ function executionKey(...parts) {
   return parts.map((part) => JSON.stringify(part == null ? null : String(part))).join(':');
 }
 
+function stableJsonValue(value) {
+  if (Array.isArray(value)) return value.map(stableJsonValue);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, stableJsonValue(value[key])]),
+  );
+}
+
+function operationJobIdempotencyKey(operation, identity) {
+  return `${operation}:${createHash('sha256').update(JSON.stringify(stableJsonValue(identity))).digest('hex')}`;
+}
+
+function publicJobPayload(options, scope, allowedKeys) {
+  const payload = Object.fromEntries(
+    allowedKeys
+      .filter((key) => options?.[key] !== undefined)
+      .map((key) => [key, options[key]]),
+  );
+  return {
+    ...payload,
+    scope: scope.scopeType,
+    scopeType: scope.scopeType,
+    scopeKey: scope.scopeKey,
+  };
+}
+
+function operationJobCheckpointId(operation, result) {
+  if (operation === 'distill_checkpoint') return result?.id || null;
+  if (operation === 'audit_memory_candidates') return result?.source?.checkpointId || null;
+  return null;
+}
+
+function operationJobResultSummary(operation, result) {
+  if (operation === 'distill_checkpoint') {
+    return {
+      kind: result?.kind || 'checkpoint',
+      checkpointId: result?.id || null,
+      sessionId: result?.sessionId || null,
+      summaryShort: result?.summaryShort || null,
+      memoryCandidateCount:
+        result?.memoryCandidateCount ??
+        (Array.isArray(result?.metadata?.memoryCandidates) ? result.metadata.memoryCandidates.length : null),
+      provider: result?.provider || null,
+      candidateAudit: result?.candidateAudit || null,
+    };
+  }
+  return {
+    kind: result?.kind || 'memory_candidate_audit_suggestions',
+    source: result?.source || null,
+    proposalCount: Array.isArray(result?.proposals) ? result.proposals.length : 0,
+    skippedCount: Array.isArray(result?.skipped) ? result.skipped.length : 0,
+    audit: result?.policy?.audit || null,
+    requestWarnings: result?.requestWarnings || [],
+  };
+}
+
+function retryableAuditJobError(result, audit = result?.policy?.audit) {
+  const count = Number(audit?.retryableFailureCount || 0);
+  const error = new Error(`Candidate audit job has ${count} retryable provider failure(s).`);
+  error.name = 'RetryableCandidateAuditJobError';
+  error.code = 'CONTEXTFORGE_AUDIT_JOB_RETRYABLE_FAILURE';
+  error.retryable = true;
+  error.operationResult = result;
+  return error;
+}
+
 function migrationScopeOptions(options, prefix, fallbackScope = 'repo') {
   const scopeType = options[`${prefix}ScopeType`] || options[`${prefix}Scope`] || fallbackScope;
   const scopeKey = options[`${prefix}ScopeKey`];
@@ -469,6 +537,7 @@ function recordLlmUsageEvent(store, options) {
     distillRunId: options.distillRunId || null,
     checkpointId: options.checkpointId || null,
     candidateId: options.candidateId || null,
+    jobId: options.jobId || null,
     ...columns,
     usage: usageJson || {},
     estimated: false,
@@ -2696,7 +2765,7 @@ async function auditAutoPromotionCandidate({
 
 function recordCandidateAuditUsageEvent(
   store,
-  { scope, item, audit, sessionId = null, checkpointId = null, status = 'succeeded' },
+  { scope, item, audit, sessionId = null, checkpointId = null, jobId = null, status = 'succeeded' },
 ) {
   const metadata = audit?.metadata || {};
   const provider = metadata.provider || 'none';
@@ -2711,6 +2780,7 @@ function recordCandidateAuditUsageEvent(
     distillRunId: item.candidate.source?.distillRunId || null,
     checkpointId: checkpointId || item.candidate.checkpointId || null,
     candidateId: item.candidate.id,
+    jobId,
     metadata,
   });
 }
@@ -4463,6 +4533,346 @@ export function createContextForge(options = {}) {
       });
     },
 
+    submitDistillJob(options = {}) {
+      const scope = normalizeScopeOptions(options, config);
+      requireOption(options.sessionId, 'sessionId');
+      return useStore((store) => {
+        const payload = publicJobPayload(options, scope, [
+          'sessionId',
+          'conversationId',
+          'provider',
+          'maxEvents',
+          'maxChars',
+          'level',
+          'coversFrom',
+          'coversTo',
+          'source',
+          'sourceRef',
+          'auditTrigger',
+        ]);
+        const rawFingerprint = store.getRawEventFingerprint({ ...scope, sessionId: options.sessionId });
+        const latestCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId, level: 0 });
+        const sourceFingerprint = {
+          ...rawFingerprint,
+          latestCheckpointId: latestCheckpoint?.id || null,
+        };
+        const idempotencyKey =
+          options.idempotencyKey
+            ? operationJobIdempotencyKey('distill_checkpoint', {
+                scope,
+                providedKey: options.idempotencyKey,
+              })
+            : operationJobIdempotencyKey('distill_checkpoint', {
+                scope,
+                sessionId: options.sessionId,
+                sourceFingerprint,
+                policy: payload,
+              });
+        const maxAttempts = positiveInteger(options.maxAttempts == null ? 3 : options.maxAttempts, 'maxAttempts');
+        const priority = Number(options.priority || 0);
+        if (!Number.isInteger(priority)) throw new Error('priority must be an integer.');
+        const queued = store.enqueueOperationJob({
+          operation: 'distill_checkpoint',
+          ...scope,
+          sessionId: options.sessionId,
+          idempotencyKey,
+          payload,
+          maxAttempts,
+          priority,
+          retryFailed: truthyOption(options.retryFailed),
+          metadata: {
+            submittedBy: options.submittedBy || 'api',
+            sourceFingerprint,
+            executionMode: 'durable_worker',
+          },
+        });
+        return {
+          kind: 'operation_job_submission',
+          operation: 'distill_checkpoint',
+          jobId: queued.job.id,
+          status: queued.job.status,
+          deduplicated: queued.deduplicated,
+          requeued: queued.requeued,
+          job: queued.job,
+        };
+      });
+    },
+
+    submitAuditJob(options = {}) {
+      const scope = normalizeScopeOptions(options, config);
+      if (!options.sessionId && !options.checkpointId) {
+        throw new Error('submitAuditJob requires sessionId or checkpointId.');
+      }
+      if (!CLOSEOUT_TRIGGERS.has(options.trigger)) {
+        throw new Error('trigger must be a closeout trigger.');
+      }
+      return useStore((store) => {
+        const payload = publicJobPayload(options, scope, [
+          'sessionId',
+          'checkpointId',
+          'trigger',
+          'limit',
+          'scanLimit',
+          'minConfidence',
+          'minStability',
+          'allowedCategories',
+          'promotionRecommendation',
+          'force',
+        ]);
+        const scanLimit = positiveInteger(options.scanLimit == null ? 50 : options.scanLimit, 'scanLimit');
+        let canonicalCheckpoint = null;
+        if (options.checkpointId) {
+          canonicalCheckpoint = store.getCheckpointById({ ...scope, checkpointId: options.checkpointId });
+          if (!canonicalCheckpoint) throw new Error(`Checkpoint not found: ${options.checkpointId}`);
+          if (options.sessionId && canonicalCheckpoint.sessionId !== options.sessionId) {
+            throw new Error('sessionId does not match the supplied checkpointId.');
+          }
+        } else if (options.sessionId) {
+          canonicalCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId, level: 0 });
+        }
+        if (canonicalCheckpoint) {
+          payload.sessionId = canonicalCheckpoint.sessionId;
+          payload.checkpointId = canonicalCheckpoint.id;
+        }
+        const pendingCandidates = store.listMemoryCandidates({
+          ...scope,
+          sessionId: canonicalCheckpoint ? null : options.sessionId || null,
+          checkpointId: canonicalCheckpoint?.id || null,
+          status: 'pending',
+          sort: 'recommendation',
+          limit: scanLimit,
+        });
+        const sourceFingerprint = {
+          candidateIds: pendingCandidates.map((candidate) => candidate.id),
+        };
+        const {
+          scope: _scope,
+          scopeType: _scopeType,
+          scopeKey: _scopeKey,
+          sessionId: _sessionId,
+          checkpointId: _checkpointId,
+          ...policyPayload
+        } = payload;
+        const canonicalSource = canonicalCheckpoint
+          ? { checkpointId: canonicalCheckpoint.id }
+          : { sessionId: options.sessionId || null };
+        const idempotencyKey =
+          options.idempotencyKey
+            ? operationJobIdempotencyKey('audit_memory_candidates', {
+                scope,
+                providedKey: options.idempotencyKey,
+              })
+            : operationJobIdempotencyKey('audit_memory_candidates', {
+                scope,
+                source: canonicalSource,
+                sourceFingerprint,
+                policy: policyPayload,
+              });
+        const maxAttempts = positiveInteger(options.maxAttempts == null ? 3 : options.maxAttempts, 'maxAttempts');
+        const priority = Number(options.priority || 0);
+        if (!Number.isInteger(priority)) throw new Error('priority must be an integer.');
+        const queued = store.enqueueOperationJob({
+          operation: 'audit_memory_candidates',
+          ...scope,
+          sessionId: canonicalCheckpoint?.sessionId || options.sessionId || null,
+          checkpointId: canonicalCheckpoint?.id || null,
+          idempotencyKey,
+          payload,
+          maxAttempts,
+          priority,
+          retryFailed: truthyOption(options.retryFailed),
+          metadata: {
+            submittedBy: options.submittedBy || 'api',
+            sourceFingerprint,
+            executionMode: 'durable_worker',
+            providerBatchMode: 'per_candidate',
+          },
+        });
+        return {
+          kind: 'operation_job_submission',
+          operation: 'audit_memory_candidates',
+          jobId: queued.job.id,
+          status: queued.job.status,
+          deduplicated: queued.deduplicated,
+          requeued: queued.requeued,
+          job: queued.job,
+        };
+      });
+    },
+
+    getJob(options = {}) {
+      requireOption(options.jobId, 'jobId');
+      const shouldNarrowScope = Boolean(options.scope || options.scopeType || options.scopeKey || options.cwd || options.repoPath);
+      const scope = shouldNarrowScope ? normalizeScopeOptions(options, config) : null;
+      return useStore((store) => {
+        const job = store.getOperationJob({
+          jobId: options.jobId,
+          scopeType: scope?.scopeType || null,
+          scopeKey: scope?.scopeKey || null,
+        });
+        if (!job) throw new Error(`Operation job not found: ${options.jobId}`);
+        return job;
+      });
+    },
+
+    listJobs(options = {}) {
+      const shouldNarrowScope = Boolean(options.scope || options.scopeType || options.scopeKey || options.cwd || options.repoPath);
+      const scope = shouldNarrowScope ? normalizeScopeOptions(options, config) : null;
+      return useStore((store) =>
+        store.listOperationJobs({
+          scopeType: scope?.scopeType || null,
+          scopeKey: scope?.scopeKey || null,
+          operation: options.operation || null,
+          status: options.status || null,
+          sessionId: options.sessionId || null,
+          checkpointId: options.checkpointId || null,
+          limit: options.limit == null ? 100 : Number(options.limit),
+          order: options.order || 'desc',
+        }),
+      );
+    },
+
+    cancelJob(options = {}) {
+      requireOption(options.jobId, 'jobId');
+      const shouldNarrowScope = Boolean(options.scope || options.scopeType || options.scopeKey || options.cwd || options.repoPath);
+      const scope = shouldNarrowScope ? normalizeScopeOptions(options, config) : null;
+      return useStore((store) =>
+        store.cancelOperationJob({
+          jobId: options.jobId,
+          scopeType: scope?.scopeType || null,
+          scopeKey: scope?.scopeKey || null,
+          reason: options.reason || null,
+        }),
+      );
+    },
+
+    async processJobs(options = {}) {
+      const limit = Math.min(25, positiveInteger(options.limit == null ? 1 : options.limit, 'limit'));
+      const leaseMs = positiveInteger(options.leaseMs == null ? 300000 : options.leaseMs, 'leaseMs');
+      if (leaseMs < 1000) throw new Error('leaseMs must be at least 1000ms.');
+      const workerId = options.workerId || `worker:${process.pid}:${randomUUID()}`;
+      const operations = options.operation
+        ? [options.operation]
+        : Array.isArray(options.operations)
+          ? options.operations
+          : null;
+      const allowedOperations = new Set(['distill_checkpoint', 'audit_memory_candidates']);
+      if (operations?.some((operation) => !allowedOperations.has(operation))) {
+        throw new Error('operation must be distill_checkpoint or audit_memory_candidates.');
+      }
+      const claimed = useStore((store) =>
+        store.claimOperationJobs({ workerId, limit, leaseMs, operations }),
+      );
+      const result = {
+        kind: 'operation_job_batch',
+        workerId,
+        leaseMs,
+        claimed: claimed.length,
+        succeeded: 0,
+        failed: 0,
+        requeued: 0,
+        jobs: [],
+      };
+      const processed = await Promise.all(claimed.map(async (job) => {
+        const heartbeatMs = Math.max(250, Math.min(30000, Math.floor(leaseMs / 3)));
+        const heartbeat = setInterval(() => {
+          try {
+            useStore((store) =>
+              store.extendOperationJobLease({
+                jobId: job.id,
+                workerId,
+                attempt: job.attempts,
+                leaseMs,
+              }),
+            );
+          } catch {
+            // Completion/failure detects a lost lease. A heartbeat must never crash the worker.
+          }
+        }, heartbeatMs);
+        heartbeat.unref?.();
+        try {
+          const jobOptions = {
+            ...(job.payload || {}),
+            scope: job.scopeType,
+            scopeType: job.scopeType,
+            scopeKey: job.scopeKey,
+            sessionId: job.sessionId || job.payload?.sessionId || undefined,
+            checkpointId: job.checkpointId || job.payload?.checkpointId || undefined,
+            jobId: job.id,
+            _jobLeaseOwner: workerId,
+            _jobLeaseAttempt: job.attempts,
+          };
+          const operationResult =
+            job.operation === 'distill_checkpoint'
+              ? await this.distillCheckpoint(jobOptions)
+              : await this.auditMemoryCandidates(jobOptions);
+          const retryableAudit =
+            job.operation === 'audit_memory_candidates'
+              ? operationResult?.policy?.audit
+              : operationResult?.candidateAudit;
+          if (retryableAudit?.needsRetry === true) {
+            throw retryableAuditJobError(operationResult, retryableAudit);
+          }
+          const checkpointId = operationJobCheckpointId(job.operation, operationResult) || job.checkpointId || null;
+          const completed = useStore((store) =>
+            store.completeOperationJob({
+              jobId: job.id,
+              workerId,
+              attempt: job.attempts,
+              checkpointId,
+              result: operationJobResultSummary(job.operation, operationResult),
+              metadata: {
+                ...(job.metadata || {}),
+                completedBy: workerId,
+                resultKind: operationResult?.kind || null,
+                checkpointId,
+              },
+            }),
+          );
+          return { succeeded: true, job: completed };
+        } catch (error) {
+          try {
+            const failed = useStore((store) =>
+              store.failOperationJob({
+                jobId: job.id,
+                workerId,
+                attempt: job.attempts,
+                error,
+                retryable: providerFailureRetryable(error),
+                result: error.operationResult
+                  ? operationJobResultSummary(job.operation, error.operationResult)
+                  : {},
+                metadata: {
+                  ...(job.metadata || {}),
+                  failedBy: workerId,
+                },
+              }),
+            );
+            return { succeeded: false, job: failed };
+          } catch (leaseError) {
+            const current = useStore((store) => store.getOperationJob({ jobId: job.id }));
+            return {
+              succeeded: false,
+              job: current,
+              workerError: errorSummary(error),
+              leaseError: errorSummary(leaseError),
+            };
+          }
+        } finally {
+          clearInterval(heartbeat);
+        }
+      }));
+      for (const item of processed) {
+        if (item.succeeded) result.succeeded += 1;
+        else {
+          result.failed += 1;
+          if (item.job?.status === 'queued') result.requeued += 1;
+        }
+        result.jobs.push(item.job);
+      }
+      return result;
+    },
+
     listDueDistillSessions(options = {}) {
       const shouldNarrowScope = Boolean(options.scope || options.scopeType || options.scopeKey || options.cwd || options.repoPath);
       const scope = shouldNarrowScope ? normalizeScopeOptions(options, config) : null;
@@ -5320,7 +5730,7 @@ export function createContextForge(options = {}) {
       const inFlightKey = operationKey(
         'audit_memory_candidates',
         scope,
-        options.sessionId || options.checkpointId,
+        options.jobId || options.sessionId || options.checkpointId,
       );
       return runInFlightOnce(inFlightKey, () => useStore(async (store) =>
         runWithKeyedLock(auditSourceKey(store, scope, options), async () => {
@@ -5451,8 +5861,18 @@ export function createContextForge(options = {}) {
         }
         const audited = [];
         const auditBatchId = randomUUID();
+        const assertJobLease = () => {
+          if (options.jobId && options._jobLeaseOwner && options._jobLeaseAttempt != null) {
+            store.assertOperationJobLease({
+              jobId: options.jobId,
+              workerId: options._jobLeaseOwner,
+              attempt: options._jobLeaseAttempt,
+            });
+          }
+        };
         for (const item of selected) {
           try {
+            assertJobLease();
             const audit = await auditAutoPromotionCandidate({
               auditor,
               store,
@@ -5461,30 +5881,36 @@ export function createContextForge(options = {}) {
               providerConcurrencyLimit,
               clientTimeoutMs: options._clientTimeoutMs,
             });
-            recordCandidateAuditUsageEvent(store, {
-              scope,
-              item,
-              audit,
-              sessionId: options.sessionId || null,
-              checkpointId,
-            });
-            const auditedCandidate = store.markMemoryCandidateAudited({
-              ...scope,
-              candidateId: item.candidate.id,
-              audit,
-              reason: audit.reason,
-              metadata: {
-                auditBatchId,
-                trigger,
-                sourceMode,
-                checkpointId,
+            const auditedCandidate = store.withTransaction(() => {
+              assertJobLease();
+              recordCandidateAuditUsageEvent(store, {
+                scope,
+                item,
+                audit,
                 sessionId: options.sessionId || null,
-                mutatesDurableMemory: false,
-                persistsAuditMetadata: true,
-              },
+                checkpointId,
+                jobId: options.jobId || null,
+              });
+              return store.markMemoryCandidateAudited({
+                ...scope,
+                candidateId: item.candidate.id,
+                audit,
+                reason: audit.reason,
+                metadata: {
+                  auditBatchId,
+                  trigger,
+                  sourceMode,
+                  checkpointId,
+                  sessionId: options.sessionId || null,
+                  operationJobId: options.jobId || null,
+                  mutatesDurableMemory: false,
+                  persistsAuditMetadata: true,
+                },
+              });
             });
             audited.push({ ...item, candidate: auditedCandidate, audit });
           } catch (error) {
+            if (error?.code === 'CONTEXTFORGE_JOB_LEASE_LOST') throw error;
             rethrowExternalProviderTestError(error);
             const audit = {
               approved: false,
@@ -5494,28 +5920,33 @@ export function createContextForge(options = {}) {
               retryable: providerFailureRetryable(error),
               metadata: { ...(auditor?.metadata || {}), ...errorUsageMetadata(error), errorName: error.name },
             };
-            recordCandidateAuditUsageEvent(store, {
-              scope,
-              item,
-              audit,
-              sessionId: options.sessionId || null,
-              checkpointId,
-              status: 'failed',
-            });
-            const auditedCandidate = store.markMemoryCandidateAudited({
-              ...scope,
-              candidateId: item.candidate.id,
-              audit,
-              reason: audit.reason,
-              metadata: {
-                auditBatchId,
-                trigger,
-                sourceMode,
-                checkpointId,
+            const auditedCandidate = store.withTransaction(() => {
+              assertJobLease();
+              recordCandidateAuditUsageEvent(store, {
+                scope,
+                item,
+                audit,
                 sessionId: options.sessionId || null,
-                mutatesDurableMemory: false,
-                persistsAuditMetadata: true,
-              },
+                checkpointId,
+                jobId: options.jobId || null,
+                status: 'failed',
+              });
+              return store.markMemoryCandidateAudited({
+                ...scope,
+                candidateId: item.candidate.id,
+                audit,
+                reason: audit.reason,
+                metadata: {
+                  auditBatchId,
+                  trigger,
+                  sourceMode,
+                  checkpointId,
+                  sessionId: options.sessionId || null,
+                  operationJobId: options.jobId || null,
+                  mutatesDurableMemory: false,
+                  persistsAuditMetadata: true,
+                },
+              });
             });
             audited.push({
               ...item,
@@ -5525,6 +5956,10 @@ export function createContextForge(options = {}) {
           }
         }
 
+        const retryableFailureCount = audited.filter(
+          (item) => item.audit?.retryable === true && item.audit?.riskCodes?.includes('audit_failed'),
+        ).length;
+        const failedCount = audited.filter((item) => item.audit?.riskCodes?.includes('audit_failed')).length;
         return {
           kind: 'memory_candidate_audit_suggestions',
           trigger,
@@ -5543,6 +5978,10 @@ export function createContextForge(options = {}) {
             audit: {
               ...auditPolicy,
               executed: Boolean(auditor) && audited.length > 0,
+              attemptedCount: audited.length,
+              failedCount,
+              retryableFailureCount,
+              needsRetry: retryableFailureCount > 0,
             },
           },
           proposals: [
@@ -6911,8 +7350,60 @@ export function createContextForge(options = {}) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.sessionId, 'sessionId');
 
-      const inFlightKey = operationKey('distill_checkpoint', scope, options.sessionId);
+      const inFlightKey = operationKey('distill_checkpoint', scope, options.jobId || options.sessionId);
       return runInFlightOnce(inFlightKey, () => useStore(async (store) => {
+        if (options.jobId) {
+          const existingCheckpoint = store.findCheckpointByJobId({ ...scope, jobId: options.jobId });
+          if (existingCheckpoint) {
+            const auditTrigger = options.auditTrigger || options.trigger || null;
+            if (!CLOSEOUT_TRIGGERS.has(auditTrigger)) return existingCheckpoint;
+            const recoveryEffective = getEffectiveRuntime(store);
+            const recoveryAuditConfig = recoveryEffective.autoPromoteAudit || {};
+            const recoveryMinBatchCandidates = Number(recoveryAuditConfig.minBatchCandidates || 5);
+            const recoveryBatchLimit = Math.min(10, Number(recoveryAuditConfig.batchLimit || 5));
+            const recoveryScanLimit = Math.max(
+              recoveryMinBatchCandidates,
+              recoveryBatchLimit,
+              1,
+            ) * 10;
+            const auditResult = await this.auditMemoryCandidates({
+              ...scope,
+              sessionId: options.sessionId,
+              trigger: auditTrigger,
+              limit: recoveryBatchLimit,
+              scanLimit: recoveryScanLimit,
+              jobId: options.jobId,
+              _jobLeaseOwner: options._jobLeaseOwner,
+              _jobLeaseAttempt: options._jobLeaseAttempt,
+              _clientTimeoutMs: options._clientTimeoutMs,
+            });
+            const recoveredResult = {
+              ...existingCheckpoint,
+              memoryCandidateCount: Array.isArray(existingCheckpoint.metadata?.memoryCandidates)
+                ? existingCheckpoint.metadata.memoryCandidates.length
+                : null,
+              candidateAudit: auditResult.policy?.audit || null,
+              recoveredFromOperationJob: true,
+            };
+            if (auditResult.policy?.audit?.needsRetry === true) {
+              throw retryableAuditJobError(recoveredResult, auditResult.policy.audit);
+            }
+            const incompleteRun = store.getLatestDistillRunByJobId(options.jobId);
+            if (incompleteRun?.outputMetadata?.candidateAuditIncomplete === true) {
+              store.completeDistillRun({
+                id: incompleteRun.id,
+                outputMetadata: {
+                  ...incompleteRun.outputMetadata,
+                  candidateAuditIncomplete: false,
+                  candidateAuditRecovered: true,
+                  candidateAudit: auditResult.policy?.audit || null,
+                  recoveredAt: new Date().toISOString(),
+                },
+              });
+            }
+            return recoveredResult;
+          }
+        }
         const effective = getEffectiveRuntime(store);
         const provider = createDistillProvider(options.provider || effective.distillProvider, distillProviders, {
           codexExec: {
@@ -6970,6 +7461,7 @@ export function createContextForge(options = {}) {
           ...scope,
           sessionId: options.sessionId,
           conversationId,
+          jobId: options.jobId || null,
           provider: provider.name,
           sourceEventCount: selectedRawEvents.length,
           inputMetadata: {
@@ -6981,6 +7473,7 @@ export function createContextForge(options = {}) {
             providerMetadata,
             sourceProvenance,
             sourceEventWindow: distillWindow.metadata,
+            operationJobId: options.jobId || null,
           },
         });
 
@@ -7011,6 +7504,7 @@ export function createContextForge(options = {}) {
             status: 'failed',
             sessionId: options.sessionId,
             distillRunId: distillRun.id,
+            jobId: options.jobId || null,
             metadata: errorUsageMetadata(error),
             startedAt: distillRun.createdAt,
             completedAt: new Date().toISOString(),
@@ -7039,6 +7533,7 @@ export function createContextForge(options = {}) {
             status: 'failed',
             sessionId: options.sessionId,
             distillRunId: distillRun.id,
+            jobId: options.jobId || null,
             metadata: rawOutput?.metadata || {},
             startedAt: distillRun.createdAt,
             completedAt: new Date().toISOString(),
@@ -7054,6 +7549,47 @@ export function createContextForge(options = {}) {
             },
           });
           throw error;
+        }
+
+        const discardForLostJobLease = (error) => {
+          const completedAt = new Date().toISOString();
+          recordLlmUsageEvent(store, {
+            scope,
+            operation: 'checkpoint_distill',
+            provider: output.provider || provider.name,
+            model: providerModelFromMetadata(output.metadata, providerMetadata.model),
+            status: 'failed',
+            sessionId: options.sessionId,
+            distillRunId: distillRun.id,
+            jobId: options.jobId || null,
+            metadata: { ...output.metadata, leaseLost: true, discarded: true },
+            startedAt: distillRun.createdAt,
+            completedAt,
+            elapsedMs: Date.parse(completedAt) - Date.parse(distillRun.createdAt),
+          });
+          store.failDistillRun({
+            id: distillRun.id,
+            error,
+            outputMetadata: {
+              leaseLost: true,
+              retryable: true,
+              operationJobId: options.jobId || null,
+              providerMetadata: output.metadata,
+            },
+          });
+          throw error;
+        };
+
+        if (options.jobId && options._jobLeaseOwner && options._jobLeaseAttempt != null) {
+          try {
+            store.assertOperationJobLease({
+              jobId: options.jobId,
+              workerId: options._jobLeaseOwner,
+              attempt: options._jobLeaseAttempt,
+            });
+          } catch (error) {
+            discardForLostJobLease(error);
+          }
         }
 
         const checkpointInput = {
@@ -7080,15 +7616,27 @@ export function createContextForge(options = {}) {
             sourceProvenance,
             sourceRawEventIds: selectedRawEvents.map((event) => event.id),
             sourceEventWindow: distillWindow.metadata,
+            operationJobId: options.jobId || null,
           },
         };
 
         let checkpoint = null;
         let checkpointError = null;
         try {
-          checkpoint = store.insertCheckpoint(checkpointInput);
+          checkpoint =
+            options.jobId && options._jobLeaseOwner && options._jobLeaseAttempt != null
+              ? store.insertCheckpointForOperationJob(checkpointInput, {
+                  jobId: options.jobId,
+                  workerId: options._jobLeaseOwner,
+                  attempt: options._jobLeaseAttempt,
+                })
+              : store.insertCheckpoint(checkpointInput);
         } catch (error) {
           checkpointError = error;
+        }
+
+        if (checkpointError?.code === 'CONTEXTFORGE_JOB_LEASE_LOST') {
+          discardForLostJobLease(checkpointError);
         }
 
         let workingSummary = null;
@@ -7156,6 +7704,7 @@ export function createContextForge(options = {}) {
             status: 'succeeded',
             sessionId: options.sessionId,
             distillRunId: distillRun.id,
+            jobId: options.jobId || null,
             metadata: output.metadata,
             startedAt: distillRun.createdAt,
             completedAt: new Date().toISOString(),
@@ -7196,7 +7745,7 @@ export function createContextForge(options = {}) {
           const effectiveForAudit = getEffectiveRuntime(store);
           const auditConfig = effectiveForAudit.autoPromoteAudit || {};
           const minBatchCandidates = Number(auditConfig.minBatchCandidates || 5);
-          const batchLimit = Number(auditConfig.batchLimit || 5);
+          const batchLimit = Math.min(10, Number(auditConfig.batchLimit || 5));
           const scanLimit = Math.max(minBatchCandidates, batchLimit, 1) * 10;
           const auditor = getAutoPromoteAuditor(store);
           const unauditedPending = store
@@ -7259,6 +7808,8 @@ export function createContextForge(options = {}) {
             const auditBatchId = randomUUID();
             let auditedCount = 0;
             let promotedCount = 0;
+            let failedCount = 0;
+            let retryableFailureCount = 0;
             if (selected.length > 0) {
               assertProviderTimeoutFitsClient({
                 operation: 'candidate audit',
@@ -7267,9 +7818,19 @@ export function createContextForge(options = {}) {
                 clientTimeoutMs: options._clientTimeoutMs,
               });
             }
+            const assertJobLease = () => {
+              if (options.jobId && options._jobLeaseOwner && options._jobLeaseAttempt != null) {
+                store.assertOperationJobLease({
+                  jobId: options.jobId,
+                  workerId: options._jobLeaseOwner,
+                  attempt: options._jobLeaseAttempt,
+                });
+              }
+            };
             for (const item of selected) {
               let audit;
               try {
+                assertJobLease();
                 audit = await auditAutoPromotionCandidate({
                   auditor,
                   store,
@@ -7279,6 +7840,7 @@ export function createContextForge(options = {}) {
                   clientTimeoutMs: options._clientTimeoutMs,
                 });
               } catch (error) {
+                if (error?.code === 'CONTEXTFORGE_JOB_LEASE_LOST') throw error;
                 rethrowExternalProviderTestError(error);
                 audit = {
                   approved: false,
@@ -7289,29 +7851,38 @@ export function createContextForge(options = {}) {
                   metadata: { ...(auditor?.metadata || {}), ...errorUsageMetadata(error), errorName: error.name },
                 };
               }
-              recordCandidateAuditUsageEvent(store, {
-                scope,
-                item,
-                audit,
-                sessionId: options.sessionId,
-                checkpointId: checkpoint.id,
-                status: audit.riskCodes?.includes('audit_failed') ? 'failed' : 'succeeded',
-              });
-              const auditedCandidate = store.markMemoryCandidateAudited({
-                ...scope,
-                candidateId: item.candidate.id,
-                audit,
-                reason: audit.reason,
-                metadata: {
-                  auditBatchId,
-                  trigger: auditTrigger || 'batch_threshold',
-                  sourceMode: forceAudit ? 'closeout_batch' : 'threshold_batch',
+              if (audit.riskCodes?.includes('audit_failed')) {
+                failedCount += 1;
+                if (audit.retryable === true) retryableFailureCount += 1;
+              }
+              const auditedCandidate = store.withTransaction(() => {
+                assertJobLease();
+                recordCandidateAuditUsageEvent(store, {
+                  scope,
+                  item,
+                  audit,
                   sessionId: options.sessionId,
                   checkpointId: checkpoint.id,
-                  minBatchCandidates,
-                  batchLimit,
-                  autoPromoteEnabled: config.autoPromote.enabled,
-                },
+                  jobId: options.jobId || null,
+                  status: audit.riskCodes?.includes('audit_failed') ? 'failed' : 'succeeded',
+                });
+                return store.markMemoryCandidateAudited({
+                  ...scope,
+                  candidateId: item.candidate.id,
+                  audit,
+                  reason: audit.reason,
+                  metadata: {
+                    auditBatchId,
+                    trigger: auditTrigger || 'batch_threshold',
+                    sourceMode: forceAudit ? 'closeout_batch' : 'threshold_batch',
+                    sessionId: options.sessionId,
+                    checkpointId: checkpoint.id,
+                    operationJobId: options.jobId || null,
+                    minBatchCandidates,
+                    batchLimit,
+                    autoPromoteEnabled: config.autoPromote.enabled,
+                  },
+                });
               });
               auditedCount += 1;
               if (config.autoPromote.enabled && auditor && audit.approved === true) {
@@ -7329,8 +7900,18 @@ export function createContextForge(options = {}) {
                 if (autoScore > 0) {
                   const reason =
                     'Auto-promoted after automatic candidate audit approved this strict safe candidate.';
-                  const memory = autoPromoteIndexedCandidate(store, scope, auditedCandidate, autoWarnings, reason, audit);
-                  enqueueEmbeddingSources(store, [store.embeddingSourceForMemory(memory)]);
+                  store.withTransaction(() => {
+                    assertJobLease();
+                    const memory = autoPromoteIndexedCandidate(
+                      store,
+                      scope,
+                      auditedCandidate,
+                      autoWarnings,
+                      reason,
+                      audit,
+                    );
+                    enqueueEmbeddingSources(store, [store.embeddingSourceForMemory(memory)]);
+                  });
                   promotedCount += 1;
                 }
               }
@@ -7344,6 +7925,9 @@ export function createContextForge(options = {}) {
               selected: selected.length,
               audited: auditedCount,
               promoted: promotedCount,
+              failedCount,
+              retryableFailureCount,
+              needsRetry: retryableFailureCount > 0,
               minBatchCandidates,
               batchLimit,
               scanLimit,
@@ -7356,7 +7940,66 @@ export function createContextForge(options = {}) {
             },
           );
         } catch (error) {
+          if (error?.code === 'CONTEXTFORGE_JOB_LEASE_LOST') {
+            const failedAt = new Date().toISOString();
+            recordLlmUsageEvent(store, {
+              scope,
+              operation: 'checkpoint_distill',
+              provider: output.provider || provider.name,
+              model: providerModelFromMetadata(output.metadata, providerMetadata.model),
+              status: 'failed',
+              sessionId: options.sessionId,
+              distillRunId: distillRun.id,
+              checkpointId: checkpoint.id,
+              jobId: options.jobId || null,
+              metadata: { ...output.metadata, leaseLost: true, candidateAuditIncomplete: true },
+              startedAt: distillRun.createdAt,
+              completedAt: failedAt,
+              elapsedMs: Date.parse(failedAt) - Date.parse(distillRun.createdAt),
+            });
+            store.failDistillRun({
+              id: distillRun.id,
+              error,
+              outputMetadata: {
+                checkpointId: checkpoint.id,
+                leaseLost: true,
+                retryable: true,
+                candidateAuditIncomplete: true,
+                providerMetadata: output.metadata,
+              },
+            });
+            throw error;
+          }
           rethrowExternalProviderTestError(error);
+          if (options.jobId && CLOSEOUT_TRIGGERS.has(options.auditTrigger || options.trigger)) {
+            const failedAt = new Date().toISOString();
+            recordLlmUsageEvent(store, {
+              scope,
+              operation: 'checkpoint_distill',
+              provider: output.provider || provider.name,
+              model: providerModelFromMetadata(output.metadata, providerMetadata.model),
+              status: 'failed',
+              sessionId: options.sessionId,
+              distillRunId: distillRun.id,
+              checkpointId: checkpoint.id,
+              jobId: options.jobId,
+              metadata: { ...output.metadata, candidateAuditIncomplete: true, auditError: errorSummary(error) },
+              startedAt: distillRun.createdAt,
+              completedAt: failedAt,
+              elapsedMs: Date.parse(failedAt) - Date.parse(distillRun.createdAt),
+            });
+            store.failDistillRun({
+              id: distillRun.id,
+              error,
+              outputMetadata: {
+                checkpointId: checkpoint.id,
+                retryable: providerFailureRetryable(error),
+                candidateAuditIncomplete: true,
+                providerMetadata: output.metadata,
+              },
+            });
+            throw error;
+          }
           candidateAudit = {
             enabled: true,
             executed: false,
@@ -7377,6 +8020,7 @@ export function createContextForge(options = {}) {
           sessionId: options.sessionId,
           distillRunId: distillRun.id,
           checkpointId: checkpoint.id,
+          jobId: options.jobId || null,
           metadata: output.metadata,
           startedAt: distillRun.createdAt,
           completedAt,
@@ -7480,6 +8124,7 @@ export function createContextForge(options = {}) {
           distillRunId: options.distillRunId || null,
           checkpointId: options.checkpointId || null,
           candidateId: options.candidateId || null,
+          jobId: options.jobId || null,
           operation: options.operation || null,
           provider: options.provider || null,
           limit: options.limit == null ? 100 : Number(options.limit),
@@ -7498,6 +8143,7 @@ export function createContextForge(options = {}) {
           distillRunId: options.distillRunId || null,
           checkpointId: options.checkpointId || null,
           candidateId: options.candidateId || null,
+          jobId: options.jobId || null,
           operation: options.operation || null,
           provider: options.provider || null,
           limit,
@@ -7511,6 +8157,7 @@ export function createContextForge(options = {}) {
             distillRunId: options.distillRunId || null,
             checkpointId: options.checkpointId || null,
             candidateId: options.candidateId || null,
+            jobId: options.jobId || null,
             operation: options.operation || null,
             provider: options.provider || null,
             limit,
