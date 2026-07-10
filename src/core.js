@@ -7131,10 +7131,24 @@ export function createContextForge(options = {}) {
           ],
         };
         if (!dryRun && inventory.processingJobs > 0 && !force) {
-          return { ...base, blocked: true, blockedReason: 'embedding_jobs_processing' };
+          return {
+            ...base,
+            blocked: true,
+            blockedReason: 'embedding_jobs_processing',
+            blockedRetry: true,
+            needsRescan: true,
+            nextCursor: options.cursor || null,
+          };
         }
         if (!dryRun && includeRetired && inventory.retiredRisk && !confirmMassRetired) {
-          return { ...base, blocked: true, blockedReason: 'mass_retired_confirmation_required' };
+          return {
+            ...base,
+            blocked: true,
+            blockedReason: 'mass_retired_confirmation_required',
+            blockedRetry: true,
+            needsRescan: true,
+            nextCursor: options.cursor || null,
+          };
         }
         if (dryRun || plan.total === 0) {
           return {

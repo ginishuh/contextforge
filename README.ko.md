@@ -762,6 +762,8 @@ provider와 다른 row가 전체 index의 절반 이상이면 non-dry retired cl
 `--confirmMassRetired true`까지 명시해야 실행된다. content hash mismatch를 삭제한
 경우 응답의 `reindexSuggestedSourceIds`를 확인하고 embedding
 job을 처리하거나 의도적인 scoped rebuild를 실행한다.
+차단 응답은 `blockedRetry=true`, `needsRescan=true`를 반환하고 입력 cursor를
+유지한다. 차단 원인을 해소한 뒤 같은 cursor를 재시도하고 나서 전진한다.
 
 ## 안전 원칙
 

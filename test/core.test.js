@@ -4920,7 +4920,21 @@ test('embedding maintenance inventory and GC remove only eligible artifacts in b
     });
     assert.equal(blocked.blocked, true);
     assert.equal(blocked.blockedReason, 'embedding_jobs_processing');
+    assert.equal(blocked.blockedRetry, true);
+    assert.equal(blocked.needsRescan, true);
+    assert.equal(blocked.nextCursor, null);
     assert.deepEqual(blocked.deleted, { vectors: 0, indexRows: 0, jobs: 0 });
+
+    const cursorBlocked = app.pruneEmbeddingArtifacts({
+      scope: 'repo',
+      scopeKey,
+      scanLimit: 1,
+      cursor: limitedInventory.nextCursor,
+      dryRun: false,
+    });
+    assert.equal(cursorBlocked.blockedReason, 'embedding_jobs_processing');
+    assert.equal(cursorBlocked.nextCursor, limitedInventory.nextCursor);
+    assert.equal(cursorBlocked.needsRescan, true);
 
     const pruned = app.pruneEmbeddingArtifacts({
       completedJobRetentionDays: 1,
@@ -4998,6 +5012,9 @@ test('embedding GC requires an extra confirmation for majority retired indexes',
     });
     assert.equal(blocked.blocked, true);
     assert.equal(blocked.blockedReason, 'mass_retired_confirmation_required');
+    assert.equal(blocked.blockedRetry, true);
+    assert.equal(blocked.needsRescan, true);
+    assert.equal(blocked.nextCursor, null);
 
     const confirmed = app.pruneEmbeddingArtifacts({
       scope: 'repo',

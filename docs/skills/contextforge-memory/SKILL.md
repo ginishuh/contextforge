@@ -388,6 +388,8 @@ For derived-data cleanup:
    not proof that a later index/job/vector page has no eligible rows. For
    non-dry GC, repeat the same input cursor while `needsRescan` is true and only
    advance after the current page fits within the applied batch.
+8. Treat `blockedRetry: true` the same way: resolve the worker or confirmation
+   block, then retry the preserved input cursor before advancing.
 
 Use `prune_raw_events` only according to retention policy; durable memory and checkpoints are preserved separately.
 

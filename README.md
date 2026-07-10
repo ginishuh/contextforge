@@ -836,6 +836,9 @@ non-dry retired cleanup is blocked again until `--confirmMassRetired true` is
 provided. If the plan removes a content-hash mismatch, process its embedding
 job or run an intentional scoped rebuild after GC; the response lists those
 source ids in `reindexSuggestedSourceIds`.
+Blocked responses set `blockedRetry=true`, `needsRescan=true`, and preserve the
+input cursor. Resolve the blocking condition and retry that same cursor before
+advancing.
 
 ContextForge uses the npm `sqlite-vec` package and expects sqlite-vec 0.1.x with
 `vec0` support for auxiliary primary-key columns. Check `node src/cli.js dbInfo`
