@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.1 - 2026-07-10
+
 - Reworked the English and Korean READMEs into synchronized quick-start entry
   points, preserved the previous long-form material as full reference docs, and
   added an automated release-hygiene gate for Markdown links, documented
