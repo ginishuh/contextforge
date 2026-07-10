@@ -144,6 +144,14 @@ node src/cli.js dbInfo
 Safety:
 
 - Server-side provider credentials belong on the server, not in client repos.
+- Run `node src/cli.js processJobs --workerId <stable-name>` from a supervised
+  server-side worker or timer when clients use `submitDistillJob` or
+  `submitAuditJob`. Submission only writes a durable queued row; it does not
+  execute provider work inside the client request. Worker leases are renewed
+  while calls run and expired leases are recovered after crashes.
+- Queued jobs can be cancelled. Running provider calls are intentionally not
+  force-cancelled; stop accepting new work and let the lease/result settle
+  before maintenance when graceful cancellation is required.
 - Prefer `CONTEXTFORGE_OPENAI_COMPATIBLE_API_KEY` over DB-backed runtime
   secrets. SQLite stores runtime secrets as plaintext; new DB-backed secret
   writes require the explicit

@@ -126,6 +126,12 @@ Tool surface:
 - `append_raw`
 - `prune_raw_events`
 - `distill_checkpoint`
+- `submit_distill_job`
+- `submit_audit_job`
+- `get_job`
+- `list_jobs`
+- `process_jobs`
+- `cancel_job`
 - `distill_usage`
 - `suggest_memory_promotions`
 - `auto_promote_memory_candidates`

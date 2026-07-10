@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added SQLite-backed durable distill and candidate-audit jobs with idempotent
+  submission, queued/running/succeeded/failed/cancelled states, bounded worker
+  claims, renewable leases, crash recovery, retry limits, queued cancellation,
+  and job provenance on distill runs, checkpoints, candidate audits, and LLM
+  usage events. Core, CLI, remote JSON API, and MCP expose submit/get/list/
+  process/cancel operations; audit workers remain explicitly per-candidate.
 - Added a process-global per-provider concurrency cap, in-flight deduplication
   for same-session distill and candidate-audit retries, stored-audit reuse, and
   retryability metadata for failed provider runs. Child provider timeouts now

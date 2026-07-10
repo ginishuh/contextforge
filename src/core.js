@@ -40,6 +40,34 @@ function executionKey(...parts) {
   return parts.map((part) => JSON.stringify(part == null ? null : String(part))).join(':');
 }
 
+function stableJsonValue(value) {
+  if (Array.isArray(value)) return value.map(stableJsonValue);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, stableJsonValue(value[key])]),
+  );
+}
+
+function operationJobIdempotencyKey(operation, identity) {
+  return `${operation}:${createHash('sha256').update(JSON.stringify(stableJsonValue(identity))).digest('hex')}`;
+}
+
+function publicJobPayload(options, scope, allowedKeys) {
+  const payload = Object.fromEntries(
+    allowedKeys
+      .filter((key) => options?.[key] !== undefined)
+      .map((key) => [key, options[key]]),
+  );
+  return {
+    ...payload,
+    scope: scope.scopeType,
+    scopeType: scope.scopeType,
+    scopeKey: scope.scopeKey,
+  };
+}
+
 function migrationScopeOptions(options, prefix, fallbackScope = 'repo') {
   const scopeType = options[`${prefix}ScopeType`] || options[`${prefix}Scope`] || fallbackScope;
   const scopeKey = options[`${prefix}ScopeKey`];
@@ -469,6 +497,7 @@ function recordLlmUsageEvent(store, options) {
     distillRunId: options.distillRunId || null,
     checkpointId: options.checkpointId || null,
     candidateId: options.candidateId || null,
+    jobId: options.jobId || null,
     ...columns,
     usage: usageJson || {},
     estimated: false,
@@ -2696,7 +2725,7 @@ async function auditAutoPromotionCandidate({
 
 function recordCandidateAuditUsageEvent(
   store,
-  { scope, item, audit, sessionId = null, checkpointId = null, status = 'succeeded' },
+  { scope, item, audit, sessionId = null, checkpointId = null, jobId = null, status = 'succeeded' },
 ) {
   const metadata = audit?.metadata || {};
   const provider = metadata.provider || 'none';
@@ -2711,6 +2740,7 @@ function recordCandidateAuditUsageEvent(
     distillRunId: item.candidate.source?.distillRunId || null,
     checkpointId: checkpointId || item.candidate.checkpointId || null,
     candidateId: item.candidate.id,
+    jobId,
     metadata,
   });
 }
@@ -4463,6 +4493,303 @@ export function createContextForge(options = {}) {
       });
     },
 
+    submitDistillJob(options = {}) {
+      const scope = normalizeScopeOptions(options, config);
+      requireOption(options.sessionId, 'sessionId');
+      return useStore((store) => {
+        const payload = publicJobPayload(options, scope, [
+          'sessionId',
+          'conversationId',
+          'provider',
+          'maxEvents',
+          'maxChars',
+          'level',
+          'coversFrom',
+          'coversTo',
+          'source',
+          'sourceRef',
+          'auditTrigger',
+        ]);
+        const rawEvents = store.listRawEvents({ ...scope, sessionId: options.sessionId });
+        const latestCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId, level: 0 });
+        const sourceFingerprint = {
+          rawEventCount: rawEvents.length,
+          lastRawEventId: rawEvents.at(-1)?.id || null,
+          latestCheckpointId: latestCheckpoint?.id || null,
+        };
+        const idempotencyKey =
+          options.idempotencyKey
+            ? operationJobIdempotencyKey('distill_checkpoint', {
+                scope,
+                providedKey: options.idempotencyKey,
+              })
+            : operationJobIdempotencyKey('distill_checkpoint', {
+                scope,
+                sessionId: options.sessionId,
+                sourceFingerprint,
+                policy: payload,
+              });
+        const maxAttempts = positiveInteger(options.maxAttempts == null ? 3 : options.maxAttempts, 'maxAttempts');
+        const priority = Number(options.priority || 0);
+        if (!Number.isInteger(priority)) throw new Error('priority must be an integer.');
+        const queued = store.enqueueOperationJob({
+          operation: 'distill_checkpoint',
+          ...scope,
+          sessionId: options.sessionId,
+          idempotencyKey,
+          payload,
+          maxAttempts,
+          priority,
+          retryFailed: truthyOption(options.retryFailed),
+          metadata: {
+            submittedBy: options.submittedBy || 'api',
+            sourceFingerprint,
+            executionMode: 'durable_worker',
+          },
+        });
+        return {
+          kind: 'operation_job_submission',
+          operation: 'distill_checkpoint',
+          jobId: queued.job.id,
+          status: queued.job.status,
+          deduplicated: queued.deduplicated,
+          requeued: queued.requeued,
+          job: queued.job,
+        };
+      });
+    },
+
+    submitAuditJob(options = {}) {
+      const scope = normalizeScopeOptions(options, config);
+      if (!options.sessionId && !options.checkpointId) {
+        throw new Error('submitAuditJob requires sessionId or checkpointId.');
+      }
+      if (!CLOSEOUT_TRIGGERS.has(options.trigger)) {
+        throw new Error('trigger must be a closeout trigger.');
+      }
+      return useStore((store) => {
+        const payload = publicJobPayload(options, scope, [
+          'sessionId',
+          'checkpointId',
+          'trigger',
+          'limit',
+          'scanLimit',
+          'minConfidence',
+          'minStability',
+          'allowedCategories',
+          'promotionRecommendation',
+          'force',
+        ]);
+        const scanLimit = positiveInteger(options.scanLimit == null ? 50 : options.scanLimit, 'scanLimit');
+        const pendingCandidates = store.listMemoryCandidates({
+          ...scope,
+          sessionId: options.sessionId || null,
+          checkpointId: options.checkpointId || null,
+          status: 'pending',
+          sort: 'recommendation',
+          limit: scanLimit,
+        });
+        const sourceFingerprint = {
+          candidateIds: pendingCandidates.map((candidate) => candidate.id),
+        };
+        const idempotencyKey =
+          options.idempotencyKey
+            ? operationJobIdempotencyKey('audit_memory_candidates', {
+                scope,
+                providedKey: options.idempotencyKey,
+              })
+            : operationJobIdempotencyKey('audit_memory_candidates', {
+                scope,
+                sessionId: options.sessionId || null,
+                checkpointId: options.checkpointId || null,
+                sourceFingerprint,
+                policy: payload,
+              });
+        const maxAttempts = positiveInteger(options.maxAttempts == null ? 3 : options.maxAttempts, 'maxAttempts');
+        const priority = Number(options.priority || 0);
+        if (!Number.isInteger(priority)) throw new Error('priority must be an integer.');
+        const queued = store.enqueueOperationJob({
+          operation: 'audit_memory_candidates',
+          ...scope,
+          sessionId: options.sessionId || null,
+          checkpointId: options.checkpointId || null,
+          idempotencyKey,
+          payload,
+          maxAttempts,
+          priority,
+          retryFailed: truthyOption(options.retryFailed),
+          metadata: {
+            submittedBy: options.submittedBy || 'api',
+            sourceFingerprint,
+            executionMode: 'durable_worker',
+            providerBatchMode: 'per_candidate',
+          },
+        });
+        return {
+          kind: 'operation_job_submission',
+          operation: 'audit_memory_candidates',
+          jobId: queued.job.id,
+          status: queued.job.status,
+          deduplicated: queued.deduplicated,
+          requeued: queued.requeued,
+          job: queued.job,
+        };
+      });
+    },
+
+    getJob(options = {}) {
+      requireOption(options.jobId, 'jobId');
+      const shouldNarrowScope = Boolean(options.scope || options.scopeType || options.scopeKey || options.cwd || options.repoPath);
+      const scope = shouldNarrowScope ? normalizeScopeOptions(options, config) : null;
+      return useStore((store) => {
+        const job = store.getOperationJob({
+          jobId: options.jobId,
+          scopeType: scope?.scopeType || null,
+          scopeKey: scope?.scopeKey || null,
+        });
+        if (!job) throw new Error(`Operation job not found: ${options.jobId}`);
+        return job;
+      });
+    },
+
+    listJobs(options = {}) {
+      const shouldNarrowScope = Boolean(options.scope || options.scopeType || options.scopeKey || options.cwd || options.repoPath);
+      const scope = shouldNarrowScope ? normalizeScopeOptions(options, config) : null;
+      return useStore((store) =>
+        store.listOperationJobs({
+          scopeType: scope?.scopeType || null,
+          scopeKey: scope?.scopeKey || null,
+          operation: options.operation || null,
+          status: options.status || null,
+          sessionId: options.sessionId || null,
+          checkpointId: options.checkpointId || null,
+          limit: options.limit == null ? 100 : Number(options.limit),
+          order: options.order || 'desc',
+        }),
+      );
+    },
+
+    cancelJob(options = {}) {
+      requireOption(options.jobId, 'jobId');
+      const shouldNarrowScope = Boolean(options.scope || options.scopeType || options.scopeKey || options.cwd || options.repoPath);
+      const scope = shouldNarrowScope ? normalizeScopeOptions(options, config) : null;
+      return useStore((store) =>
+        store.cancelOperationJob({
+          jobId: options.jobId,
+          scopeType: scope?.scopeType || null,
+          scopeKey: scope?.scopeKey || null,
+          reason: options.reason || null,
+        }),
+      );
+    },
+
+    async processJobs(options = {}) {
+      const limit = Math.min(25, positiveInteger(options.limit == null ? 1 : options.limit, 'limit'));
+      const leaseMs = positiveInteger(options.leaseMs == null ? 300000 : options.leaseMs, 'leaseMs');
+      if (leaseMs < 1000) throw new Error('leaseMs must be at least 1000ms.');
+      const workerId = options.workerId || `worker:${process.pid}:${randomUUID()}`;
+      const operations = options.operation
+        ? [options.operation]
+        : Array.isArray(options.operations)
+          ? options.operations
+          : null;
+      const allowedOperations = new Set(['distill_checkpoint', 'audit_memory_candidates']);
+      if (operations?.some((operation) => !allowedOperations.has(operation))) {
+        throw new Error('operation must be distill_checkpoint or audit_memory_candidates.');
+      }
+      const claimed = useStore((store) =>
+        store.claimOperationJobs({ workerId, limit, leaseMs, operations }),
+      );
+      const result = {
+        kind: 'operation_job_batch',
+        workerId,
+        leaseMs,
+        claimed: claimed.length,
+        succeeded: 0,
+        failed: 0,
+        requeued: 0,
+        jobs: [],
+      };
+      const processed = await Promise.all(claimed.map(async (job) => {
+        const heartbeatMs = Math.max(250, Math.min(30000, Math.floor(leaseMs / 3)));
+        const heartbeat = setInterval(() => {
+          try {
+            useStore((store) =>
+              store.extendOperationJobLease({ jobId: job.id, workerId, leaseMs }),
+            );
+          } catch {
+            // Completion/failure detects a lost lease. A heartbeat must never crash the worker.
+          }
+        }, heartbeatMs);
+        heartbeat.unref?.();
+        try {
+          const jobOptions = {
+            ...(job.payload || {}),
+            scope: job.scopeType,
+            scopeType: job.scopeType,
+            scopeKey: job.scopeKey,
+            sessionId: job.sessionId || job.payload?.sessionId || undefined,
+            checkpointId: job.checkpointId || job.payload?.checkpointId || undefined,
+            jobId: job.id,
+          };
+          const operationResult =
+            job.operation === 'distill_checkpoint'
+              ? await this.distillCheckpoint(jobOptions)
+              : await this.auditMemoryCandidates(jobOptions);
+          const completed = useStore((store) =>
+            store.completeOperationJob({
+              jobId: job.id,
+              workerId,
+              checkpointId: operationResult?.id || operationResult?.source?.checkpointId || job.checkpointId || null,
+              result: operationResult,
+              metadata: {
+                ...(job.metadata || {}),
+                completedBy: workerId,
+                resultKind: operationResult?.kind || null,
+                checkpointId: operationResult?.id || operationResult?.source?.checkpointId || null,
+              },
+            }),
+          );
+          return { succeeded: true, job: completed };
+        } catch (error) {
+          try {
+            const failed = useStore((store) =>
+              store.failOperationJob({
+                jobId: job.id,
+                workerId,
+                error,
+                retryable: providerFailureRetryable(error),
+                metadata: {
+                  ...(job.metadata || {}),
+                  failedBy: workerId,
+                },
+              }),
+            );
+            return { succeeded: false, job: failed };
+          } catch (leaseError) {
+            const current = useStore((store) => store.getOperationJob({ jobId: job.id }));
+            return {
+              succeeded: false,
+              job: current,
+              workerError: errorSummary(error),
+              leaseError: errorSummary(leaseError),
+            };
+          }
+        } finally {
+          clearInterval(heartbeat);
+        }
+      }));
+      for (const item of processed) {
+        if (item.succeeded) result.succeeded += 1;
+        else {
+          result.failed += 1;
+          if (item.job?.status === 'queued') result.requeued += 1;
+        }
+        result.jobs.push(item.job);
+      }
+      return result;
+    },
+
     listDueDistillSessions(options = {}) {
       const shouldNarrowScope = Boolean(options.scope || options.scopeType || options.scopeKey || options.cwd || options.repoPath);
       const scope = shouldNarrowScope ? normalizeScopeOptions(options, config) : null;
@@ -5320,7 +5647,7 @@ export function createContextForge(options = {}) {
       const inFlightKey = operationKey(
         'audit_memory_candidates',
         scope,
-        options.sessionId || options.checkpointId,
+        options.jobId || options.sessionId || options.checkpointId,
       );
       return runInFlightOnce(inFlightKey, () => useStore(async (store) =>
         runWithKeyedLock(auditSourceKey(store, scope, options), async () => {
@@ -5467,6 +5794,7 @@ export function createContextForge(options = {}) {
               audit,
               sessionId: options.sessionId || null,
               checkpointId,
+              jobId: options.jobId || null,
             });
             const auditedCandidate = store.markMemoryCandidateAudited({
               ...scope,
@@ -5479,6 +5807,7 @@ export function createContextForge(options = {}) {
                 sourceMode,
                 checkpointId,
                 sessionId: options.sessionId || null,
+                operationJobId: options.jobId || null,
                 mutatesDurableMemory: false,
                 persistsAuditMetadata: true,
               },
@@ -5500,6 +5829,7 @@ export function createContextForge(options = {}) {
               audit,
               sessionId: options.sessionId || null,
               checkpointId,
+              jobId: options.jobId || null,
               status: 'failed',
             });
             const auditedCandidate = store.markMemoryCandidateAudited({
@@ -5513,6 +5843,7 @@ export function createContextForge(options = {}) {
                 sourceMode,
                 checkpointId,
                 sessionId: options.sessionId || null,
+                operationJobId: options.jobId || null,
                 mutatesDurableMemory: false,
                 persistsAuditMetadata: true,
               },
@@ -6911,8 +7242,12 @@ export function createContextForge(options = {}) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.sessionId, 'sessionId');
 
-      const inFlightKey = operationKey('distill_checkpoint', scope, options.sessionId);
+      const inFlightKey = operationKey('distill_checkpoint', scope, options.jobId || options.sessionId);
       return runInFlightOnce(inFlightKey, () => useStore(async (store) => {
+        if (options.jobId) {
+          const existingCheckpoint = store.findCheckpointByJobId({ ...scope, jobId: options.jobId });
+          if (existingCheckpoint) return existingCheckpoint;
+        }
         const effective = getEffectiveRuntime(store);
         const provider = createDistillProvider(options.provider || effective.distillProvider, distillProviders, {
           codexExec: {
@@ -6970,6 +7305,7 @@ export function createContextForge(options = {}) {
           ...scope,
           sessionId: options.sessionId,
           conversationId,
+          jobId: options.jobId || null,
           provider: provider.name,
           sourceEventCount: selectedRawEvents.length,
           inputMetadata: {
@@ -6981,6 +7317,7 @@ export function createContextForge(options = {}) {
             providerMetadata,
             sourceProvenance,
             sourceEventWindow: distillWindow.metadata,
+            operationJobId: options.jobId || null,
           },
         });
 
@@ -7011,6 +7348,7 @@ export function createContextForge(options = {}) {
             status: 'failed',
             sessionId: options.sessionId,
             distillRunId: distillRun.id,
+            jobId: options.jobId || null,
             metadata: errorUsageMetadata(error),
             startedAt: distillRun.createdAt,
             completedAt: new Date().toISOString(),
@@ -7039,6 +7377,7 @@ export function createContextForge(options = {}) {
             status: 'failed',
             sessionId: options.sessionId,
             distillRunId: distillRun.id,
+            jobId: options.jobId || null,
             metadata: rawOutput?.metadata || {},
             startedAt: distillRun.createdAt,
             completedAt: new Date().toISOString(),
@@ -7080,6 +7419,7 @@ export function createContextForge(options = {}) {
             sourceProvenance,
             sourceRawEventIds: selectedRawEvents.map((event) => event.id),
             sourceEventWindow: distillWindow.metadata,
+            operationJobId: options.jobId || null,
           },
         };
 
@@ -7156,6 +7496,7 @@ export function createContextForge(options = {}) {
             status: 'succeeded',
             sessionId: options.sessionId,
             distillRunId: distillRun.id,
+            jobId: options.jobId || null,
             metadata: output.metadata,
             startedAt: distillRun.createdAt,
             completedAt: new Date().toISOString(),
@@ -7295,6 +7636,7 @@ export function createContextForge(options = {}) {
                 audit,
                 sessionId: options.sessionId,
                 checkpointId: checkpoint.id,
+                jobId: options.jobId || null,
                 status: audit.riskCodes?.includes('audit_failed') ? 'failed' : 'succeeded',
               });
               const auditedCandidate = store.markMemoryCandidateAudited({
@@ -7308,6 +7650,7 @@ export function createContextForge(options = {}) {
                   sourceMode: forceAudit ? 'closeout_batch' : 'threshold_batch',
                   sessionId: options.sessionId,
                   checkpointId: checkpoint.id,
+                  operationJobId: options.jobId || null,
                   minBatchCandidates,
                   batchLimit,
                   autoPromoteEnabled: config.autoPromote.enabled,
@@ -7377,6 +7720,7 @@ export function createContextForge(options = {}) {
           sessionId: options.sessionId,
           distillRunId: distillRun.id,
           checkpointId: checkpoint.id,
+          jobId: options.jobId || null,
           metadata: output.metadata,
           startedAt: distillRun.createdAt,
           completedAt,
@@ -7480,6 +7824,7 @@ export function createContextForge(options = {}) {
           distillRunId: options.distillRunId || null,
           checkpointId: options.checkpointId || null,
           candidateId: options.candidateId || null,
+          jobId: options.jobId || null,
           operation: options.operation || null,
           provider: options.provider || null,
           limit: options.limit == null ? 100 : Number(options.limit),
@@ -7498,6 +7843,7 @@ export function createContextForge(options = {}) {
           distillRunId: options.distillRunId || null,
           checkpointId: options.checkpointId || null,
           candidateId: options.candidateId || null,
+          jobId: options.jobId || null,
           operation: options.operation || null,
           provider: options.provider || null,
           limit,
@@ -7511,6 +7857,7 @@ export function createContextForge(options = {}) {
             distillRunId: options.distillRunId || null,
             checkpointId: options.checkpointId || null,
             candidateId: options.candidateId || null,
+            jobId: options.jobId || null,
             operation: options.operation || null,
             provider: options.provider || null,
             limit,

@@ -416,7 +416,8 @@ Provider 실행은 provider 이름별로 프로세스 전역 concurrency cap을 
 기본값은 provider당 `2`이며 `CONTEXTFORGE_PROVIDER_CONCURRENCY_LIMIT`로 조정할
 수 있다. 같은 session의 동시 distill 재시도와 같은 closeout source의 candidate
 audit 재시도는 하나의 실행·write로 합쳐진다. 이 guard는 단일 Node.js process
-범위이며 restart를 넘는 durable job은 별도 async job 모델의 책임이다.
+범위다. client disconnect나 server restart를 넘어야 하는 provider 작업은 아래
+durable operation job API를 사용한다.
 
 Remote long-running call은 `CONTEXTFORGE_REMOTE_TIMEOUT_MS`를 서버에 전달한다.
 설정된 provider timeout이 client timeout보다 짧지 않으면 provider를 실행하기
@@ -434,6 +435,29 @@ node src/cli.js distillCheckpoint \
   --scopeKey github.com/example/contextforge \
   --sessionId demo-session
 ```
+
+요청 수명과 분리해야 하는 provider 작업은 durable job으로 제출한다.
+
+```bash
+node src/cli.js submitDistillJob \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --sessionId demo-session
+
+node src/cli.js processJobs --workerId worker-1 --limit 2
+node src/cli.js getJob --jobId <job-id>
+node src/cli.js listJobs --status failed
+node src/cli.js cancelJob --jobId <queued-job-id>
+```
+
+Candidate audit은 `submitAuditJob`으로 제출하며 `sessionId` 또는
+`checkpointId`와 closeout `trigger`가 필요하다. 같은 scope/source window/policy
+제출은 기본적으로 하나의 job으로 합쳐지고, 필요하면 `idempotencyKey`를 직접
+지정할 수 있다. Worker는 bounded batch를 claim하고 provider 실행 중 lease를
+갱신하며, crash 뒤 만료 lease를 복구하고 retryable failure를 `maxAttempts`까지
+재시도한다. Queued job 취소는 보장하지만 running provider call은 강제 종료하지
+않고 `running_not_interruptible`을 반환한다. Audit은 여전히 선택된 candidate마다
+provider를 한 번씩 호출하며 true batch contract를 뜻하지 않는다.
 
 DeepSeek 같은 Chat Completions 호환 provider는 `openai_compatible`로 사용할 수
 있다.
