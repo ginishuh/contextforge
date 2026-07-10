@@ -2049,12 +2049,164 @@ export class ContextForgeStore {
     return this.getPreferenceOccurrence({ scopeType: checkpoint.scopeType, scopeKey: checkpoint.scopeKey, mergeKey });
   }
 
-  pruneRawEventsOlderThan(cutoffIso) {
+  pruneRawEventsOlderThan(cutoffIso, { dryRun = false, force = false } = {}) {
     if (!cutoffIso) throw new Error('cutoffIso is required.');
-    const result = this.db.prepare('DELETE FROM raw_events WHERE created_at < ?').run(cutoffIso);
+
+    const candidateRows = this.db
+      .prepare(`
+        SELECT id, scope_type, scope_key, session_id
+        FROM raw_events
+        WHERE created_at < ?
+        ORDER BY scope_type ASC, scope_key ASC, session_id ASC, created_at ASC, id ASC
+      `)
+      .all(cutoffIso);
+    const sessionKey = (row) => json([row.scope_type, row.scope_key, row.session_id], []);
+    const sessions = new Map();
+    for (const row of candidateRows) {
+      const key = sessionKey(row);
+      if (!sessions.has(key)) {
+        sessions.set(key, {
+          scopeType: row.scope_type,
+          scopeKey: row.scope_key,
+          sessionId: row.session_id,
+          candidateIds: [],
+        });
+      }
+      sessions.get(key).candidateIds.push(row.id);
+    }
+
+    const checkpointRows = sessions.size
+      ? this.db
+          .prepare(`
+            WITH candidate_sessions AS (
+              SELECT DISTINCT scope_type, scope_key, session_id
+              FROM raw_events
+              WHERE created_at < ?
+            )
+            SELECT checkpoints.*
+            FROM checkpoints
+            INNER JOIN candidate_sessions
+              ON candidate_sessions.scope_type = checkpoints.scope_type
+             AND candidate_sessions.scope_key = checkpoints.scope_key
+             AND candidate_sessions.session_id = checkpoints.session_id
+            WHERE checkpoints.level = 0
+            ORDER BY checkpoints.created_at DESC, checkpoints.rowid DESC
+          `)
+          .all(cutoffIso)
+      : [];
+    const runRows = sessions.size
+      ? this.db
+          .prepare(`
+            WITH candidate_sessions AS (
+              SELECT DISTINCT scope_type, scope_key, session_id
+              FROM raw_events
+              WHERE created_at < ?
+            )
+            SELECT distill_runs.*
+            FROM distill_runs
+            INNER JOIN candidate_sessions
+              ON candidate_sessions.scope_type = distill_runs.scope_type
+             AND candidate_sessions.scope_key = distill_runs.scope_key
+             AND candidate_sessions.session_id = distill_runs.session_id
+            ORDER BY distill_runs.created_at DESC, distill_runs.rowid DESC
+          `)
+          .all(cutoffIso)
+      : [];
+
+    const checkpointsBySession = new Map();
+    for (const row of checkpointRows) {
+      const key = sessionKey(row);
+      if (!checkpointsBySession.has(key)) checkpointsBySession.set(key, []);
+      checkpointsBySession.get(key).push(hydrateCheckpoint(row));
+    }
+    const runsBySession = new Map();
+    const runsById = new Map();
+    for (const row of runRows) {
+      const run = hydrateDistillRun(row);
+      const key = sessionKey(row);
+      if (!runsBySession.has(key)) runsBySession.set(key, []);
+      runsBySession.get(key).push(run);
+      runsById.set(run.id, run);
+    }
+
+    const eligibleIds = [];
+    const sessionResults = [];
+    for (const [key, session] of sessions) {
+      const candidateIdSet = new Set(session.candidateIds);
+      const checkpoints = checkpointsBySession.get(key) || [];
+      const runs = runsBySession.get(key) || [];
+      const latestRun = runs[0] || null;
+      const successfulCheckpoints = checkpoints.filter(
+        (checkpoint) => checkpoint.distillRunId && runsById.get(checkpoint.distillRunId)?.status === 'succeeded',
+      );
+      const coveredIds = new Set();
+      for (const checkpoint of successfulCheckpoints) {
+        for (const rawEventId of checkpoint.metadata?.sourceRawEventIds || []) {
+          if (candidateIdSet.has(rawEventId)) coveredIds.add(rawEventId);
+        }
+      }
+
+      let status = 'eligible';
+      let reason = force ? 'force_age_only' : 'covered_by_successful_level_zero_checkpoint';
+      let sessionEligibleIds = force ? [...session.candidateIds] : [...coveredIds];
+      if (!force) {
+        if (checkpoints.length === 0) {
+          status = 'blocked';
+          reason = 'no_level_zero_checkpoint';
+          sessionEligibleIds = [];
+        } else if (latestRun?.status === 'failed') {
+          status = 'blocked';
+          reason = 'latest_distill_failed';
+          sessionEligibleIds = [];
+        } else if (latestRun?.status === 'started') {
+          status = 'blocked';
+          reason = 'latest_distill_incomplete';
+          sessionEligibleIds = [];
+        } else if (successfulCheckpoints.length === 0) {
+          status = 'blocked';
+          reason = 'no_successful_level_zero_checkpoint';
+          sessionEligibleIds = [];
+        } else if (sessionEligibleIds.length === 0) {
+          status = 'blocked';
+          reason = 'no_covered_raw_events_before_cutoff';
+        }
+      }
+
+      eligibleIds.push(...sessionEligibleIds);
+      sessionResults.push({
+        scopeType: session.scopeType,
+        scopeKey: session.scopeKey,
+        sessionId: session.sessionId,
+        status,
+        reason,
+        candidateRawEvents: session.candidateIds.length,
+        eligibleRawEvents: sessionEligibleIds.length,
+        blockedRawEvents: session.candidateIds.length - sessionEligibleIds.length,
+        latestCheckpointId: checkpoints[0]?.id || null,
+        latestDistillRunId: latestRun?.id || null,
+        latestDistillRunStatus: latestRun?.status || null,
+      });
+    }
+
+    let deletedRawEvents = 0;
+    if (!dryRun && eligibleIds.length > 0) {
+      const remove = this.db.prepare('DELETE FROM raw_events WHERE id = ?');
+      deletedRawEvents = this.db.transaction((ids) => {
+        let changes = 0;
+        for (const id of ids) changes += remove.run(id).changes;
+        return changes;
+      })(eligibleIds);
+    }
+
     return {
-      deletedRawEvents: result.changes,
+      deletedRawEvents,
+      candidateRawEvents: candidateRows.length,
+      eligibleRawEvents: eligibleIds.length,
+      blockedRawEvents: candidateRows.length - eligibleIds.length,
       cutoffIso,
+      dryRun: Boolean(dryRun),
+      force: Boolean(force),
+      sessions: sessionResults,
     };
   }
 
