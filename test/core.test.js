@@ -9348,6 +9348,76 @@ test('concurrent duplicate candidate audits share one provider call and metadata
   assert.equal(candidate.reviewMetadata.audit.decision, 'approve');
 });
 
+test('retryable candidate audit failures can be safely retried without force', async () => {
+  const dataDir = await makeTempDir();
+  let auditInvocations = 0;
+  const auditor = async () => {
+    auditInvocations += 1;
+    if (auditInvocations === 1) {
+      const error = new ProviderTimeoutError('retryable_auditor', 25);
+      error.metadata = {
+        provider: 'retryable_auditor',
+        usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6 },
+      };
+      throw error;
+    }
+    return {
+      approved: true,
+      decision: 'approve',
+      reason: 'Retry succeeded without a duplicate concurrent write.',
+      riskCodes: [],
+      metadata: {
+        provider: 'retryable_auditor',
+        usage: { input_tokens: 6, output_tokens: 2, total_tokens: 8 },
+      },
+    };
+  };
+  auditor.metadata = { provider: 'retryable_auditor', timeoutMs: 1000 };
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'retryable_audit_provider',
+    },
+    cwd: process.cwd(),
+    autoPromoteAuditor: auditor,
+    distillProviders: {
+      retryable_audit_provider: async () => ({
+        summaryShort: 'Retryable audit checkpoint.',
+        summaryText: 'The candidate audit may be retried after a transient timeout.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'retryable-audit-runbook',
+            content: 'Retry transient audit failures without force.',
+            category: 'runbook',
+            candidateType: 'runbook',
+            confidence: 0.96,
+            stability: 0.96,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+        ],
+      }),
+    },
+  });
+  const source = { scope: 'repo', scopeKey: 'retryable-audit-repo', sessionId: 'retryable-audit-session' };
+  app.appendRaw({ ...source, role: 'assistant', content: 'Retryable audit raw evidence.' });
+  const checkpoint = await app.distillCheckpoint(source);
+  const options = { ...source, checkpointId: checkpoint.id, trigger: 'manual_closeout' };
+
+  const failed = await app.auditMemoryCandidates(options);
+  assert.equal(failed.proposals[0].audit.retryable, true);
+  const retried = await app.auditMemoryCandidates(options);
+  assert.equal(retried.proposals[0].audit.decision, 'approve');
+  assert.equal(retried.proposals[0].audit.retryable, undefined);
+  assert.equal(auditInvocations, 2);
+  assert.equal(app.listLlmUsageEvents({ ...source, operation: 'candidate_audit' }).length, 2);
+  const [candidate] = app.listMemoryCandidates({ ...source, checkpointId: checkpoint.id, status: 'pending' });
+  assert.equal(candidate.reviewMetadata.audit.decision, 'approve');
+});
+
 test('auditMemoryCandidates records failed audit usage when error metadata includes usage', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({

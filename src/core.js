@@ -5382,8 +5382,15 @@ export function createContextForge(options = {}) {
         });
         const storedAudited = truthyOption(options.force)
           ? []
-          : allCandidates.filter((candidate) => candidate.reviewMetadata?.audit);
-        const candidates = allCandidates.filter((candidate) => truthyOption(options.force) || !candidate.reviewMetadata?.audit);
+          : allCandidates.filter(
+              (candidate) => candidate.reviewMetadata?.audit && candidate.reviewMetadata.audit.retryable !== true,
+            );
+        const candidates = allCandidates.filter(
+          (candidate) =>
+            truthyOption(options.force) ||
+            !candidate.reviewMetadata?.audit ||
+            candidate.reviewMetadata.audit.retryable === true,
+        );
         if (!auditor) {
           return {
             kind: 'memory_candidate_audit_suggestions',
@@ -5770,7 +5777,10 @@ export function createContextForge(options = {}) {
             }
           } else {
             for (const item of selected) {
-              const storedAudit = item.candidate.reviewMetadata?.audit || null;
+              const storedAudit =
+                item.candidate.reviewMetadata?.audit?.retryable === true
+                  ? null
+                  : item.candidate.reviewMetadata?.audit || null;
               if (storedAudit) {
                 audited.push({ ...item, audit: storedAudit, reusedStoredAudit: true });
                 continue;
@@ -7197,7 +7207,10 @@ export function createContextForge(options = {}) {
               sort: 'recommendation',
               limit: scanLimit,
             })
-            .filter((candidate) => !candidate.reviewMetadata?.audit);
+            .filter(
+              (candidate) =>
+                !candidate.reviewMetadata?.audit || candidate.reviewMetadata.audit.retryable === true,
+            );
           const shouldAudit =
             checkpointLevel === 0 &&
             Boolean(auditor) &&
