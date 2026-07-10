@@ -329,6 +329,7 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
     },
     runtime: {
       role: env.CONTEXTFORGE_RUNTIME_ROLE || 'local-process',
+      allowPlaintextRuntimeSecrets: parseBoolean(env.CONTEXTFORGE_ALLOW_PLAINTEXT_RUNTIME_SECRETS),
     },
     autoPromote: {
       enabled: parseBoolean(env.CONTEXTFORGE_AUTO_PROMOTE_ENABLED),

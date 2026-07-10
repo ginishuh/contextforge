@@ -66,6 +66,10 @@ Safety:
 
 - Treat retrieval as machine-local context unless the user says this store is
   authoritative.
+- On POSIX, ContextForge automatically repairs the data directory to `0700` and
+  the SQLite database plus existing rollback-journal/WAL/SHM sidecars to `0600`.
+  On Windows, `dbInfo.permissions.reason` is `windows_acl_inherited`; use a
+  private parent directory ACL because POSIX mode enforcement is unavailable.
 - Do not make cross-machine or deployment claims from local-only state.
 - Never commit `.contextforge/`, `.db`, `.db-wal`, `.db-shm`, raw logs, or env
   files.
@@ -140,6 +144,11 @@ node src/cli.js dbInfo
 Safety:
 
 - Server-side provider credentials belong on the server, not in client repos.
+- Prefer `CONTEXTFORGE_OPENAI_COMPATIBLE_API_KEY` over DB-backed runtime
+  secrets. SQLite stores runtime secrets as plaintext; new DB-backed secret
+  writes require the explicit
+  `CONTEXTFORGE_ALLOW_PLAINTEXT_RUNTIME_SECRETS=true` opt-in and existing stored
+  values remain visible through a warning until cleared.
 - Treat `CONTEXTFORGE_REMOTE_TOKEN` as an administrator credential.
 - Back up the server-owned SQLite store before risky migrations or destructive
   retention changes.

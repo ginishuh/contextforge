@@ -333,6 +333,13 @@ node src/cli.js migrateScope \
 - `local`: 사용자 홈 디렉터리 아래 단일 머신 SQLite.
 - `remote`: HTTP 서버가 canonical DB를 소유하고, 여러 머신이 MCP/CLI로 접근한다.
 
+POSIX에서는 ContextForge가 data directory를 `0700`, SQLite DB와 이미 존재하는
+`-journal`/`-wal`/`-shm` 파일을 `0600`으로 생성·자동 보정한다. 적용된 정책은
+`dbInfo.permissions`에서 확인할 수 있다. Windows는 POSIX mode 대신 상위 directory
+ACL을 상속하므로 `windows_acl_inherited`로 표시한다. 공유 호스트에서는 전용 계정과
+제한된 상위 directory ACL을 사용해야 한다. ContextForge는 leaf data directory를
+보호하며, 그 상위 경로의 권한·ACL은 운영자가 제한해야 한다.
+
 remote client 예시:
 
 ```bash
@@ -356,7 +363,13 @@ remote API 호출에는 `CONTEXTFORGE_REMOTE_TOKEN`이 필요하다.
 
 운영 UI는 `/ui/`에서 사용할 수 있다. UI에서는 runtime 설정, distill provider,
 모델, threshold, memory candidates, durable memory correction 등을 확인하고
-수정할 수 있다. API key는 write-only로 저장되며 응답에 노출되지 않는다.
+수정할 수 있다. Provider credential은 기본적으로
+`CONTEXTFORGE_OPENAI_COMPATIBLE_API_KEY` 환경 변수에 둔다. UI/API의 DB-backed API
+key는 응답에는 노출되지 않지만 SQLite 내부에는 평문으로 저장된다. 따라서 새
+secret 저장은 기본 차단되며, 꼭 필요할 때만 서버에
+`CONTEXTFORGE_ALLOW_PLAINTEXT_RUNTIME_SECRETS=true`를 명시한다. 기존에 저장된
+secret은 계속 동작하지만 삭제할 때까지 `getRuntimeSettings`에
+`plaintext_runtime_secret_stored` 경고가 반환된다.
 admin UI cookie는 기본적으로 `CONTEXTFORGE_ADMIN_COOKIE_SECURE=auto`로 동작한다.
 직접 HTTP 접속에서는 로컬 운영 세션이 동작하도록 non-`Secure` cookie를 쓰고,
 기본값에서는 `X-Forwarded-For`와 `X-Forwarded-Proto`를 무시한다. Reverse proxy의

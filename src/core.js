@@ -3015,6 +3015,9 @@ function effectiveRuntimeConfig(config, runtimeSettings = { settings: {}, secret
 
 function sanitizedRuntimeSettings(config, runtimeSettings = { settings: {}, secrets: {} }) {
   const effective = effectiveRuntimeConfig(config, runtimeSettings);
+  const plaintextSecretStored = Boolean(
+    runtimeSettings.settings?.[SECRET_KEYS.openAiCompatibleApiKey]?.secretPresent,
+  );
   return {
     effective: {
       distillProvider: effective.distillProvider,
@@ -3032,6 +3035,15 @@ function sanitizedRuntimeSettings(config, runtimeSettings = { settings: {}, secr
       presets: DISTILL_MODEL_PRESETS,
     },
     stored: runtimeSettings.settings,
+    warnings: plaintextSecretStored
+      ? [
+          {
+            code: 'plaintext_runtime_secret_stored',
+            message:
+              'A runtime provider secret is stored as plaintext in SQLite. Prefer CONTEXTFORGE_OPENAI_COMPATIBLE_API_KEY and clear the DB-backed secret.',
+          },
+        ]
+      : [],
   };
 }
 
@@ -3764,6 +3776,15 @@ export function createContextForge(options = {}) {
       }
       if (options.secrets?.openAiCompatibleApiKey) {
         secrets[SECRET_KEYS.openAiCompatibleApiKey] = options.secrets.openAiCompatibleApiKey;
+      }
+      if (Object.keys(secrets).length > 0 && !config.runtime.allowPlaintextRuntimeSecrets) {
+        const error = new Error(
+          'DB-backed runtime secrets are stored as plaintext and are disabled by default. ' +
+            'Prefer CONTEXTFORGE_OPENAI_COMPATIBLE_API_KEY, or explicitly set ' +
+            'CONTEXTFORGE_ALLOW_PLAINTEXT_RUNTIME_SECRETS=true to opt in.',
+        );
+        error.code = 'CONTEXTFORGE_PLAINTEXT_RUNTIME_SECRET_OPT_IN_REQUIRED';
+        throw error;
       }
       const clearSecrets = [];
       if (truthyOption(options.clearOpenAiCompatibleApiKey) || options.clearSecrets?.includes('openAiCompatibleApiKey')) {

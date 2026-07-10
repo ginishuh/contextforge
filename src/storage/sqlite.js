@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
+import { secureDataDirectoryPermissions } from './permissions.js';
 
 export const SCHEMA_VERSION = 18;
 
@@ -567,14 +568,15 @@ const SCOPE_MIGRATION_CONFLICTS = [
 export class ContextForgeStore {
   constructor({ dataDir }) {
     this.dataDir = dataDir;
-    fs.mkdirSync(dataDir, { recursive: true });
-    this.dbPath = path.join(dataDir, 'contextforge.db');
+    this.storagePermissions = secureDataDirectoryPermissions(dataDir);
+    this.dbPath = this.storagePermissions.dbPath;
     this.db = new Database(this.dbPath);
     try {
       this.assertSupportedSchemaVersion();
       this.db.exec('PRAGMA foreign_keys = ON;');
       this.vectorStatus = this.loadVectorExtension();
       this.migrate();
+      this.storagePermissions = secureDataDirectoryPermissions(dataDir);
     } catch (error) {
       this.db.close();
       throw error;
@@ -623,6 +625,7 @@ export class ContextForgeStore {
 
   close() {
     this.db.close();
+    this.storagePermissions = secureDataDirectoryPermissions(this.dataDir);
   }
 
   // Runs fn inside an implicit transaction; rolls back on throw; returns fn's return value.
@@ -1066,6 +1069,7 @@ export class ContextForgeStore {
     return {
       dataDir: this.dataDir,
       dbPath: this.dbPath,
+      permissions: this.storagePermissions,
       schemaVersion: Number(
         this.db.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").get().value,
       ),

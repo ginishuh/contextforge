@@ -100,9 +100,10 @@
               <label>최대 출력 토큰 <input name="openAiMaxTokens" type="number" min="1" placeholder="비우면 기본값" /></label>
             </div>
             <div class="row">
-              <label>API 키 <input name="apiKey" type="password" autocomplete="off" placeholder="저장 전용" /></label>
+              <label>API 키 <input name="apiKey" type="password" autocomplete="off" placeholder="환경 변수 사용 권장" /></label>
               <label class="checkbox"><input name="clearApiKey" type="checkbox" /> 저장된 API 키 지우기</label>
             </div>
+            <p class="muted">기본값에서는 <code>CONTEXTFORGE_OPENAI_COMPATIBLE_API_KEY</code>를 사용하세요. DB 평문 저장은 서버의 명시적 opt-in이 필요합니다.</p>
           </fieldset>
           <fieldset class="provider-section" data-provider-section="codex_exec">
             <legend>Codex Exec 설정</legend>

@@ -72,7 +72,9 @@ async function call(method, body = {}) {
   });
   const payload = await response.json();
   if (!response.ok) {
-    throw new Error(payload?.error?.message || `${method} failed`);
+    const error = new Error(payload?.error?.message || `${method} failed`);
+    error.code = payload?.error?.code;
+    throw error;
   }
   return payload.result;
 }
@@ -176,6 +178,12 @@ async function refreshRuntime() {
     );
   } else {
     runtimeRows.push(['런타임 백엔드', 'mock']);
+  }
+  if (runtime.warnings?.length) {
+    runtimeRows.push([
+      '보안 경고',
+      runtime.warnings.map((warning) => warning.message || warning.code).join('\n'),
+    ]);
   }
   runtimeRows.push(['메모리 수', db.tables.memories], ['후보 수', db.tables.memoryCandidates]);
   dl($('#runtimeSummary'), runtimeRows);
@@ -332,11 +340,16 @@ $('#settingsForm').addEventListener('submit', async (event) => {
   if (form.clearApiKey.checked) {
     clearSecrets.push('openAiCompatibleApiKey');
   }
-  const result = await call('updateRuntimeSettings', { values, secrets, clearSecrets });
-  form.apiKey.value = '';
-  form.clearApiKey.checked = false;
-  $('#settingsMessage').textContent = JSON.stringify(result.effective, null, 2);
-  await refreshRuntime();
+  try {
+    const result = await call('updateRuntimeSettings', { values, secrets, clearSecrets });
+    form.clearApiKey.checked = false;
+    $('#settingsMessage').textContent = JSON.stringify(result.effective, null, 2);
+    await refreshRuntime();
+  } catch (error) {
+    $('#settingsMessage').textContent = `${error.code ? `[${error.code}] ` : ''}${error.message}`;
+  } finally {
+    form.apiKey.value = '';
+  }
 });
 
 $('#deepseekPreset').addEventListener('click', () => {
