@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added deny-by-default capability- and scope-limited API token policies shared
+  by HTTP JSON and HTTP MCP. Policies support environment-referenced or hashed
+  secrets, explicit `read`/`write`/`review`/`operator` capabilities, exact or
+  wildcard scope rules, expiry, revocation, legacy full-token migration, and
+  non-secret token identity correlation in durable jobs and LLM usage events.
 - Added `/readyz` DB/schema/disk/queue readiness, authenticated Prometheus
   `/metrics`, request/job correlation ids, and graceful HTTP drain on
   SIGTERM/SIGINT. SQLite now reports an explicit WAL/NORMAL/5s busy-timeout

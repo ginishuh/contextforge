@@ -145,7 +145,8 @@ Meaning:
 - `/metrics` is an authenticated Prometheus endpoint.
 - `/mcp` is the Streamable HTTP MCP endpoint.
 - `/v0/*` is the JSON remote API.
-- Binding to a non-loopback host requires `CONTEXTFORGE_REMOTE_TOKEN`.
+- Binding to a non-loopback host requires `CONTEXTFORGE_REMOTE_TOKEN` or at
+  least one valid policy in `CONTEXTFORGE_API_TOKENS_JSON`.
 - Public internet exposure should go through HTTPS reverse proxy when possible.
 - The operator UI cookie defaults to `CONTEXTFORGE_ADMIN_COOKIE_SECURE=auto`.
   In this mode, direct HTTP access receives a non-`Secure` cookie. Forwarded
@@ -192,7 +193,9 @@ Safety:
   writes require the explicit
   `CONTEXTFORGE_ALLOW_PLAINTEXT_RUNTIME_SECRETS=true` opt-in and existing stored
   values remain visible through a warning until cleared.
-- Treat `CONTEXTFORGE_REMOTE_TOKEN` as an administrator credential.
+- Treat a compatibility `CONTEXTFORGE_REMOTE_TOKEN` as an administrator
+  credential. Prefer capability/scope-limited policies from
+  [API Token Authorization](api-token-authorization.md) for remote agents.
 - Back up the server-owned SQLite store before risky migrations or destructive
   retention changes.
 - Do not point git at live SQLite or raw runtime data.

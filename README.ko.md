@@ -410,6 +410,11 @@ Prometheus text이며 remote token 또는 admin session 인증이 필요하다. 
 backup/restore와 graceful shutdown 절차는
 [ContextForge Operations](docs/operations.md)을 따른다. token이 설정되어 있으면
 remote API 호출에는 `CONTEXTFORGE_REMOTE_TOKEN`이 필요하다.
+기존 token은 full-access 호환 credential이다. Remote agent에는 가능하면
+`CONTEXTFORGE_API_TOKENS_JSON`으로 `read`/`write`/`review`/`operator` capability와
+`repo`/`shared`/`local` scope를 제한한다. HTTP JSON과 HTTP MCP는 같은
+deny-by-default 정책을 사용한다. 설정·rotation·revocation·expiry 절차는
+[API Token Authorization](docs/api-token-authorization.md)에 정리돼 있다.
 
 운영 UI는 `/ui/`에서 사용할 수 있다. UI에서는 runtime 설정, distill provider,
 모델, threshold, memory candidates, durable memory correction 등을 확인하고
