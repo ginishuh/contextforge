@@ -512,11 +512,13 @@ uses a separate audit runner before the durable memory write. The default audit
 runner is `codex_exec` with `gpt-5.5` and reasoning effort `low`, independent
 from the distillation runner.
 
-For agent closeout review without writes, use `audit_memory_candidates`. It uses
-the same closeout-scoped safety policy and configured audit provider, returns
-audited `promote`/`review` recommendations, and never promotes durable memory or
-changes candidate status. Keep `auto_promote_memory_candidates dryRun=false` for
-the separate explicit automation path.
+For agent closeout review without durable-memory promotion, use
+`audit_memory_candidates`. It uses the same closeout-scoped safety policy,
+selects a bounded candidate batch, and calls the configured audit provider once
+per selected candidate. It persists candidate review metadata and audit usage
+events while leaving candidate status and durable memory unchanged. Keep
+`auto_promote_memory_candidates dryRun=false` for the separate explicit
+automation path.
 
 For Python-backed services, the audit gate can also use the experimental
 `codex_sdk_python` provider. It calls the Codex Python SDK from a small Python

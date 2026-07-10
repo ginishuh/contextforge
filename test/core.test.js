@@ -8633,7 +8633,7 @@ test('autoPromoteMemoryCandidates requires closeout scope and defaults to dry-ru
   );
 });
 
-test('auditMemoryCandidates returns audited read-only recommendations', async () => {
+test('auditMemoryCandidates persists audit metadata without promoting durable memory', async () => {
   const dataDir = await makeTempDir();
   const auditInvocations = [];
   const app = createContextForge({
@@ -8710,6 +8710,8 @@ test('auditMemoryCandidates returns audited read-only recommendations', async ()
   assert.equal(noSource.kind, 'memory_candidate_audit_suggestions');
   assert.deepEqual(noSource.proposals, []);
   assert.equal(noSource.source.mode, 'none');
+  assert.equal(noSource.policy.mutatesDurableMemory, false);
+  assert.equal(noSource.policy.persistsAuditMetadata, false);
   assert.ok(noSource.requestWarnings.some((warning) => warning.code === 'missing_closeout_source'));
 
   const result = await app.auditMemoryCandidates({
@@ -8721,7 +8723,8 @@ test('auditMemoryCandidates returns audited read-only recommendations', async ()
   });
 
   assert.equal(result.kind, 'memory_candidate_audit_suggestions');
-  assert.equal(result.policy.mutates, false);
+  assert.equal(result.policy.mutatesDurableMemory, false);
+  assert.equal(result.policy.persistsAuditMetadata, true);
   assert.equal(result.policy.audit.executed, true);
   assert.equal(result.policy.audit.provider, 'none');
   assert.equal(result.source.mode, 'checkpoint');
@@ -8740,6 +8743,14 @@ test('auditMemoryCandidates returns audited read-only recommendations', async ()
   });
   assert.equal(pendingCandidates.length, 1);
   assert.equal(pendingCandidates[0].candidate.key, 'audited-readonly-runbook');
+  assert.ok(pendingCandidates[0].reviewedAt);
+  assert.equal(
+    pendingCandidates[0].reviewReason,
+    'Candidate is stable enough to offer as a closeout recommendation.',
+  );
+  assert.equal(pendingCandidates[0].reviewMetadata.audit.decision, 'approve');
+  assert.equal(pendingCandidates[0].reviewMetadata.auditMetadata.mutatesDurableMemory, false);
+  assert.equal(pendingCandidates[0].reviewMetadata.auditMetadata.persistsAuditMetadata, true);
 
   const store = new ContextForgeStore({ dataDir });
   const events = store.listLlmUsageEvents({
@@ -12581,6 +12592,11 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.ok(auditCandidatesTool.inputSchema.properties.minConfidence);
     assert.ok(auditCandidatesTool.inputSchema.properties.promotionRecommendation);
     assert.ok(auditCandidatesTool.description.includes('never promotes'));
+    assert.ok(auditCandidatesTool.description.includes('Persists candidate review metadata'));
+    assert.equal(auditCandidatesTool.annotations.readOnlyHint, false);
+    assert.equal(auditCandidatesTool.annotations.destructiveHint, false);
+    assert.equal(auditCandidatesTool.annotations.idempotentHint, false);
+    assert.equal(auditCandidatesTool.annotations.openWorldHint, true);
     const promoteTool = toolList.tools.find((tool) => tool.name === 'promote_memory');
     assert.ok(promoteTool.description.includes('sourceCheckpointId'));
     const promoteCandidateTool = toolList.tools.find((tool) => tool.name === 'promote_memory_candidate');

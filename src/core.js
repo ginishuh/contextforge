@@ -5206,7 +5206,8 @@ export function createContextForge(options = {}) {
             minStability,
             allowedCategories: Array.from(allowedCategories),
             scopeFallback: false,
-            mutates: false,
+            mutatesDurableMemory: false,
+            persistsAuditMetadata: false,
             audit: {
               enabled: false,
               executed: false,
@@ -5267,7 +5268,8 @@ export function createContextForge(options = {}) {
               minStability,
               allowedCategories: Array.from(allowedCategories),
               scopeFallback: false,
-              mutates: false,
+              mutatesDurableMemory: false,
+              persistsAuditMetadata: false,
               audit: auditPolicy,
             },
             proposals: [],
@@ -5307,7 +5309,8 @@ export function createContextForge(options = {}) {
               minStability,
               allowedCategories: Array.from(allowedCategories),
               scopeFallback: false,
-              mutates: false,
+              mutatesDurableMemory: false,
+              persistsAuditMetadata: false,
               audit: auditPolicy,
             },
             proposals: storedAudited.map((candidate, index) => storedAuditProposal(candidate, index + 1)).slice(0, limit),
@@ -5365,7 +5368,8 @@ export function createContextForge(options = {}) {
                 sourceMode,
                 checkpointId,
                 sessionId: options.sessionId || null,
-                mutates: false,
+                mutatesDurableMemory: false,
+                persistsAuditMetadata: true,
               },
             });
             audited.push({ ...item, candidate: auditedCandidate, audit });
@@ -5397,7 +5401,8 @@ export function createContextForge(options = {}) {
                 sourceMode,
                 checkpointId,
                 sessionId: options.sessionId || null,
-                mutates: false,
+                mutatesDurableMemory: false,
+                persistsAuditMetadata: true,
               },
             });
             audited.push({
@@ -5421,7 +5426,8 @@ export function createContextForge(options = {}) {
             minStability,
             allowedCategories: Array.from(allowedCategories),
             scopeFallback: false,
-            mutates: false,
+            mutatesDurableMemory: false,
+            persistsAuditMetadata: audited.length > 0,
             audit: {
               ...auditPolicy,
               executed: Boolean(auditor) && audited.length > 0,
@@ -7138,7 +7144,7 @@ export function createContextForge(options = {}) {
                 );
                 if (autoScore > 0) {
                   const reason =
-                    'Auto-promoted after automatic batched candidate audit approved this strict safe candidate.';
+                    'Auto-promoted after automatic candidate audit approved this strict safe candidate.';
                   const memory = autoPromoteIndexedCandidate(store, scope, auditedCandidate, autoWarnings, reason, audit);
                   enqueueEmbeddingSources(store, [store.embeddingSourceForMemory(memory)]);
                   promotedCount += 1;
