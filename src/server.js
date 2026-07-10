@@ -6,7 +6,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { createTokenAuthorizer } from './auth/token_authorization.js';
+import { authorizeAndBindScope, createTokenAuthorizer } from './auth/token_authorization.js';
 import { createContextForge } from './core.js';
 import { createContextForgeMcpServer } from './mcp.js';
 import { REMOTE_METHODS } from './remote/client.js';
@@ -453,24 +453,13 @@ function createRemoteAccessApp(app, transport, onOperation = null, context = {})
         const callArgs = [...args];
         const method = String(property);
         const callOptions = callArgs[0] && typeof callArgs[0] === 'object' ? callArgs[0] : {};
-        const authorization = context.authorizer?.authorize(
-          context.identity,
-          method,
-          callOptions,
-          target.config || {},
-        );
-        if (callArgs[0] && typeof callArgs[0] === 'object') {
-          const authorizedScope = authorization?.scopes?.length === 1 ? authorization.scopes[0] : null;
+        const bound = context.authorizer
+          ? authorizeAndBindScope(context.authorizer, context.identity, method, callOptions, target.config || {})
+          : { options: { ...callOptions } };
+        if (callArgs.length > 0 || Object.keys(bound.options).length > 0) {
           callArgs[0] = {
-            ...callArgs[0],
-            ...(authorizedScope && !callArgs[0].scopeKey
-              ? {
-                  scope: authorizedScope.scopeType,
-                  scopeType: authorizedScope.scopeType,
-                  scopeKey: authorizedScope.scopeKey,
-                }
-              : {}),
-            requestId: context.requestId || callArgs[0].requestId,
+            ...bound.options,
+            requestId: context.requestId || bound.options.requestId,
             authTokenId: context.identity?.id || null,
             authKind: context.identity?.kind || null,
           };
@@ -833,14 +822,14 @@ export function createContextForgeServer({ app, env = process.env, tokenAuthoriz
     }
 
     try {
-      const options = await readJsonBody(request, { maxBodyBytes });
-      const authorization = authorizer.authorize(identity, method, options, serverApp.config || {});
-      const authorizedScope = authorization.scopes.length === 1 ? authorization.scopes[0] : null;
-      if (authorizedScope && !options.scopeKey) {
-        options.scope = authorizedScope.scopeType;
-        options.scopeType = authorizedScope.scopeType;
-        options.scopeKey = authorizedScope.scopeKey;
-      }
+      const inputOptions = await readJsonBody(request, { maxBodyBytes });
+      const { options } = authorizeAndBindScope(
+        authorizer,
+        identity,
+        method,
+        inputOptions,
+        serverApp.config || {},
+      );
       options.requestId = requestId;
       options.authTokenId = identity.id;
       options.authKind = identity.kind;

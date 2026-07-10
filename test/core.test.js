@@ -15714,7 +15714,12 @@ test('HTTP capability tokens enforce method and scope boundaries while admin ses
   const password = 'capability-admin-password';
   const tokenPolicies = [
     { id: 'reader', tokenEnv: 'READER_TOKEN', capabilities: ['read'], scopes: ['repo:allowed-repo'] },
-    { id: 'writer', tokenEnv: 'WRITER_TOKEN', capabilities: ['write'], scopes: ['repo:allowed-repo'] },
+    {
+      id: 'writer',
+      tokenEnv: 'WRITER_TOKEN',
+      capabilities: ['write'],
+      scopes: ['repo:allowed-repo', 'repo:second-allowed'],
+    },
     { id: 'operator', tokenEnv: 'OPERATOR_TOKEN', capabilities: ['operator'], scopes: ['*:*'] },
   ];
   const env = {
@@ -15757,6 +15762,8 @@ test('HTTP capability tokens enforce method and scope boundaries while admin ses
       { ...allowedScope, key: 'blocked-write', content: 'reader cannot write' },
       { scope: 'shared', scopeKey: 'global', key: 'blocked-shared', content: 'repo writer cannot write shared' },
       { scope: 'local', scopeKey: 'machine', key: 'blocked-local', content: 'repo writer cannot write local' },
+      { scopeKey: 'other-repo', key: 'blocked-partial-key', content: 'partial scopeKey cannot bypass policy' },
+      { scope: 'shared', key: 'blocked-partial-type', content: 'partial scope type cannot bypass policy' },
     ]) {
       const token = body.key === 'blocked-write' ? 'reader-token-secret-1234' : 'writer-token-secret-1234';
       const forbidden = await call(token, 'remember', body);
@@ -15765,6 +15772,14 @@ test('HTTP capability tokens enforce method and scope boundaries while admin ses
       assert.equal(error.error.name, 'ContextForgeAuthorizationError');
       assert.equal(error.error.code, 'CONTEXTFORGE_FORBIDDEN');
     }
+
+    const secondAllowed = await call('writer-token-secret-1234', 'remember', {
+      scope: 'repo',
+      scopeKey: 'second-allowed',
+      key: 'second-allowed-write',
+      content: 'Explicitly allowed non-default repo scopes remain usable.',
+    });
+    assert.equal(secondAllowed.status, 200);
 
     for (const crossScopeOptions of [
       { ...allowedScope, query: 'shared bypass', includeShared: 'true' },
@@ -15863,6 +15878,13 @@ test('HTTP MCP and remote client return the same capability denial semantics', a
     });
     assert.equal(denied.isError, true);
     assert.match(denied.content[0].text, /requires the write capability/);
+
+    const partialScopeDenied = await client.callTool({
+      name: 'search',
+      arguments: { scopeKey: 'mcp-other-repo', query: 'partial scope bypass' },
+    });
+    assert.equal(partialScopeDenied.isError, true);
+    assert.match(partialScopeDenied.content[0].text, /not allowed to access repo:mcp-other-repo/);
 
     const remoteApp = createContextForge({
       env: {

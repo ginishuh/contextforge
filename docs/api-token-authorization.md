@@ -8,7 +8,9 @@ by both transports.
 
 `CONTEXTFORGE_REMOTE_TOKEN` remains a full-access compatibility credential when
 `CONTEXTFORGE_API_TOKENS_JSON` is not configured. Its identity is recorded as
-`legacy-remote-token`.
+`legacy-remote-token`. The legacy path does not introduce a new minimum-length
+startup check so existing deployments are not broken; operators should still
+rotate weak values to long random secrets before exposing the server.
 
 When scoped token policies are configured, the legacy token is disabled by
 default. Set `CONTEXTFORGE_LEGACY_REMOTE_TOKEN_MODE=full` only for a bounded

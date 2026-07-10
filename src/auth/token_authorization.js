@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { REMOTE_METHODS } from '../remote/client.js';
+import { normalizeScopeOptions } from '../scopes/index.js';
 
 export const TOKEN_CAPABILITIES = Object.freeze(['read', 'write', 'review', 'operator']);
 
@@ -31,13 +32,18 @@ const CAPABILITY_METHODS = Object.freeze({
   ],
 });
 
-export const REMOTE_METHOD_CAPABILITIES = Object.freeze(
-  Object.fromEntries(
-    Object.entries(CAPABILITY_METHODS).flatMap(([capability, methods]) =>
-      methods.map((method) => [method, capability]),
-    ),
-  ),
+const capabilityEntries = Object.entries(CAPABILITY_METHODS).flatMap(([capability, methods]) =>
+  methods.map((method) => [method, capability]),
 );
+const duplicateCapabilityMethods = capabilityEntries
+  .map(([method]) => method)
+  .filter((method, index, methods) => methods.indexOf(method) !== index);
+if (duplicateCapabilityMethods.length) {
+  throw new Error(
+    `Remote authorization matrix assigns multiple capabilities to: ${[...new Set(duplicateCapabilityMethods)].join(', ')}.`,
+  );
+}
+export const REMOTE_METHOD_CAPABILITIES = Object.freeze(Object.fromEntries(capabilityEntries));
 
 const missingMethods = REMOTE_METHODS.filter((method) => !REMOTE_METHOD_CAPABILITIES[method]);
 const unknownMethods = Object.keys(REMOTE_METHOD_CAPABILITIES).filter((method) => !REMOTE_METHODS.includes(method));
@@ -210,10 +216,8 @@ function hasAllScopes(identity) {
   return scopeAllowed(identity, '*', '*');
 }
 
-function explicitTopLevelScope(options = {}) {
-  const scopeType = options.scopeType || options.scope;
-  const scopeKey = options.scopeKey;
-  return scopeType && scopeKey ? { scopeType, scopeKey } : null;
+function hasScopeHints(options = {}) {
+  return Boolean(options.scopeType || options.scope || options.scopeKey || options.cwd || options.repoPath);
 }
 
 function trueValue(value) {
@@ -305,8 +309,8 @@ export function createTokenAuthorizer(env = process.env) {
       requireAllowedScope(identity, to, method);
       return { capability, scopes: [from, to] };
     }
-    const explicit = explicitTopLevelScope(options);
-    if (OPTIONALLY_SCOPED_METHODS.has(method) && !explicit) {
+    const hasExplicitScope = hasScopeHints(options);
+    if (OPTIONALLY_SCOPED_METHODS.has(method) && !hasExplicitScope) {
       if (!hasAllScopes(identity)) {
         throw new ContextForgeAuthorizationError(`Method ${method} requires an explicit scope for this token.`, {
           tokenId: identity.id,
@@ -315,17 +319,14 @@ export function createTokenAuthorizer(env = process.env) {
       }
       return { capability, scopes: [] };
     }
-    const scope = explicit || {
-      scopeType: config.defaultScope,
-      scopeKey:
-        config.defaultScope === 'shared'
-          ? config.defaultSharedScopeKey || config.defaultScopeKey
-          : config.defaultScopeKey,
-    };
-    if (!scope.scopeType || !scope.scopeKey) {
+    let scope;
+    try {
+      scope = normalizeScopeOptions(options, config);
+    } catch (error) {
       throw new ContextForgeAuthorizationError(`Method ${method} could not resolve a scope for authorization.`, {
         tokenId: identity.id,
         method,
+        reason: error.message,
       });
     }
     requireAllowedScope(identity, scope, method);
@@ -364,4 +365,20 @@ export function createTokenAuthorizer(env = process.env) {
     authorize,
     configuredTokenIds: Object.freeze(tokens.map((token) => token.id)),
   });
+}
+
+export function authorizeAndBindScope(authorizer, identity, method, options = {}, config = {}) {
+  const authorization = authorizer.authorize(identity, method, options, config);
+  const authorizedScope = authorization.scopes.length === 1 ? authorization.scopes[0] : null;
+  return {
+    authorization,
+    options: authorizedScope
+      ? {
+          ...options,
+          scope: authorizedScope.scopeType,
+          scopeType: authorizedScope.scopeType,
+          scopeKey: authorizedScope.scopeKey,
+        }
+      : { ...options },
+  };
 }
