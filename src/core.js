@@ -19,6 +19,7 @@ import {
   runWithKeyedLock,
   runWithProviderConcurrency,
 } from './runtime/provider_execution.js';
+import { currentRequestContext, runWithRequestContext } from './runtime/request_context.js';
 import { normalizeScopeOptions } from './scopes/index.js';
 import { ContextForgeStore } from './storage/sqlite.js';
 import {
@@ -540,6 +541,7 @@ function recordLlmUsageEvent(store, options) {
     completedAt: options.completedAt || null,
     elapsedMs: options.elapsedMs ?? options.metadata?.elapsedMs ?? null,
   });
+  const context = currentRequestContext();
   return store.insertLlmUsageEvent({
     ...options.scope,
     operation: options.operation,
@@ -552,7 +554,19 @@ function recordLlmUsageEvent(store, options) {
     candidateId: options.candidateId || null,
     jobId: options.jobId || null,
     ...columns,
-    usage: usageJson || {},
+    usage: {
+      ...(usageJson || {}),
+      ...(context?.authTokenId
+        ? {
+            _contextforge: {
+              authTokenId: context.authTokenId,
+              authKind: context.authKind || null,
+              requestId: context.requestId || null,
+              transport: context.transport || null,
+            },
+          }
+        : {}),
+    },
     estimated: false,
     ...times,
   });
@@ -4878,6 +4892,8 @@ export function createContextForge(options = {}) {
           metadata: {
             submittedBy: options.submittedBy || 'api',
             requestId: options.requestId || null,
+            authTokenId: options.authTokenId || null,
+            authKind: options.authKind || null,
             sourceFingerprint,
             executionMode: 'durable_worker',
           },
@@ -4980,6 +4996,8 @@ export function createContextForge(options = {}) {
           metadata: {
             submittedBy: options.submittedBy || 'api',
             requestId: options.requestId || null,
+            authTokenId: options.authTokenId || null,
+            authKind: options.authKind || null,
             sourceFingerprint,
             executionMode: 'durable_worker',
             providerBatchMode: 'per_candidate',
@@ -5099,10 +5117,21 @@ export function createContextForge(options = {}) {
             _jobLeaseOwner: workerId,
             _jobLeaseAttempt: job.attempts,
           };
-          const operationResult =
+          const execute = () =>
             job.operation === 'distill_checkpoint'
-              ? await this.distillCheckpoint(jobOptions)
-              : await this.auditMemoryCandidates(jobOptions);
+              ? this.distillCheckpoint(jobOptions)
+              : this.auditMemoryCandidates(jobOptions);
+          const operationResult = job.metadata?.authTokenId
+            ? await runWithRequestContext(
+                {
+                  requestId: job.metadata.requestId || null,
+                  authTokenId: job.metadata.authTokenId,
+                  authKind: job.metadata.authKind || 'api-token',
+                  transport: 'durable-job',
+                },
+                execute,
+              )
+            : await execute();
           const retryableAudit =
             job.operation === 'audit_memory_candidates'
               ? operationResult?.policy?.audit

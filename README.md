@@ -613,7 +613,11 @@ may fail to import at audit time.
 Use a long random token and store the same value on client machines as
 `CONTEXTFORGE_REMOTE_TOKEN`. Treat this token as an administrator credential:
 it can call every remote API method, including pruning raw evidence and running
-provider health checks. Do not put this file in git.
+provider health checks. Do not put this file in git. For least-privilege remote
+agents, configure `CONTEXTFORGE_API_TOKENS_JSON` with separate `read`, `write`,
+`review`, and `operator` capabilities plus explicit `repo`/`shared`/`local`
+scope rules. HTTP JSON and HTTP MCP share one deny-by-default authorization
+matrix; see [API Token Authorization](docs/api-token-authorization.md).
 
 The HTTP server also serves an operator UI at `/ui/`. The UI can inspect
 runtime/storage state, view recent distillation runs, update DB-backed runtime

@@ -6,10 +6,12 @@ import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { createTokenAuthorizer } from './auth/token_authorization.js';
 import { createContextForge } from './core.js';
 import { createContextForgeMcpServer } from './mcp.js';
 import { REMOTE_METHODS } from './remote/client.js';
 import { runtimeChildSnapshot, terminateRuntimeChildren } from './runtime/child_processes.js';
+import { runWithRequestContext } from './runtime/request_context.js';
 
 const METHOD_SET = new Set(REMOTE_METHODS);
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
@@ -213,11 +215,6 @@ function timingSafeStringEqual(actual, expected) {
   return crypto.timingSafeEqual(paddedActual, paddedExpected) && actualBuffer.length === expectedBuffer.length;
 }
 
-function isAuthorized(request, token) {
-  if (!token) return true;
-  return timingSafeStringEqual(request.headers.authorization, `Bearer ${token}`);
-}
-
 function originMatchesHost(request) {
   const origin = request.headers.origin;
   if (!origin) return true;
@@ -400,10 +397,6 @@ function isAdminSessionAuthorized(request, sessions) {
   return Boolean(entry);
 }
 
-function isRequestAuthorized(request, token, sessions) {
-  return isAuthorized(request, token) || (originMatchesHost(request) && isAdminSessionAuthorized(request, sessions));
-}
-
 function connectionServerRole(connection) {
   return connection?.serverRole || connection?.server?.processRole || connection?.processRole || connection?.mode || null;
 }
@@ -458,6 +451,30 @@ function createRemoteAccessApp(app, transport, onOperation = null, context = {})
       return async (...args) => {
         const startedAt = Date.now();
         const callArgs = [...args];
+        const method = String(property);
+        const callOptions = callArgs[0] && typeof callArgs[0] === 'object' ? callArgs[0] : {};
+        const authorization = context.authorizer?.authorize(
+          context.identity,
+          method,
+          callOptions,
+          target.config || {},
+        );
+        if (callArgs[0] && typeof callArgs[0] === 'object') {
+          const authorizedScope = authorization?.scopes?.length === 1 ? authorization.scopes[0] : null;
+          callArgs[0] = {
+            ...callArgs[0],
+            ...(authorizedScope && !callArgs[0].scopeKey
+              ? {
+                  scope: authorizedScope.scopeType,
+                  scopeType: authorizedScope.scopeType,
+                  scopeKey: authorizedScope.scopeKey,
+                }
+              : {}),
+            requestId: context.requestId || callArgs[0].requestId,
+            authTokenId: context.identity?.id || null,
+            authKind: context.identity?.kind || null,
+          };
+        }
         if (
           context.requestId &&
           ['submitDistillJob', 'submitAuditJob'].includes(String(property)) &&
@@ -483,9 +500,9 @@ function serverStorageEnv(env) {
   };
 }
 
-export function createContextForgeServer({ app, env = process.env } = {}) {
+export function createContextForgeServer({ app, env = process.env, tokenAuthorizer = null } = {}) {
   const serverApp = app || createContextForge({ env: serverStorageEnv(env), reuseStore: true });
-  const authToken = env.CONTEXTFORGE_REMOTE_TOKEN || null;
+  const authorizer = tokenAuthorizer || createTokenAuthorizer(env);
   const shutdownTimeoutMs =
     serverApp.config?.operations?.shutdownTimeoutMs ||
     parsePositiveInteger(env.CONTEXTFORGE_SHUTDOWN_TIMEOUT_MS, 30000);
@@ -527,6 +544,32 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
       serverMetrics.rawPrune.eligible += Number(result?.eligibleRawEvents || 0);
       serverMetrics.rawPrune.blocked += Number(result?.blockedRawEvents || 0);
     }
+  }
+
+  function requestIdentity(request) {
+    const admin = originMatchesHost(request) && isAdminSessionAuthorized(request, adminSessions);
+    return authorizer.authenticate(request.headers.authorization, { admin });
+  }
+
+  function sendAuthenticationError(response) {
+    sendJson(response, 401, {
+      error: {
+        name: 'ContextForgeAuthenticationError',
+        code: 'CONTEXTFORGE_UNAUTHORIZED',
+        message: 'Unauthorized: authentication required.',
+      },
+    });
+  }
+
+  function sendOperationError(response, error) {
+    sendJson(response, error.statusCode || 500, {
+      error: {
+        message: error.message,
+        name: error.name,
+        code: error.code,
+        warnings: error.warnings,
+      },
+    });
   }
 
   function pruneAdminSessions(now = Date.now()) {
@@ -624,15 +667,18 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
     }
 
     if (request.method === 'GET' && requestUrl.pathname === '/metrics') {
-      if (!isRequestAuthorized(request, authToken, adminSessions)) {
-        sendJson(response, 401, { error: { message: 'Unauthorized.' } });
+      const identity = requestIdentity(request);
+      if (!identity) {
+        sendAuthenticationError(response);
         return;
       }
       try {
+        authorizer.authorize(identity, 'operationalMetrics', {}, serverApp.config || {});
+        response.setHeader('x-contextforge-auth-id', identity.id);
         const snapshot = await serverApp.operationalMetrics();
         sendText(response, 200, renderPrometheusMetrics(snapshot, serverMetrics), 'text/plain; version=0.0.4');
       } catch (error) {
-        sendJson(response, 503, { error: { name: error.name, message: error.message } });
+        sendOperationError(response, error);
       }
       return;
     }
@@ -726,12 +772,18 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
     }
 
     if (requestUrl.pathname === '/mcp') {
-      if (!isRequestAuthorized(request, authToken, adminSessions)) {
-        sendJson(response, 401, { error: { message: 'Unauthorized.' } });
+      const identity = requestIdentity(request);
+      if (!identity) {
+        sendAuthenticationError(response);
         return;
       }
+      response.setHeader('x-contextforge-auth-id', identity.id);
       const mcpServer = createContextForgeMcpServer({
-        app: createRemoteAccessApp(serverApp, 'http-mcp', recordOperationMetrics, { requestId }),
+        app: createRemoteAccessApp(serverApp, 'http-mcp', recordOperationMetrics, {
+          requestId,
+          identity,
+          authorizer,
+        }),
         env,
       });
       try {
@@ -739,7 +791,10 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
           sessionIdGenerator: undefined,
         });
         await mcpServer.connect(transport);
-        await transport.handleRequest(request, response);
+        await runWithRequestContext(
+          { requestId, authTokenId: identity.id, authKind: identity.kind, transport: 'http-mcp' },
+          () => transport.handleRequest(request, response),
+        );
         response.on('close', () => {
           transport.close();
           mcpServer.close();
@@ -764,10 +819,12 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
       return;
     }
 
-    if (!isRequestAuthorized(request, authToken, adminSessions)) {
-      sendJson(response, 401, { error: { message: 'Unauthorized.' } });
+    const identity = requestIdentity(request);
+    if (!identity) {
+      sendAuthenticationError(response);
       return;
     }
+    response.setHeader('x-contextforge-auth-id', identity.id);
 
     const method = requestUrl.pathname.slice('/v0/'.length);
     if (!METHOD_SET.has(method) || typeof serverApp[method] !== 'function') {
@@ -777,20 +834,25 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
 
     try {
       const options = await readJsonBody(request, { maxBodyBytes });
+      const authorization = authorizer.authorize(identity, method, options, serverApp.config || {});
+      const authorizedScope = authorization.scopes.length === 1 ? authorization.scopes[0] : null;
+      if (authorizedScope && !options.scopeKey) {
+        options.scope = authorizedScope.scopeType;
+        options.scopeType = authorizedScope.scopeType;
+        options.scopeKey = authorizedScope.scopeKey;
+      }
       options.requestId = requestId;
+      options.authTokenId = identity.id;
+      options.authKind = identity.kind;
       const operationStartedAt = Date.now();
-      const result = await serverApp[method](options);
+      const result = await runWithRequestContext(
+        { requestId, authTokenId: identity.id, authKind: identity.kind, transport: 'http-api' },
+        () => serverApp[method](options),
+      );
       recordOperationMetrics(method, result, Math.max(0, Date.now() - operationStartedAt));
       sendJson(response, 200, { result: wrapRemoteAccessResult(result, 'http-api') });
     } catch (error) {
-      sendJson(response, error.statusCode || 500, {
-        error: {
-          message: error.message,
-          name: error.name,
-          code: error.code,
-          warnings: error.warnings,
-        },
-      });
+      sendOperationError(response, error);
     }
   });
   server.closeContextForge = () => {
@@ -803,17 +865,21 @@ export function createContextForgeServer({ app, env = process.env } = {}) {
   };
   server.contextForgeMetrics = serverMetrics;
   server.contextForgeShutdownTimeoutMs = shutdownTimeoutMs;
+  server.contextForgeCredentialsRequired = authorizer.credentialsRequired;
   return server;
 }
 
 export function startContextForgeServer({ host = '127.0.0.1', port = 8765, env = process.env, app } = {}) {
-  if (!env.CONTEXTFORGE_REMOTE_TOKEN && !isLoopbackHost(host)) {
-    throw new Error('CONTEXTFORGE_REMOTE_TOKEN is required when binding ContextForge remote server to a non-loopback host.');
+  const tokenAuthorizer = createTokenAuthorizer(env);
+  if (!tokenAuthorizer.credentialsRequired && !isLoopbackHost(host)) {
+    throw new Error(
+      'CONTEXTFORGE_REMOTE_TOKEN is required when binding the remote server to a non-loopback host unless CONTEXTFORGE_API_TOKENS_JSON configures scoped API tokens.',
+    );
   }
-  if (!env.CONTEXTFORGE_REMOTE_TOKEN) {
-    console.error('Warning: CONTEXTFORGE_REMOTE_TOKEN is not set; remote API is unauthenticated on loopback only.');
+  if (!tokenAuthorizer.credentialsRequired) {
+    console.error('Warning: no ContextForge API token is configured; remote API is unauthenticated on loopback only.');
   }
-  const server = createContextForgeServer({ app, env });
+  const server = createContextForgeServer({ app, env, tokenAuthorizer });
   return new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(port, host, () => {

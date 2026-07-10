@@ -18,6 +18,11 @@ import {
   createCodexSdkPythonAutoPromoteAuditor,
   runCodexSdkPythonCommand,
 } from '../src/audit/codex_sdk_python.js';
+import {
+  createTokenAuthorizer,
+  REMOTE_METHOD_CAPABILITIES,
+  TOKEN_CAPABILITIES,
+} from '../src/auth/token_authorization.js';
 import { canonicalizeScope, parseScopeAliases } from '../src/config/index.js';
 import { createContextForge } from '../src/core.js';
 import { runCodexExecCommand } from '../src/distill/providers/codex_exec.js';
@@ -15661,6 +15666,339 @@ test('HTTP v0 callers see remote-client connection metadata', async () => {
     assert.equal(resumeBody.result.storage.connection.server.mode, 'http-server');
   } finally {
     await remote.close();
+  }
+});
+
+test('capability token matrix is complete and token lifecycle policies fail closed', () => {
+  assert.deepEqual(Object.keys(REMOTE_METHOD_CAPABILITIES).sort(), [...REMOTE_METHODS].sort());
+  assert.deepEqual(TOKEN_CAPABILITIES, ['read', 'write', 'review', 'operator']);
+  const activeSecret = 'active-token-secret-1234';
+  const env = {
+    ACTIVE_TOKEN: activeSecret,
+    REVOKED_TOKEN: 'revoked-token-secret-1234',
+    EXPIRED_TOKEN: 'expired-token-secret-1234',
+    CONTEXTFORGE_API_TOKENS_JSON: JSON.stringify([
+      { id: 'active', tokenEnv: 'ACTIVE_TOKEN', capabilities: ['read'], scopes: ['repo:allowed'] },
+      { id: 'revoked', tokenEnv: 'REVOKED_TOKEN', capabilities: ['read'], scopes: ['*:*'], revoked: true },
+      {
+        id: 'expired',
+        tokenEnv: 'EXPIRED_TOKEN',
+        capabilities: ['read'],
+        scopes: ['*:*'],
+        expiresAt: '2020-01-01T00:00:00.000Z',
+      },
+    ]),
+  };
+  const authorizer = createTokenAuthorizer(env);
+  assert.equal(authorizer.authenticate(`Bearer ${activeSecret}`).id, 'active');
+  assert.equal(authorizer.authenticate('Bearer revoked-token-secret-1234'), null);
+  assert.equal(authorizer.authenticate('Bearer expired-token-secret-1234'), null);
+  assert.equal(authorizer.authenticate('Bearer wrong-token-secret-1234'), null);
+  assert.deepEqual(authorizer.configuredTokenIds, ['active', 'revoked', 'expired']);
+  assert.throws(
+    () =>
+      createTokenAuthorizer({
+        TOKEN_A: 'duplicate-token-secret-1234',
+        TOKEN_B: 'duplicate-token-secret-1234',
+        CONTEXTFORGE_API_TOKENS_JSON: JSON.stringify([
+          { id: 'a', tokenEnv: 'TOKEN_A', capabilities: ['read'], scopes: ['*:*'] },
+          { id: 'b', tokenEnv: 'TOKEN_B', capabilities: ['read'], scopes: ['*:*'] },
+        ]),
+      }),
+    /reuses another configured token secret/,
+  );
+});
+
+test('HTTP capability tokens enforce method and scope boundaries while admin sessions retain full access', async () => {
+  const dataDir = await makeTempDir();
+  const password = 'capability-admin-password';
+  const tokenPolicies = [
+    { id: 'reader', tokenEnv: 'READER_TOKEN', capabilities: ['read'], scopes: ['repo:allowed-repo'] },
+    { id: 'writer', tokenEnv: 'WRITER_TOKEN', capabilities: ['write'], scopes: ['repo:allowed-repo'] },
+    { id: 'operator', tokenEnv: 'OPERATOR_TOKEN', capabilities: ['operator'], scopes: ['*:*'] },
+  ];
+  const env = {
+    CONTEXTFORGE_DATA_DIR: dataDir,
+    READER_TOKEN: 'reader-token-secret-1234',
+    WRITER_TOKEN: 'writer-token-secret-1234',
+    OPERATOR_TOKEN: 'operator-token-secret-1234',
+    CONTEXTFORGE_API_TOKENS_JSON: JSON.stringify(tokenPolicies),
+    CONTEXTFORGE_ADMIN_USER: 'admin',
+    CONTEXTFORGE_ADMIN_PASSWORD_PBKDF2: testAdminPasswordHash(password),
+  };
+  const remote = await startContextForgeServer({ port: 0, env });
+  const call = (token, method, body = {}) =>
+    fetch(`${remote.url}/v0/${method}`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+  try {
+    const allowedScope = { scope: 'repo', scopeKey: 'allowed-repo' };
+    const written = await call('writer-token-secret-1234', 'remember', {
+      ...allowedScope,
+      key: 'capability-rule',
+      content: 'Capability tokens use least privilege.',
+    });
+    assert.equal(written.status, 200);
+    assert.equal(written.headers.get('x-contextforge-auth-id'), 'writer');
+
+    const read = await call('reader-token-secret-1234', 'getMemory', {
+      ...allowedScope,
+      key: 'capability-rule',
+    });
+    assert.equal(read.status, 200);
+    assert.equal(read.headers.get('x-contextforge-auth-id'), 'reader');
+
+    for (const body of [
+      { ...allowedScope, key: 'blocked-write', content: 'reader cannot write' },
+      { scope: 'shared', scopeKey: 'global', key: 'blocked-shared', content: 'repo writer cannot write shared' },
+      { scope: 'local', scopeKey: 'machine', key: 'blocked-local', content: 'repo writer cannot write local' },
+    ]) {
+      const token = body.key === 'blocked-write' ? 'reader-token-secret-1234' : 'writer-token-secret-1234';
+      const forbidden = await call(token, 'remember', body);
+      assert.equal(forbidden.status, 403);
+      const error = await forbidden.json();
+      assert.equal(error.error.name, 'ContextForgeAuthorizationError');
+      assert.equal(error.error.code, 'CONTEXTFORGE_FORBIDDEN');
+    }
+
+    for (const crossScopeOptions of [
+      { ...allowedScope, query: 'shared bypass', includeShared: 'true' },
+      { ...allowedScope, query: 'related bypass', relatedScopeKeys: 'another-repo' },
+      { ...allowedScope, query: 'workspace bypass', workspaceKey: 'private-workspace' },
+    ]) {
+      const forbidden = await call('reader-token-secret-1234', 'bootstrapContext', crossScopeOptions);
+      assert.equal(forbidden.status, 403);
+      assert.equal((await forbidden.json()).error.code, 'CONTEXTFORGE_FORBIDDEN');
+    }
+
+    const readerMetrics = await fetch(`${remote.url}/metrics`, {
+      headers: { authorization: 'Bearer reader-token-secret-1234' },
+    });
+    assert.equal(readerMetrics.status, 403);
+    const operatorMetrics = await fetch(`${remote.url}/metrics`, {
+      headers: { authorization: 'Bearer operator-token-secret-1234' },
+    });
+    assert.equal(operatorMetrics.status, 200);
+
+    const globalPrune = await call('operator-token-secret-1234', 'pruneRawEvents', {
+      ttlDays: 30,
+      dryRun: true,
+    });
+    assert.equal(globalPrune.status, 200);
+    const scopedOperatorEnv = {
+      ...env,
+      SCOPED_OPERATOR_TOKEN: 'scoped-operator-secret-1234',
+      CONTEXTFORGE_API_TOKENS_JSON: JSON.stringify([
+        ...tokenPolicies,
+        {
+          id: 'scoped-operator',
+          tokenEnv: 'SCOPED_OPERATOR_TOKEN',
+          capabilities: ['operator'],
+          scopes: ['repo:allowed-repo'],
+        },
+      ]),
+    };
+    const scopedAuthorizer = createTokenAuthorizer(scopedOperatorEnv);
+    const scopedIdentity = scopedAuthorizer.authenticate('Bearer scoped-operator-secret-1234');
+    assert.throws(
+      () => scopedAuthorizer.authorize(scopedIdentity, 'pruneRawEvents', {}, { defaultScope: 'repo', defaultScopeKey: 'allowed-repo' }),
+      /all-scope token/,
+    );
+
+    const unknown = await call('unknown-token-secret-1234', 'dbInfo');
+    assert.equal(unknown.status, 401);
+
+    const login = await fetch(`${remote.url}/ui/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password }),
+    });
+    const cookie = login.headers.get('set-cookie');
+    const adminWrite = await fetch(`${remote.url}/v0/remember`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        scope: 'shared',
+        scopeKey: 'global',
+        key: 'admin-full-access',
+        content: 'Same-origin admin sessions retain explicit full access.',
+      }),
+    });
+    assert.equal(adminWrite.status, 200);
+    assert.equal(adminWrite.headers.get('x-contextforge-auth-id'), 'admin-session');
+  } finally {
+    await remote.close();
+  }
+});
+
+test('HTTP MCP and remote client return the same capability denial semantics', async () => {
+  const dataDir = await makeTempDir();
+  const env = {
+    CONTEXTFORGE_DATA_DIR: dataDir,
+    READER_TOKEN: 'mcp-reader-token-secret-1234',
+    CONTEXTFORGE_API_TOKENS_JSON: JSON.stringify([
+      { id: 'mcp-reader', tokenEnv: 'READER_TOKEN', capabilities: ['read'], scopes: ['repo:mcp-allowed'] },
+    ]),
+  };
+  const remote = await startContextForgeServer({ port: 0, env });
+  const client = new Client({ name: 'contextforge-capability-mcp-client', version: '0.0.0' }, { capabilities: {} });
+  const transport = new StreamableHTTPClientTransport(new URL(`${remote.url}/mcp`), {
+    requestInit: { headers: { authorization: 'Bearer mcp-reader-token-secret-1234' } },
+  });
+  try {
+    await client.connect(transport);
+    const denied = await client.callTool({
+      name: 'remember',
+      arguments: {
+        scope: 'repo',
+        scopeKey: 'mcp-allowed',
+        key: 'denied',
+        content: 'Read-only MCP tokens cannot write.',
+      },
+    });
+    assert.equal(denied.isError, true);
+    assert.match(denied.content[0].text, /requires the write capability/);
+
+    const remoteApp = createContextForge({
+      env: {
+        CONTEXTFORGE_STORAGE_MODE: 'remote',
+        CONTEXTFORGE_REMOTE_URL: remote.url,
+        CONTEXTFORGE_REMOTE_TOKEN: 'mcp-reader-token-secret-1234',
+      },
+    });
+    await assert.rejects(
+      remoteApp.remember({
+        scope: 'repo',
+        scopeKey: 'mcp-allowed',
+        key: 'remote-denied',
+        content: 'Remote clients preserve structured authorization errors.',
+      }),
+      (error) =>
+        error.status === 403 &&
+        error.name === 'ContextForgeAuthorizationError' &&
+        error.code === 'CONTEXTFORGE_FORBIDDEN',
+    );
+  } finally {
+    await client.close().catch(() => {});
+    await remote.close();
+  }
+});
+
+test('HTTP authorization injects the approved default scope before core methods can interpret omission as global', async () => {
+  let receivedOptions = null;
+  const app = {
+    config: { defaultScope: 'repo', defaultScopeKey: 'approved-default', defaultSharedScopeKey: 'global' },
+    async rebuildEmbeddings(options) {
+      receivedOptions = options;
+      return { scope: options.scope, scopeType: options.scopeType, scopeKey: options.scopeKey };
+    },
+  };
+  const remote = await startContextForgeServer({
+    app,
+    port: 0,
+    env: {
+      SCOPED_OPERATOR_TOKEN: 'default-scope-operator-1234',
+      CONTEXTFORGE_API_TOKENS_JSON: JSON.stringify([
+        {
+          id: 'default-scope-operator',
+          tokenEnv: 'SCOPED_OPERATOR_TOKEN',
+          capabilities: ['operator'],
+          scopes: ['repo:approved-default'],
+        },
+      ]),
+    },
+  });
+  try {
+    const response = await fetch(`${remote.url}/v0/rebuildEmbeddings`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer default-scope-operator-1234',
+        'content-type': 'application/json',
+      },
+      body: '{}',
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual((await response.json()).result, {
+      scope: 'repo',
+      scopeType: 'repo',
+      scopeKey: 'approved-default',
+    });
+    assert.equal(receivedOptions.scopeKey, 'approved-default');
+  } finally {
+    await remote.close();
+  }
+});
+
+test('provider usage and durable job metadata record the non-secret API token identity', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: { CONTEXTFORGE_DATA_DIR: dataDir, CONTEXTFORGE_DISTILL_PROVIDER: 'identity_provider' },
+    distillProviders: {
+      identity_provider: async ({ rawEvents }) => ({
+        summaryShort: 'Authorization identity usage fixture.',
+        summaryText: rawEvents.map((event) => event.content).join('\n'),
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [],
+        sourceEventCount: rawEvents.length,
+        metadata: { usage: { input_tokens: 7, output_tokens: 3, total_tokens: 10 } },
+      }),
+    },
+  });
+  const env = {
+    IDENTITY_TOKEN: 'identity-token-secret-1234',
+    CONTEXTFORGE_API_TOKENS_JSON: JSON.stringify([
+      {
+        id: 'distill-agent',
+        tokenEnv: 'IDENTITY_TOKEN',
+        capabilities: ['read', 'write'],
+        scopes: ['repo:identity-repo'],
+      },
+    ]),
+  };
+  const remote = await startContextForgeServer({ app, port: 0, env });
+  const call = async (method, body, requestId) => {
+    const response = await fetch(`${remote.url}/v0/${method}`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer identity-token-secret-1234',
+        'content-type': 'application/json',
+        ...(requestId ? { 'x-request-id': requestId } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+    const text = await response.text();
+    assert.equal(response.status, 200, text);
+    return JSON.parse(text).result;
+  };
+  const scope = { scope: 'repo', scopeKey: 'identity-repo', sessionId: 'identity-session' };
+  try {
+    await call('appendRaw', {
+      ...scope,
+      role: 'assistant',
+      content: 'Usage records should name a token id without storing its secret.',
+    });
+    const submitted = await call('submitDistillJob', scope, 'identity-job-request');
+    assert.equal(submitted.job.metadata.authTokenId, 'distill-agent');
+    assert.equal(submitted.job.metadata.authKind, 'api-token');
+    assert.equal(submitted.job.metadata.requestId, 'identity-job-request');
+
+    await call('distillCheckpoint', scope, 'identity-usage-request');
+    const usage = await call('listLlmUsageEvents', { ...scope, limit: 10, page: true });
+    assert.equal(usage.items[0].usage._contextforge.authTokenId, 'distill-agent');
+    assert.equal(usage.items[0].usage._contextforge.authKind, 'api-token');
+    assert.equal(usage.items[0].usage._contextforge.requestId, 'identity-usage-request');
+    assert.equal(usage.items[0].usage._contextforge.transport, 'http-api');
+    assert.ok(!JSON.stringify(usage).includes('identity-token-secret-1234'));
+  } finally {
+    await remote.close();
+    app.close();
   }
 });
 
