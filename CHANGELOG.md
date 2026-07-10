@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Reworked the English and Korean READMEs into synchronized quick-start entry
+  points, preserved the previous long-form material as full reference docs, and
+  added an automated release-hygiene gate for Markdown links, documented
+  commands, version drift, npm package contents, and size budgets. The npm
+  package now excludes repository-only explainer images and historical issue
+  documents while keeping them in Git, reducing the packed baseline by roughly
+  two thirds.
 - Added deterministic offline retrieval/distillation/candidate quality evals
   with Recall@k, MRR, nDCG, multilingual and scope-leakage slices, exact-string
   preservation, source-linked hallucination checks, truncation retrieval hooks,

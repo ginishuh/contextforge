@@ -195,6 +195,7 @@ test('package, lockfile, CLI, and release docs share the canonical version', asy
   assert.ok(readme.includes('Current package version: `' + packageManifest.version + '`'));
   assert.match(readme, new RegExp(`## What's New In ${packageManifest.version.replaceAll('.', '\\.')}`));
   assert.ok(koreanReadme.includes('현재 package version: `' + packageManifest.version + '`'));
+  assert.ok(koreanReadme.includes(`## ${packageManifest.version}에서 좋아진 점`));
 
   for (const command of ['--version', 'version']) {
     const result = await execFileAsync('node', ['src/cli.js', command], { cwd: process.cwd() });
