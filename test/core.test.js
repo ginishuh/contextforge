@@ -36,6 +36,7 @@ import { ContextForgeStore, SCHEMA_VERSION } from '../src/storage/sqlite.js';
 import {
   PRIVATE_DATA_DIRECTORY_MODE,
   PRIVATE_DATA_FILE_MODE,
+  SQLITE_PRIVATE_FILE_SUFFIXES,
   secureDataDirectoryPermissions,
 } from '../src/storage/permissions.js';
 import { ExternalProviderDisabledInTestError } from '../src/testing/external_provider.js';
@@ -564,15 +565,18 @@ test('data directory and SQLite files use private POSIX modes despite a loose um
     await fs.chmod(dataDir, 0o777);
     secureDataDirectoryPermissions(dataDir);
     await fs.chmod(dbPath, 0o666);
+    await fs.writeFile(`${dbPath}-journal`, 'synthetic', { mode: 0o666 });
     await fs.writeFile(`${dbPath}-wal`, 'synthetic', { mode: 0o666 });
     await fs.writeFile(`${dbPath}-shm`, 'synthetic', { mode: 0o666 });
     secureDataDirectoryPermissions(dataDir);
 
     assert.equal((await fs.stat(dataDir)).mode & 0o777, PRIVATE_DATA_DIRECTORY_MODE);
-    for (const filePath of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+    for (const suffix of SQLITE_PRIVATE_FILE_SUFFIXES) {
+      const filePath = `${dbPath}${suffix}`;
       assert.equal((await fs.stat(filePath)).mode & 0o777, PRIVATE_DATA_FILE_MODE);
     }
 
+    await fs.unlink(`${dbPath}-journal`);
     await fs.unlink(`${dbPath}-wal`);
     await fs.unlink(`${dbPath}-shm`);
     const store = new ContextForgeStore({ dataDir });
@@ -13225,6 +13229,21 @@ test('HTTP v0 callers see remote-client connection metadata', async () => {
     assert.equal(body.result.connection.server.summary, 'in-process http-server');
     assert.equal(body.result.connection.server.storageMode, 'project-local');
 
+    const secretResponse = await fetch(`${remote.url}/v0/updateRuntimeSettings`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer test-token',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ secrets: { openAiCompatibleApiKey: 'must-not-be-stored' } }),
+    });
+    assert.equal(secretResponse.status, 500);
+    const secretBody = await secretResponse.json();
+    assert.equal(
+      secretBody.error.code,
+      'CONTEXTFORGE_PLAINTEXT_RUNTIME_SECRET_OPT_IN_REQUIRED',
+    );
+
     const resumeResponse = await fetch(`${remote.url}/v0/syncResumeContext`, {
       method: 'POST',
       headers: {
@@ -13277,6 +13296,7 @@ test('HTTP server serves admin UI assets', async () => {
     assert.match(html, /후보 검토/);
     assert.match(html, /candidateSession/);
     assert.match(html, /감사 후보 불러오기/);
+    assert.match(html, /CONTEXTFORGE_OPENAI_COMPATIBLE_API_KEY/);
 
     const script = await fetch(`${remote.url}/ui/app.js`);
     assert.equal(script.status, 200);
@@ -13286,6 +13306,8 @@ test('HTTP server serves admin UI assets', async () => {
     assert.match(scriptText, /GPT 감사 후보/);
     assert.match(scriptText, /구조화 디스틸/);
     assert.match(scriptText, /structured 있음/);
+    assert.match(scriptText, /runtime\.warnings/);
+    assert.match(scriptText, /error\.code/);
 
     const stylesheet = await fetch(`${remote.url}/ui/styles.css`);
     assert.equal(stylesheet.status, 200);
@@ -13924,6 +13946,7 @@ test('remote storage mode preserves structured error names and warnings', async 
         JSON.stringify({
           error: {
             name: 'MemoryCandidatePromotionWarningError',
+            code: 'CONTEXTFORGE_SYNTHETIC_REMOTE_ERROR',
             message: 'Memory candidate promotion has 1 warning(s).',
             warnings: [{ code: 'duplicate_key' }],
           },
@@ -13940,6 +13963,7 @@ test('remote storage mode preserves structured error names and warnings', async 
       }),
     (error) => {
       assert.equal(error.name, 'MemoryCandidatePromotionWarningError');
+      assert.equal(error.code, 'CONTEXTFORGE_SYNTHETIC_REMOTE_ERROR');
       assert.equal(error.warnings[0].code, 'duplicate_key');
       return true;
     },

@@ -94,10 +94,13 @@ Codex / Claude Code / OpenClaw
   machines.
 
 On POSIX systems, ContextForge creates and repairs the active data directory to
-mode `0700` and the SQLite database plus existing `-wal`/`-shm` sidecars to
-`0600`. `dbInfo.permissions` reports the applied policy. Windows does not use
-POSIX modes; ContextForge reports `windows_acl_inherited`, so run it under a
-dedicated account and restrict the parent directory ACL when the host is shared.
+mode `0700` and the SQLite database plus existing
+`-journal`/`-wal`/`-shm` sidecars to `0600`. `dbInfo.permissions` reports the
+applied policy. Windows does not use POSIX modes; ContextForge reports
+`windows_acl_inherited`, so run it under a dedicated account and restrict the
+parent directory ACL when the host is shared.
+ContextForge secures its leaf data directory; operators remain responsible for
+permissions and ACLs on parent directories.
 
 ContextForge starts project-local for zero-friction setup, but remote mode is a
 first-class canonical deployment model for users who work from multiple machines

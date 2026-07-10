@@ -106,6 +106,7 @@ function makeRemoteError(method, status, body) {
   const message = body?.error?.message || body?.message || `Remote ${method} failed with HTTP ${status}.`;
   const error = new Error(message);
   error.name = body?.error?.name || 'RemoteContextForgeError';
+  error.code = body?.error?.code;
   error.status = status;
   error.remote = true;
   error.details = body?.error || body;

@@ -3,8 +3,8 @@
 ## Unreleased
 
 - Hardened local SQLite storage by enforcing `0700` on POSIX data directories
-  and `0600` on database/WAL/SHM files, reporting the active permission policy
-  in `dbInfo`, and documenting inherited ACL semantics on Windows. Plaintext
+  and `0600` on database/journal/WAL/SHM files, reporting the active permission
+  policy in `dbInfo`, and documenting inherited ACL semantics on Windows. Plaintext
   runtime-secret writes are now disabled by default; environment credentials
   are recommended, while explicit DB storage requires an opt-in and returns a
   persistent warning.

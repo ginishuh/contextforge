@@ -334,10 +334,11 @@ node src/cli.js migrateScope \
 - `remote`: HTTP 서버가 canonical DB를 소유하고, 여러 머신이 MCP/CLI로 접근한다.
 
 POSIX에서는 ContextForge가 data directory를 `0700`, SQLite DB와 이미 존재하는
-`-wal`/`-shm` 파일을 `0600`으로 생성·자동 보정한다. 적용된 정책은
+`-journal`/`-wal`/`-shm` 파일을 `0600`으로 생성·자동 보정한다. 적용된 정책은
 `dbInfo.permissions`에서 확인할 수 있다. Windows는 POSIX mode 대신 상위 directory
 ACL을 상속하므로 `windows_acl_inherited`로 표시한다. 공유 호스트에서는 전용 계정과
-제한된 상위 directory ACL을 사용해야 한다.
+제한된 상위 directory ACL을 사용해야 한다. ContextForge는 leaf data directory를
+보호하며, 그 상위 경로의 권한·ACL은 운영자가 제한해야 한다.
 
 remote client 예시:
 

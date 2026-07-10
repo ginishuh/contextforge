@@ -67,9 +67,9 @@ Safety:
 - Treat retrieval as machine-local context unless the user says this store is
   authoritative.
 - On POSIX, ContextForge automatically repairs the data directory to `0700` and
-  the SQLite database plus existing WAL/SHM sidecars to `0600`. On Windows,
-  `dbInfo.permissions.reason` is `windows_acl_inherited`; use a private parent
-  directory ACL because POSIX mode enforcement is unavailable.
+  the SQLite database plus existing rollback-journal/WAL/SHM sidecars to `0600`.
+  On Windows, `dbInfo.permissions.reason` is `windows_acl_inherited`; use a
+  private parent directory ACL because POSIX mode enforcement is unavailable.
 - Do not make cross-machine or deployment claims from local-only state.
 - Never commit `.contextforge/`, `.db`, `.db-wal`, `.db-shm`, raw logs, or env
   files.
