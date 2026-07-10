@@ -4,6 +4,8 @@ Self-hosted memory and distillation runtime for coding agents.
 
 [한국어 README](README.ko.md)
 
+Current package version: `0.5.1`
+
 This is not another memory file. ContextForge is a scoped memory runtime for
 coding agents.
 
@@ -260,6 +262,7 @@ CONTEXTFORGE_LIVE_TESTS=true npm run test:live
 Inspect or initialize the local store:
 
 ```bash
+node src/cli.js --version
 node src/cli.js dbInfo
 ```
 

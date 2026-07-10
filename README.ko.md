@@ -9,6 +9,8 @@ ContextForge는 단순한 메모리 파일이 아니다. Codex, Claude Code, Ope
 LLM으로 최근 작업 상태를 checkpoint로 압축해 다음 에이전트가 이어받을 수
 있게 만드는 사이드카 런타임이다.
 
+현재 package version: `0.5.1`
+
 ![ContextForge 설명 만화](docs/assets/contextforge-explainer-comic-ko.jpg)
 
 ## 핵심 개념
@@ -283,6 +285,7 @@ CONTEXTFORGE_LIVE_TESTS=true npm run test:live
 로컬 DB 확인:
 
 ```bash
+node src/cli.js --version
 node src/cli.js dbInfo
 ```
 
