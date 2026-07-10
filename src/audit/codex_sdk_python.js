@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseCodexExecJson } from '../distill/providers/codex_exec.js';
+import { ProviderTimeoutError } from '../runtime/provider_execution.js';
 import {
   AUDIT_OUTPUT_SCHEMA,
   AUTO_PROMOTE_AUDIT_SCHEMA_VERSION,
@@ -45,8 +46,10 @@ export function runCodexSdkPythonCommand({
   timeoutMs,
   cwd,
   env = process.env,
+  spawnImpl = spawn,
+  killGraceMs = KILL_GRACE_MS,
 }) {
-  assertExternalProviderAllowed('codex_sdk_python_audit', { env });
+  assertExternalProviderAllowed('codex_sdk_python_audit', { env, injected: spawnImpl !== spawn });
   return new Promise((resolve, reject) => {
     const args = [
       scriptPath || RUNNER_PATH,
@@ -67,7 +70,7 @@ export function runCodexSdkPythonCommand({
       childEnv.PYTHONPATH = childEnv.PYTHONPATH ? `${pythonPath}${path.delimiter}${childEnv.PYTHONPATH}` : pythonPath;
     }
 
-    const child = spawn(pythonCommand, args, {
+    const child = spawnImpl(pythonCommand, args, {
       cwd,
       env: childEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -76,16 +79,33 @@ export function runCodexSdkPythonCommand({
     let stdout = '';
     let stderr = '';
     let settled = false;
+    let timedOut = false;
+    let timeoutError = null;
+    let killTimer = null;
+    function cleanup() {
+      clearTimeout(timeout);
+      if (killTimer) clearTimeout(killTimer);
+    }
     const timeout = setTimeout(() => {
       if (settled) return;
-      settled = true;
-      child.kill('SIGTERM');
-      setTimeout(() => {
-        if (child.exitCode == null) {
+      timedOut = true;
+      timeoutError = new ProviderTimeoutError(
+        'codex_sdk_python',
+        timeoutMs,
+        `Codex Python SDK audit timed out after ${timeoutMs}ms.`,
+      );
+      try {
+        child.kill('SIGTERM');
+      } catch {
+        // The close/error event below remains the process lifecycle authority.
+      }
+      killTimer = setTimeout(() => {
+        try {
           child.kill('SIGKILL');
+        } catch {
+          // Process may already be gone.
         }
-      }, KILL_GRACE_MS).unref();
-      reject(new Error(`Codex Python SDK audit timed out after ${timeoutMs}ms.`));
+      }, killGraceMs);
     }, timeoutMs);
 
     child.stdout.on('data', (chunk) => {
@@ -96,20 +116,26 @@ export function runCodexSdkPythonCommand({
     });
     child.on('error', (error) => {
       if (settled) return;
+      if (timedOut) return;
       settled = true;
-      clearTimeout(timeout);
+      cleanup();
       reject(error);
     });
     child.stdin.on('error', (error) => {
       if (settled) return;
+      if (timedOut) return;
       settled = true;
-      clearTimeout(timeout);
+      cleanup();
       reject(error);
     });
     child.on('close', (code) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timeout);
+      cleanup();
+      if (timedOut) {
+        reject(timeoutError);
+        return;
+      }
       if (code !== 0) {
         reject(new Error(`Codex Python SDK audit failed with exit code ${code}: ${stderr || stdout}`));
         return;

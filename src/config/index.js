@@ -331,6 +331,13 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
       role: env.CONTEXTFORGE_RUNTIME_ROLE || 'local-process',
       allowPlaintextRuntimeSecrets: parseBoolean(env.CONTEXTFORGE_ALLOW_PLAINTEXT_RUNTIME_SECRETS),
     },
+    providerExecution: {
+      concurrencyLimit: parsePositiveInteger(
+        env.CONTEXTFORGE_PROVIDER_CONCURRENCY_LIMIT,
+        'CONTEXTFORGE_PROVIDER_CONCURRENCY_LIMIT',
+        2,
+      ),
+    },
     autoPromote: {
       enabled: parseBoolean(env.CONTEXTFORGE_AUTO_PROMOTE_ENABLED),
       audit: {

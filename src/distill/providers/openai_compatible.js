@@ -1,5 +1,6 @@
 import { buildCodexExecPrompt, CHECKPOINT_OUTPUT_SCHEMA, CODEX_EXEC_OUTPUT_SCHEMA_VERSION } from './codex_exec.js';
 import { validateDistillOutput } from '../validate.js';
+import { ProviderTimeoutError } from '../../runtime/provider_execution.js';
 import { assertExternalProviderAllowed } from '../../testing/external_provider.js';
 
 export const OPENAI_COMPATIBLE_PROMPT_VERSION = 'openai_compatible.prompt.v3';
@@ -145,7 +146,7 @@ async function postJson({ fetchImpl, url, apiKey, body, timeoutMs }) {
     return parsed;
   } catch (error) {
     if (error.name === 'AbortError') {
-      throw new Error(`openai_compatible timed out after ${timeoutMs}ms.`);
+      throw new ProviderTimeoutError('openai_compatible', timeoutMs);
     }
     throw error;
   } finally {
@@ -172,6 +173,7 @@ export function createOpenAiCompatibleProvider(options = {}) {
     baseUrlHost: hostFromBaseUrl(baseUrl),
     model,
     responseFormat: responseFormatMode,
+    timeoutMs,
     promptVersion: OPENAI_COMPATIBLE_PROMPT_VERSION,
     outputSchemaVersion: CODEX_EXEC_OUTPUT_SCHEMA_VERSION,
   };

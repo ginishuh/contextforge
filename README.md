@@ -1865,6 +1865,9 @@ node src/cli.js distillCheckpoint \
 
 Optional environment variables:
 
+- `CONTEXTFORGE_PROVIDER_CONCURRENCY_LIMIT`: maximum concurrent tasks for each
+  provider name across ContextForge instances in one Node.js process. Distill
+  and candidate-audit calls share the same provider bucket. Default: `2`.
 - `CONTEXTFORGE_CODEX_EXEC_COMMAND`: Codex executable name or path. Default:
   `codex`.
 - `CONTEXTFORGE_CODEX_EXEC_MODEL`: model passed to `codex exec --model`.
@@ -1906,6 +1909,18 @@ distillation runner:
 Failure modes are preserved as distillation runs. If `codex exec` exits
 non-zero, times out, or returns malformed JSON, ContextForge records a failed
 `distill_runs` row and leaves raw events untouched for retry or debugging.
+Provider failures record whether they are retryable. Same-session concurrent
+distill retries share one in-flight run, and candidate audit retries are
+serialized by closeout source so one provider result produces one metadata
+write. These guards are process-local; durable cross-restart jobs belong to the
+separate async job model.
+
+Remote long-running calls send their client timeout to the canonical server.
+When a configured provider timeout is not shorter than that client timeout,
+the server prevents provider execution and surfaces an explicit timeout-contract
+error or candidate-audit status. Increase
+`CONTEXTFORGE_REMOTE_TIMEOUT_MS` or lower the relevant provider timeout instead
+of allowing a client to abandon a still-running synchronous task.
 Failed and successful runs include provider prompt/schema version metadata so
 operators can tell which prompt contract produced the result.
 

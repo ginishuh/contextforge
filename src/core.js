@@ -10,6 +10,14 @@ import { createEmbeddingProvider } from './embeddings/index.js';
 import { normalizeAgentAdapterIds } from './ingest/agents.js';
 import { createRemoteContextForge } from './remote/client.js';
 import { searchMemories } from './retrieval/search.js';
+import {
+  assertProviderTimeoutFitsClient,
+  providerFailureRetryable,
+  providerExecutionSnapshot,
+  runInFlightOnce,
+  runWithKeyedLock,
+  runWithProviderConcurrency,
+} from './runtime/provider_execution.js';
 import { normalizeScopeOptions } from './scopes/index.js';
 import { ContextForgeStore } from './storage/sqlite.js';
 import {
@@ -26,6 +34,10 @@ function requireOption(value, name) {
   if (value == null || value === '') {
     throw new Error(`${name} is required.`);
   }
+}
+
+function executionKey(...parts) {
+  return parts.map((part) => JSON.stringify(part == null ? null : String(part))).join(':');
 }
 
 function migrationScopeOptions(options, prefix, fallbackScope = 'repo') {
@@ -682,6 +694,8 @@ function errorSummary(error) {
   return {
     name: error.name || 'Error',
     message: error.message || String(error),
+    ...(error.code ? { code: error.code } : {}),
+    ...(typeof error.retryable === 'boolean' ? { retryable: error.retryable } : {}),
   };
 }
 
@@ -2644,7 +2658,14 @@ function autoPromoteIndexedCandidate(store, scope, indexedCandidate, warnings, r
   });
 }
 
-async function auditAutoPromotionCandidate({ auditor, store, scope, item }) {
+async function auditAutoPromotionCandidate({
+  auditor,
+  store,
+  scope,
+  item,
+  providerConcurrencyLimit,
+  clientTimeoutMs = null,
+}) {
   if (!auditor) {
     return {
       approved: false,
@@ -2657,11 +2678,20 @@ async function auditAutoPromotionCandidate({ auditor, store, scope, item }) {
   const checkpoint = item.candidate.checkpointId
     ? store.getCheckpointById({ ...scope, checkpointId: item.candidate.checkpointId })
     : null;
-  return auditor({
-    candidate: item.candidate,
-    warnings: item.warnings,
-    checkpoint,
+  const provider = auditor.metadata?.provider || 'custom_auditor';
+  assertProviderTimeoutFitsClient({
+    operation: 'candidate audit',
+    provider,
+    providerTimeoutMs: auditor.metadata?.timeoutMs,
+    clientTimeoutMs,
   });
+  return runWithProviderConcurrency({ provider, limit: providerConcurrencyLimit }, () =>
+    auditor({
+      candidate: item.candidate,
+      warnings: item.warnings,
+      checkpoint,
+    }),
+  );
 }
 
 function recordCandidateAuditUsageEvent(
@@ -3088,6 +3118,33 @@ export function createContextForge(options = {}) {
     return withStore(config, fn);
   };
   let lastRawPruneAt = 0;
+  const providerConcurrencyLimit = config.providerExecution.concurrencyLimit;
+
+  function operationKey(operation, scope, source) {
+    return executionKey(config.dataDir, operation, scope.scopeType, scope.scopeKey, source);
+  }
+
+  function auditSourceKey(store, scope, options = {}) {
+    let sessionId = options.sessionId || null;
+    if (!sessionId && options.checkpointId) {
+      sessionId = store.getCheckpointById({ ...scope, checkpointId: options.checkpointId })?.sessionId || null;
+    }
+    const source = sessionId ? `session:${sessionId}` : `checkpoint:${options.checkpointId || 'none'}`;
+    return operationKey('candidate_audit_source', scope, source);
+  }
+
+  function runDistillProvider(provider, input, clientTimeoutMs = null) {
+    const providerMetadata = provider.metadata || {};
+    assertProviderTimeoutFitsClient({
+      operation: 'checkpoint distill',
+      provider: provider.name,
+      providerTimeoutMs: providerMetadata.timeoutMs,
+      clientTimeoutMs,
+    });
+    return runWithProviderConcurrency({ provider: provider.name, limit: providerConcurrencyLimit }, () =>
+      provider.distill(input),
+    );
+  }
 
   function getEffectiveRuntime(store) {
     return effectiveRuntimeConfig(config, store.getRuntimeSettings({ includeSecrets: true }));
@@ -3167,6 +3224,10 @@ export function createContextForge(options = {}) {
       rawRetention: {
         ttlDays: config.rawRetention.ttlDays,
         pruneIntervalMs: config.rawRetention.pruneIntervalMs,
+      },
+      providerExecution: {
+        concurrencyLimit: providerConcurrencyLimit,
+        active: providerExecutionSnapshot(),
       },
       scopeAliases: {
         count: config.scopeAliases.length,
@@ -4551,6 +4612,7 @@ export function createContextForge(options = {}) {
             provider: options.provider,
             maxEvents: options.maxEvents,
             maxChars: options.maxChars,
+            _clientTimeoutMs: options._clientTimeoutMs,
           });
           result.processed += 1;
           result.results.push({
@@ -5255,7 +5317,13 @@ export function createContextForge(options = {}) {
         };
       }
 
-      return useStore(async (store) => {
+      const inFlightKey = operationKey(
+        'audit_memory_candidates',
+        scope,
+        options.sessionId || options.checkpointId,
+      );
+      return runInFlightOnce(inFlightKey, () => useStore(async (store) =>
+        runWithKeyedLock(auditSourceKey(store, scope, options), async () => {
         let checkpointId = options.checkpointId || null;
         let sourceMode = null;
         if (checkpointId) {
@@ -5314,8 +5382,15 @@ export function createContextForge(options = {}) {
         });
         const storedAudited = truthyOption(options.force)
           ? []
-          : allCandidates.filter((candidate) => candidate.reviewMetadata?.audit);
-        const candidates = allCandidates.filter((candidate) => truthyOption(options.force) || !candidate.reviewMetadata?.audit);
+          : allCandidates.filter(
+              (candidate) => candidate.reviewMetadata?.audit && candidate.reviewMetadata.audit.retryable !== true,
+            );
+        const candidates = allCandidates.filter(
+          (candidate) =>
+            truthyOption(options.force) ||
+            !candidate.reviewMetadata?.audit ||
+            candidate.reviewMetadata.audit.retryable === true,
+        );
         if (!auditor) {
           return {
             kind: 'memory_candidate_audit_suggestions',
@@ -5366,11 +5441,26 @@ export function createContextForge(options = {}) {
           .filter((item) => item.score > 0)
           .sort((a, b) => b.score - a.score)
           .slice(0, limit);
+        if (selected.length > 0) {
+          assertProviderTimeoutFitsClient({
+            operation: 'candidate audit',
+            provider: auditor.metadata?.provider || 'custom_auditor',
+            providerTimeoutMs: auditor.metadata?.timeoutMs,
+            clientTimeoutMs: options._clientTimeoutMs,
+          });
+        }
         const audited = [];
         const auditBatchId = randomUUID();
         for (const item of selected) {
           try {
-            const audit = await auditAutoPromotionCandidate({ auditor, store, scope, item });
+            const audit = await auditAutoPromotionCandidate({
+              auditor,
+              store,
+              scope,
+              item,
+              providerConcurrencyLimit,
+              clientTimeoutMs: options._clientTimeoutMs,
+            });
             recordCandidateAuditUsageEvent(store, {
               scope,
               item,
@@ -5401,6 +5491,7 @@ export function createContextForge(options = {}) {
               decision: 'needs_review',
               reason: `Memory candidate audit failed: ${error.message}`,
               riskCodes: ['audit_failed'],
+              retryable: providerFailureRetryable(error),
               metadata: { ...(auditor?.metadata || {}), ...errorUsageMetadata(error), errorName: error.name },
             };
             recordCandidateAuditUsageEvent(store, {
@@ -5475,7 +5566,8 @@ export function createContextForge(options = {}) {
             'No memory candidates were promoted.',
           ],
         };
-      });
+        }),
+      ));
     },
 
     async autoPromoteMemoryCandidates(options = {}) {
@@ -5554,7 +5646,8 @@ export function createContextForge(options = {}) {
         };
       }
 
-      return useStore(async (store) => {
+      const execute = () => useStore(async (store) =>
+        runWithKeyedLock(auditSourceKey(store, scope, options), async () => {
         let checkpointId = options.checkpointId || null;
         let sourceMode = null;
         if (checkpointId) {
@@ -5659,6 +5752,15 @@ export function createContextForge(options = {}) {
           .slice(0, limit);
         const auditor = getAutoPromoteAuditor(store);
         const audited = [];
+        let auditProviderCalls = 0;
+        if (!dryRun && auditor && selected.some((item) => !item.candidate.reviewMetadata?.audit)) {
+          assertProviderTimeoutFitsClient({
+            operation: 'candidate audit',
+            provider: auditor.metadata?.provider || 'custom_auditor',
+            providerTimeoutMs: auditor.metadata?.timeoutMs,
+            clientTimeoutMs: options._clientTimeoutMs,
+          });
+        }
         if (!dryRun) {
           if (!auditor) {
             for (const item of selected) {
@@ -5675,8 +5777,24 @@ export function createContextForge(options = {}) {
             }
           } else {
             for (const item of selected) {
+              const storedAudit =
+                item.candidate.reviewMetadata?.audit?.retryable === true
+                  ? null
+                  : item.candidate.reviewMetadata?.audit || null;
+              if (storedAudit) {
+                audited.push({ ...item, audit: storedAudit, reusedStoredAudit: true });
+                continue;
+              }
               try {
-                const audit = await auditAutoPromotionCandidate({ auditor, store, scope, item });
+                auditProviderCalls += 1;
+                const audit = await auditAutoPromotionCandidate({
+                  auditor,
+                  store,
+                  scope,
+                  item,
+                  providerConcurrencyLimit,
+                  clientTimeoutMs: options._clientTimeoutMs,
+                });
                 recordCandidateAuditUsageEvent(store, {
                   scope,
                   item,
@@ -5692,6 +5810,7 @@ export function createContextForge(options = {}) {
                   decision: 'needs_review',
                   reason: `Auto-promotion audit failed: ${error.message}`,
                   riskCodes: ['audit_failed'],
+                  retryable: providerFailureRetryable(error),
                   metadata: { ...(auditor?.metadata || {}), ...errorUsageMetadata(error), errorName: error.name },
                 };
                 recordCandidateAuditUsageEvent(store, {
@@ -5738,7 +5857,9 @@ export function createContextForge(options = {}) {
             realPromotionEnabled: config.autoPromote.enabled,
             audit: {
               enabled: Boolean(auditor),
-              executed: !dryRun && Boolean(auditor),
+              executed: auditProviderCalls > 0,
+              providerCalls: auditProviderCalls,
+              reusedStored: audited.filter((item) => item.reusedStoredAudit).length,
               provider: auditor?.metadata?.provider || 'none',
               model: auditor?.metadata?.model || null,
               reasoningEffort: auditor?.metadata?.reasoningEffort || null,
@@ -5787,7 +5908,13 @@ export function createContextForge(options = {}) {
             dryRun ? 'No memory candidates were promoted.' : 'Do not auto-promote preference candidates until occurrence/merge tracking exists.',
           ],
         };
-      });
+        }),
+      );
+      if (dryRun) return execute();
+      return runInFlightOnce(
+        operationKey('auto_promote_memory_candidates', scope, options.sessionId || options.checkpointId),
+        execute,
+      );
     },
 
     async reconcileMemory(options = {}) {
@@ -6489,28 +6616,32 @@ export function createContextForge(options = {}) {
         });
         let rawOutput;
         try {
-          rawOutput = await provider.distill({
-            session: {
-              ...scope,
-              sessionId: plan.sessionId,
-              conversationId: options.conversationId || null,
+          rawOutput = await runDistillProvider(
+            provider,
+            {
+              session: {
+                ...scope,
+                sessionId: plan.sessionId,
+                conversationId: options.conversationId || null,
+              },
+              consolidation: {
+                target: plan.target,
+                windowKind: plan.windowKind,
+                coversFrom: plan.coversFrom,
+                coversTo: plan.coversTo,
+                sourceRef: plan.sourceRef,
+                sourceCheckpointCount: plan.sourceCheckpointCount,
+                inputTruncated: plan.inputTruncated,
+              },
+              sourceCheckpoints: sourceCheckpoints.map(compactSourceCheckpoint),
+              rawEvents: [],
+              previousCheckpoint: null,
+              previousWorkingSummary: null,
+              previousSessionWorkingContext: null,
+              requestedOutputSchema: consolidationRequestedOutputSchema(),
             },
-            consolidation: {
-              target: plan.target,
-              windowKind: plan.windowKind,
-              coversFrom: plan.coversFrom,
-              coversTo: plan.coversTo,
-              sourceRef: plan.sourceRef,
-              sourceCheckpointCount: plan.sourceCheckpointCount,
-              inputTruncated: plan.inputTruncated,
-            },
-            sourceCheckpoints: sourceCheckpoints.map(compactSourceCheckpoint),
-            rawEvents: [],
-            previousCheckpoint: null,
-            previousWorkingSummary: null,
-            previousSessionWorkingContext: null,
-            requestedOutputSchema: consolidationRequestedOutputSchema(),
-          });
+            options._clientTimeoutMs,
+          );
         } catch (error) {
           recordLlmUsageEvent(store, {
             scope,
@@ -6529,6 +6660,7 @@ export function createContextForge(options = {}) {
             error,
             outputMetadata: {
               providerFailed: true,
+              retryable: providerFailureRetryable(error),
               providerMetadata,
             },
           });
@@ -6556,6 +6688,7 @@ export function createContextForge(options = {}) {
             error,
             outputMetadata: {
               validationFailed: true,
+              retryable: false,
               providerMetadata,
             },
           });
@@ -6778,7 +6911,8 @@ export function createContextForge(options = {}) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.sessionId, 'sessionId');
 
-      return useStore(async (store) => {
+      const inFlightKey = operationKey('distill_checkpoint', scope, options.sessionId);
+      return runInFlightOnce(inFlightKey, () => useStore(async (store) => {
         const effective = getEffectiveRuntime(store);
         const provider = createDistillProvider(options.provider || effective.distillProvider, distillProviders, {
           codexExec: {
@@ -6852,18 +6986,22 @@ export function createContextForge(options = {}) {
 
         let rawOutput;
         try {
-          rawOutput = await provider.distill({
-            session: {
-              ...scope,
-              sessionId: options.sessionId,
-              conversationId,
+          rawOutput = await runDistillProvider(
+            provider,
+            {
+              session: {
+                ...scope,
+                sessionId: options.sessionId,
+                conversationId,
+              },
+              rawEvents: selectedRawEvents,
+              previousCheckpoint,
+              previousWorkingSummary,
+              previousSessionWorkingContext,
+              requestedOutputSchema,
             },
-            rawEvents: selectedRawEvents,
-            previousCheckpoint,
-            previousWorkingSummary,
-            previousSessionWorkingContext,
-            requestedOutputSchema,
-          });
+            options._clientTimeoutMs,
+          );
         } catch (error) {
           recordLlmUsageEvent(store, {
             scope,
@@ -6882,6 +7020,7 @@ export function createContextForge(options = {}) {
             error,
             outputMetadata: {
               providerFailed: true,
+              retryable: providerFailureRetryable(error),
               providerMetadata,
             },
           });
@@ -6909,6 +7048,7 @@ export function createContextForge(options = {}) {
             error,
             outputMetadata: {
               validationFailed: true,
+              retryable: false,
               receivedType: Array.isArray(rawOutput) ? 'array' : typeof rawOutput,
               providerMetadata,
             },
@@ -7025,6 +7165,7 @@ export function createContextForge(options = {}) {
             error: checkpointError,
             outputMetadata: {
               checkpointFailed: true,
+              retryable: false,
               checkpointError: errorSummary(checkpointError),
               workingSummaryUpdated: Boolean(workingSummary),
               workingSummaryId: workingSummary?.id || null,
@@ -7047,6 +7188,9 @@ export function createContextForge(options = {}) {
           error: null,
         };
         try {
+          await runWithKeyedLock(
+            auditSourceKey(store, scope, { sessionId: options.sessionId, checkpointId: checkpoint.id }),
+            async () => {
           const auditTrigger = options.auditTrigger || options.trigger || null;
           const forceAudit = CLOSEOUT_TRIGGERS.has(auditTrigger);
           const effectiveForAudit = getEffectiveRuntime(store);
@@ -7063,7 +7207,10 @@ export function createContextForge(options = {}) {
               sort: 'recommendation',
               limit: scanLimit,
             })
-            .filter((candidate) => !candidate.reviewMetadata?.audit);
+            .filter(
+              (candidate) =>
+                !candidate.reviewMetadata?.audit || candidate.reviewMetadata.audit.retryable === true,
+            );
           const shouldAudit =
             checkpointLevel === 0 &&
             Boolean(auditor) &&
@@ -7112,10 +7259,25 @@ export function createContextForge(options = {}) {
             const auditBatchId = randomUUID();
             let auditedCount = 0;
             let promotedCount = 0;
+            if (selected.length > 0) {
+              assertProviderTimeoutFitsClient({
+                operation: 'candidate audit',
+                provider: auditor.metadata?.provider || 'custom_auditor',
+                providerTimeoutMs: auditor.metadata?.timeoutMs,
+                clientTimeoutMs: options._clientTimeoutMs,
+              });
+            }
             for (const item of selected) {
               let audit;
               try {
-                audit = await auditAutoPromotionCandidate({ auditor, store, scope, item });
+                audit = await auditAutoPromotionCandidate({
+                  auditor,
+                  store,
+                  scope,
+                  item,
+                  providerConcurrencyLimit,
+                  clientTimeoutMs: options._clientTimeoutMs,
+                });
               } catch (error) {
                 rethrowExternalProviderTestError(error);
                 audit = {
@@ -7123,6 +7285,7 @@ export function createContextForge(options = {}) {
                   decision: 'needs_review',
                   reason: `Automatic candidate audit failed: ${error.message}`,
                   riskCodes: ['audit_failed'],
+                  retryable: providerFailureRetryable(error),
                   metadata: { ...(auditor?.metadata || {}), ...errorUsageMetadata(error), errorName: error.name },
                 };
               }
@@ -7190,6 +7353,8 @@ export function createContextForge(options = {}) {
               error: null,
             };
           }
+            },
+          );
         } catch (error) {
           rethrowExternalProviderTestError(error);
           candidateAudit = {
@@ -7276,7 +7441,7 @@ export function createContextForge(options = {}) {
           },
           embedding,
         };
-      });
+      }));
     },
 
     listDistillRuns(options) {

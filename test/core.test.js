@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { execFile, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import fs from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
+import { PassThrough } from 'node:stream';
 import { promisify } from 'node:util';
 import test from 'node:test';
 import { parseJunitReport } from '../scripts/junit-report.js';
@@ -31,6 +33,7 @@ import { ingestCodexRolloutFile, watchCodexSessions } from '../src/ingest/codex.
 import { ingestAgentRoutedSessions, ingestAgentSessions, listAgentAdapters, watchAgentRoutedSessions } from '../src/ingest/agents.js';
 import { searchMemories } from '../src/retrieval/search.js';
 import { REMOTE_METHODS } from '../src/remote/client.js';
+import { ProviderTimeoutError } from '../src/runtime/provider_execution.js';
 import { startContextForgeServer } from '../src/server.js';
 import { ContextForgeStore, SCHEMA_VERSION } from '../src/storage/sqlite.js';
 import {
@@ -61,6 +64,35 @@ async function makeTempDir() {
 
 async function makeNonGitTempDir() {
   return makeTempDir();
+}
+
+async function waitForCondition(predicate, message, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error(message);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+function fakeSpawnThatClosesOnKill(expectedSignal = 'SIGKILL') {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.stdin = new PassThrough();
+  child.exitCode = null;
+  child.signals = [];
+  child.closed = false;
+  child.kill = (signal) => {
+    child.signals.push(signal);
+    if (signal === expectedSignal) {
+      child.closed = true;
+      queueMicrotask(() => child.emit('close', null, signal));
+    }
+    return true;
+  };
+  return { child, spawnImpl: () => child };
 }
 
 function testAdminPasswordHash(password) {
@@ -212,6 +244,45 @@ test('normal test mode fails closed before external provider runners or fetch ex
       }),
     (error) => expectedError(error, 'openai_embeddings'),
   );
+});
+
+test('child provider timeouts wait for SIGKILL close before rejecting', async () => {
+  for (const provider of ['codex_exec', 'codex_sdk_python']) {
+    const fake = fakeSpawnThatClosesOnKill();
+    let rejectedAfterClose = false;
+    const call =
+      provider === 'codex_exec'
+        ? runCodexExecCommand({
+            command: 'synthetic-codex',
+            args: [],
+            prompt: 'synthetic prompt',
+            timeoutMs: 5,
+            killGraceMs: 5,
+            cwd: process.cwd(),
+            spawnImpl: fake.spawnImpl,
+          })
+        : runCodexSdkPythonCommand({
+            pythonCommand: 'synthetic-python',
+            scriptPath: 'synthetic-runner.py',
+            codexBin: 'synthetic-codex',
+            model: 'synthetic-model',
+            sandbox: 'read-only',
+            prompt: 'synthetic prompt',
+            timeoutMs: 5,
+            killGraceMs: 5,
+            cwd: process.cwd(),
+            spawnImpl: fake.spawnImpl,
+          });
+
+    await assert.rejects(call, (error) => {
+      rejectedAfterClose = fake.child.closed;
+      assert.equal(error.code, 'CONTEXTFORGE_PROVIDER_TIMEOUT');
+      assert.equal(error.retryable, true);
+      return true;
+    });
+    assert.equal(rejectedAfterClose, true);
+    assert.deepEqual(fake.child.signals, ['SIGTERM', 'SIGKILL']);
+  }
 });
 
 test('JUnit duration parser is independent of testcase attribute order', () => {
@@ -7287,6 +7358,172 @@ test('distill output validation includes received types', () => {
   );
 });
 
+test('provider concurrency cap is process-global per provider', async () => {
+  const dataDir = await makeTempDir();
+  const releases = [];
+  let active = 0;
+  let maxActive = 0;
+  let invocations = 0;
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'bounded_provider',
+      CONTEXTFORGE_PROVIDER_CONCURRENCY_LIMIT: '1',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      bounded_provider: async ({ session }) => {
+        invocations += 1;
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        await new Promise((resolve) => releases.push(resolve));
+        active -= 1;
+        return {
+          summaryShort: `Bounded ${session.sessionId}`,
+          summaryText: `Bounded provider completed ${session.sessionId}.`,
+          decisions: [],
+          todos: [],
+          openQuestions: [],
+          memoryCandidates: [],
+        };
+      },
+    },
+  });
+  for (const sessionId of ['bounded-a', 'bounded-b']) {
+    app.appendRaw({
+      scope: 'repo',
+      scopeKey: 'bounded-repo',
+      sessionId,
+      role: 'assistant',
+      content: `Raw evidence for ${sessionId}.`,
+    });
+  }
+
+  const first = app.distillCheckpoint({ scope: 'repo', scopeKey: 'bounded-repo', sessionId: 'bounded-a' });
+  const second = app.distillCheckpoint({ scope: 'repo', scopeKey: 'bounded-repo', sessionId: 'bounded-b' });
+  await waitForCondition(() => releases.length === 1, 'first provider call did not start');
+  await waitForCondition(
+    () => app.dbInfo().providerExecution.active.some((entry) => entry.provider === 'bounded_provider' && entry.queued === 1),
+    'second provider call was not queued',
+  );
+  assert.equal(maxActive, 1);
+  releases.shift()();
+  await waitForCondition(() => releases.length === 1, 'queued provider call did not start');
+  releases.shift()();
+  await Promise.all([first, second]);
+
+  assert.equal(invocations, 2);
+  assert.equal(maxActive, 1);
+  assert.deepEqual(app.dbInfo().providerExecution.active, []);
+});
+
+test('concurrent duplicate distillCheckpoint calls share one run and checkpoint', async () => {
+  const dataDir = await makeTempDir();
+  let release;
+  let invocations = 0;
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'deduplicated_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      deduplicated_provider: async () => {
+        invocations += 1;
+        await new Promise((resolve) => {
+          release = resolve;
+        });
+        return {
+          summaryShort: 'Deduplicated checkpoint.',
+          summaryText: 'Concurrent retries share one provider execution and write.',
+          decisions: [],
+          todos: [],
+          openQuestions: [],
+          memoryCandidates: [],
+        };
+      },
+    },
+  });
+  app.appendRaw({
+    scope: 'repo',
+    scopeKey: 'deduplicated-repo',
+    sessionId: 'deduplicated-session',
+    role: 'assistant',
+    content: 'One raw event must produce one checkpoint.',
+  });
+
+  const options = { scope: 'repo', scopeKey: 'deduplicated-repo', sessionId: 'deduplicated-session' };
+  const first = app.distillCheckpoint(options);
+  const retry = app.distillCheckpoint(options);
+  await waitForCondition(() => typeof release === 'function', 'deduplicated provider call did not start');
+  assert.equal(invocations, 1);
+  release();
+  const [firstResult, retryResult] = await Promise.all([first, retry]);
+
+  assert.equal(firstResult.id, retryResult.id);
+  assert.equal(invocations, 1);
+  assert.equal(app.listCheckpoints(options).length, 1);
+  assert.equal(app.listDistillRuns(options).length, 1);
+});
+
+test('provider timeout mismatch fails before execution and records non-retryable run state', async () => {
+  const dataDir = await makeTempDir();
+  let invocations = 0;
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'codex_exec',
+      CONTEXTFORGE_CODEX_EXEC_TIMEOUT_MS: '1000',
+    },
+    cwd: process.cwd(),
+    codexExecRunner: async () => {
+      invocations += 1;
+      throw new Error('runner must not execute');
+    },
+  });
+  const options = { scope: 'repo', scopeKey: 'timeout-repo', sessionId: 'timeout-session' };
+  app.appendRaw({ ...options, role: 'assistant', content: 'Timeout mismatch evidence.' });
+
+  await assert.rejects(
+    () => app.distillCheckpoint({ ...options, _clientTimeoutMs: 1000 }),
+    (error) => {
+      assert.equal(error.code, 'CONTEXTFORGE_PROVIDER_TIMEOUT_EXCEEDS_CLIENT_TIMEOUT');
+      assert.equal(error.retryable, false);
+      return true;
+    },
+  );
+  assert.equal(invocations, 0);
+  const [run] = app.listDistillRuns(options);
+  assert.equal(run.status, 'failed');
+  assert.equal(run.outputMetadata.providerFailed, true);
+  assert.equal(run.outputMetadata.retryable, false);
+});
+
+test('distillCheckpoint records retryable provider timeout failures without deleting raw evidence', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'timeout_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      timeout_provider: async () => {
+        throw new ProviderTimeoutError('timeout_provider', 25);
+      },
+    },
+  });
+  const options = { scope: 'repo', scopeKey: 'timeout-run-repo', sessionId: 'timeout-run-session' };
+  app.appendRaw({ ...options, role: 'assistant', content: 'Retryable timeout evidence.' });
+
+  await assert.rejects(() => app.distillCheckpoint(options), /timed out after 25ms/);
+  const [run] = app.listDistillRuns(options);
+  assert.equal(run.status, 'failed');
+  assert.equal(run.outputMetadata.retryable, true);
+  assert.equal(app.listRawEvents(options).length, 1);
+  assert.equal(app.listCheckpoints(options).length, 0);
+});
+
 test('distillCheckpoint records provider failures without deleting raw evidence', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({
@@ -9034,6 +9271,151 @@ test('auditMemoryCandidates persists audit metadata without promoting durable me
   assert.equal(events[0].reasoningTokens, 7);
   assert.equal(events[0].totalTokens, 125);
   store.close();
+});
+
+test('concurrent duplicate candidate audits share one provider call and metadata write', async () => {
+  const dataDir = await makeTempDir();
+  let releaseAudit;
+  let auditInvocations = 0;
+  const auditor = async () => {
+    auditInvocations += 1;
+    await new Promise((resolve) => {
+      releaseAudit = resolve;
+    });
+    return {
+      approved: true,
+      decision: 'approve',
+      reason: 'Synthetic concurrent audit approved the candidate.',
+      riskCodes: [],
+      metadata: {
+        provider: 'synthetic_auditor',
+        model: 'synthetic-model',
+        usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+      },
+    };
+  };
+  auditor.metadata = { provider: 'synthetic_auditor', model: 'synthetic-model', timeoutMs: 1000 };
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'concurrent_audit_provider',
+    },
+    cwd: process.cwd(),
+    autoPromoteAuditor: auditor,
+    distillProviders: {
+      concurrent_audit_provider: async () => ({
+        summaryShort: 'Concurrent audit checkpoint.',
+        summaryText: 'One candidate is available for concurrent audit retries.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'concurrent-audit-runbook',
+            content: 'Concurrent candidate audit retries share one provider execution.',
+            category: 'runbook',
+            candidateType: 'runbook',
+            confidence: 0.96,
+            stability: 0.96,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+        ],
+      }),
+    },
+  });
+  const source = { scope: 'repo', scopeKey: 'concurrent-audit-repo', sessionId: 'concurrent-audit-session' };
+  app.appendRaw({ ...source, role: 'assistant', content: 'Concurrent audit raw evidence.' });
+  const checkpoint = await app.distillCheckpoint(source);
+  const options = {
+    ...source,
+    checkpointId: checkpoint.id,
+    trigger: 'manual_closeout',
+  };
+
+  const first = app.auditMemoryCandidates(options);
+  const retry = app.auditMemoryCandidates(options);
+  await waitForCondition(() => typeof releaseAudit === 'function', 'candidate audit did not start');
+  assert.equal(auditInvocations, 1);
+  releaseAudit();
+  const [firstResult, retryResult] = await Promise.all([first, retry]);
+
+  assert.equal(auditInvocations, 1);
+  assert.deepEqual(firstResult.proposals, retryResult.proposals);
+  assert.equal(firstResult.proposals.length, 1);
+  assert.equal(app.listLlmUsageEvents({ ...source, operation: 'candidate_audit' }).length, 1);
+  const [candidate] = app.listMemoryCandidates({ ...source, checkpointId: checkpoint.id, status: 'pending' });
+  assert.equal(candidate.reviewMetadata.audit.decision, 'approve');
+});
+
+test('retryable candidate audit failures can be safely retried without force', async () => {
+  const dataDir = await makeTempDir();
+  let auditInvocations = 0;
+  const auditor = async () => {
+    auditInvocations += 1;
+    if (auditInvocations === 1) {
+      const error = new ProviderTimeoutError('retryable_auditor', 25);
+      error.metadata = {
+        provider: 'retryable_auditor',
+        usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6 },
+      };
+      throw error;
+    }
+    return {
+      approved: true,
+      decision: 'approve',
+      reason: 'Retry succeeded without a duplicate concurrent write.',
+      riskCodes: [],
+      metadata: {
+        provider: 'retryable_auditor',
+        usage: { input_tokens: 6, output_tokens: 2, total_tokens: 8 },
+      },
+    };
+  };
+  auditor.metadata = { provider: 'retryable_auditor', timeoutMs: 1000 };
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'retryable_audit_provider',
+    },
+    cwd: process.cwd(),
+    autoPromoteAuditor: auditor,
+    distillProviders: {
+      retryable_audit_provider: async () => ({
+        summaryShort: 'Retryable audit checkpoint.',
+        summaryText: 'The candidate audit may be retried after a transient timeout.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          {
+            key: 'retryable-audit-runbook',
+            content: 'Retry transient audit failures without force.',
+            category: 'runbook',
+            candidateType: 'runbook',
+            confidence: 0.96,
+            stability: 0.96,
+            sensitivity: 'low',
+            promotionRecommendation: 'promote',
+          },
+        ],
+      }),
+    },
+  });
+  const source = { scope: 'repo', scopeKey: 'retryable-audit-repo', sessionId: 'retryable-audit-session' };
+  app.appendRaw({ ...source, role: 'assistant', content: 'Retryable audit raw evidence.' });
+  const checkpoint = await app.distillCheckpoint(source);
+  const options = { ...source, checkpointId: checkpoint.id, trigger: 'manual_closeout' };
+
+  const failed = await app.auditMemoryCandidates(options);
+  assert.equal(failed.proposals[0].audit.retryable, true);
+  const retried = await app.auditMemoryCandidates(options);
+  assert.equal(retried.proposals[0].audit.decision, 'approve');
+  assert.equal(retried.proposals[0].audit.retryable, undefined);
+  assert.equal(auditInvocations, 2);
+  assert.equal(app.listLlmUsageEvents({ ...source, operation: 'candidate_audit' }).length, 2);
+  const [candidate] = app.listMemoryCandidates({ ...source, checkpointId: checkpoint.id, status: 'pending' });
+  assert.equal(candidate.reviewMetadata.audit.decision, 'approve');
 });
 
 test('auditMemoryCandidates records failed audit usage when error metadata includes usage', async () => {
@@ -11434,6 +11816,29 @@ test('workspace routing JSON validation rejects unsupported shapes', async () =>
   );
 });
 
+test('remote long-running provider calls include the client timeout contract', async () => {
+  const calls = [];
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_STORAGE_MODE: 'remote',
+      CONTEXTFORGE_REMOTE_URL: 'https://memory.example.test',
+      CONTEXTFORGE_REMOTE_TIMEOUT_MS: '4321',
+    },
+    cwd: process.cwd(),
+    fetchImpl: async (url, init) => {
+      calls.push({ url: String(url), body: JSON.parse(init.body) });
+      return new Response(JSON.stringify({ result: { id: 'checkpoint-remote' } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  });
+
+  await app.distillCheckpoint({ scope: 'repo', scopeKey: 'remote-timeout-repo', sessionId: 'remote-timeout-session' });
+  assert.equal(calls[0].url, 'https://memory.example.test/v0/distillCheckpoint');
+  assert.equal(calls[0].body._clientTimeoutMs, 4321);
+});
+
 test('remote workspace profile calls dispatch to the canonical server without scoped fallback', async () => {
   const calls = [];
   const app = createContextForge({
@@ -12290,19 +12695,23 @@ test('agent lifecycle rejects a missing agent adapter value clearly', async () =
 
 test('agentCloseout distills, audits, suggests, and preserves adapter session id without promotion', async () => {
   const dataDir = await makeTempDir();
+  let auditInvocations = 0;
   const app = createContextForge({
     env: {
       CONTEXTFORGE_DATA_DIR: dataDir,
       CONTEXTFORGE_DISTILL_PROVIDER: 'agent_closeout_provider',
     },
     cwd: process.cwd(),
-    autoPromoteAuditor: async () => ({
-      approved: true,
-      decision: 'approve',
-      reason: 'Synthetic closeout auditor approved the runbook candidate.',
-      riskCodes: [],
-      metadata: { provider: 'test' },
-    }),
+    autoPromoteAuditor: async () => {
+      auditInvocations += 1;
+      return {
+        approved: true,
+        decision: 'approve',
+        reason: 'Synthetic closeout auditor approved the runbook candidate.',
+        riskCodes: [],
+        metadata: { provider: 'test' },
+      };
+    },
     distillProviders: {
       agent_closeout_provider: async () => ({
         summaryShort: 'Agent closeout checkpoint.',
@@ -12351,6 +12760,7 @@ test('agentCloseout distills, audits, suggests, and preserves adapter session id
   assert.equal(result.checkpoint.sessionId, 'codex:agent-closeout-session');
   assert.equal(result.checkpoint.memoryCandidateCount, 1);
   assert.equal(result.audit.kind, 'memory_candidate_audit_suggestions');
+  assert.equal(auditInvocations, 1);
   assert.equal(result.suggestions.kind, 'memory_promotion_suggestions');
   assert.equal(result.summary.suggestions.proposalCount, 1);
   assert.equal(

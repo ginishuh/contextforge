@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added a process-global per-provider concurrency cap, in-flight deduplication
+  for same-session distill and candidate-audit retries, stored-audit reuse, and
+  retryability metadata for failed provider runs. Child provider timeouts now
+  wait for SIGTERM/SIGKILL process close before releasing capacity, and remote
+  long-running calls fail early when the provider timeout cannot fit inside the
+  client timeout.
 - Raised the hosted-runner total test budget to 180 seconds while preserving
   the per-test slow threshold, avoiding false CI failures on slower Node 24
   runners without hiding localized test regressions.

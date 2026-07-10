@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { ProviderTimeoutError } from '../../runtime/provider_execution.js';
 import { assertExternalProviderAllowed } from '../../testing/external_provider.js';
 import { STRUCTURED_CHECKPOINT_SCHEMA_VERSION } from '../validate.js';
 
@@ -494,10 +495,19 @@ function summarizeStderr(stderr) {
   return summary.length > 2000 ? `${summary.slice(0, 2000)}\n[truncated]` : summary;
 }
 
-export function runCodexExecCommand({ command, args, prompt, timeoutMs, cwd, env = process.env }) {
-  assertExternalProviderAllowed('codex_exec', { env });
+export function runCodexExecCommand({
+  command,
+  args,
+  prompt,
+  timeoutMs,
+  cwd,
+  env = process.env,
+  spawnImpl = spawn,
+  killGraceMs = KILL_GRACE_MS,
+}) {
+  assertExternalProviderAllowed('codex_exec', { env, injected: spawnImpl !== spawn });
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const child = spawnImpl(command, args, {
       cwd,
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -506,6 +516,8 @@ export function runCodexExecCommand({ command, args, prompt, timeoutMs, cwd, env
     let stdout = '';
     let stderr = '';
     let settled = false;
+    let timedOut = false;
+    let timeoutError = null;
     let killTimer = null;
     function cleanup() {
       clearTimeout(timer);
@@ -522,17 +534,21 @@ export function runCodexExecCommand({ command, args, prompt, timeoutMs, cwd, env
     }
     const timer = setTimeout(() => {
       if (settled) return;
-      settled = true;
+      timedOut = true;
+      timeoutError = new ProviderTimeoutError('codex_exec', timeoutMs);
       clearTimeout(timer);
-      child.kill('SIGTERM');
+      try {
+        child.kill('SIGTERM');
+      } catch {
+        // The close/error event below remains the process lifecycle authority.
+      }
       killTimer = setTimeout(() => {
         try {
           child.kill('SIGKILL');
         } catch {
           // Process may already be gone.
         }
-      }, KILL_GRACE_MS);
-      reject(new Error(`codex_exec timed out after ${timeoutMs}ms.`));
+      }, killGraceMs);
     }, timeoutMs);
 
     child.stdout.on('data', (chunk) => {
@@ -546,6 +562,7 @@ export function runCodexExecCommand({ command, args, prompt, timeoutMs, cwd, env
         cleanup();
         return;
       }
+      if (timedOut) return;
       settle(() => reject(error));
     });
     child.on('close', (code, signal) => {
@@ -554,6 +571,10 @@ export function runCodexExecCommand({ command, args, prompt, timeoutMs, cwd, env
         return;
       }
       settle(() => {
+        if (timedOut) {
+          reject(timeoutError);
+          return;
+        }
         if (code === 0) {
           resolve({ stdout, stderr, code, signal });
         } else {
@@ -715,6 +736,7 @@ export function createCodexExecProvider(options = {}) {
 
   const providerMetadata = {
     provider: 'codex_exec',
+    timeoutMs,
     promptVersion: CODEX_EXEC_PROMPT_VERSION,
     outputSchemaVersion: CODEX_EXEC_OUTPUT_SCHEMA_VERSION,
   };
