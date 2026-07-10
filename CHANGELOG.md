@@ -6,10 +6,11 @@
   across core, CLI, remote API, and the MCP `operator` profile. Inventory
   classifies orphan sources, inactive memories, reviewed-out candidates,
   content-hash drift, retired model/dimension rows, vector-only rows, and old
-  terminal jobs. Destructive GC is transaction-batched, refuses active workers
-  unless forced, preserves current active memories and pending/promoted
-  candidates, and requires global mode for vector-only rows whose scope can no
-  longer be proven.
+  completed jobs. Destructive GC is transaction-batched, refuses active workers
+  unless forced, preserves current active memories, pending/promoted candidates,
+  and retryable failed-job history, and requires global mode for vector-only rows
+  whose scope can no longer be proven. Retired model/dimension cleanup requires
+  both an active embedding provider and explicit `includeRetired=true`.
 - Added filter-bound opaque keyset cursors to public memory, raw-event,
   checkpoint, embedding-job, candidate, event, distill-run, and usage lists.
   Public arrays remain compatible but now default to 100 rows with a hard 500

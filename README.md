@@ -796,7 +796,9 @@ node src/cli.js embeddingInventory --scope repo --scopeKey github.com/example/re
 
 It reports missing sources, inactive-memory rows, rejected/stale/snoozed
 candidate rows, content-hash mismatches, retired model/dimension rows,
-vector-only rows, and old terminal jobs. Scoped inventory does not classify or
+vector-only rows, and old completed jobs. Failed jobs with a current source and
+model remain available for retry; only orphaned or retired failed jobs are GC
+candidates. Scoped inventory does not classify or
 delete vector-only rows because a missing index also removes the only stored
 scope evidence; run a global inventory to inspect those rows. Inventory scans
 are bounded by `scanLimit` and report conservative per-table truncation flags,
@@ -818,6 +820,11 @@ candidate embeddings are preserved. Run SQLite `incremental_vacuum` separately
 when physical file-size reclamation is required. In remote storage mode these
 methods execute on the canonical server; verify `dbInfo.connection` before an
 operator run instead of assuming the current checkout owns the database.
+Retired model/dimension rows are classified only when an embedding provider is
+active and are excluded from deletion unless `--includeRetired true` is also
+explicit. If the plan removes a content-hash mismatch, process its embedding
+job or run an intentional scoped rebuild after GC; the response lists those
+source ids in `reindexSuggestedSourceIds`.
 
 ContextForge uses the npm `sqlite-vec` package and expects sqlite-vec 0.1.x with
 `vec0` support for auxiliary primary-key columns. Check `node src/cli.js dbInfo`

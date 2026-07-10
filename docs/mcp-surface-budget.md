@@ -18,9 +18,9 @@ HTTP.
 | --- | ---: | ---: | ---: | ---: | ---: |
 | `agent-core` | 24 | 1,423 | 25,342 | 5,776 | 6,692 |
 | `review` | 37 | 1,423 | 37,749 | 7,822 | 9,793 |
-| `operator` | 56 | 1,423 | 55,220 | 11,158 | 14,161 |
+| `operator` | 56 | 1,423 | 55,257 | 11,159 | 14,170 |
 | `workspace-admin` | 11 | 1,423 | 8,888 | 2,061 | 2,578 |
-| `all` | 62 | 1,423 | 60,318 | 12,180 | 15,436 |
+| `all` | 62 | 1,423 | 60,355 | 12,181 | 15,445 |
 
 `estimatedInitialTokens` is `ceil((instructionsBytes + toolSchemaBytes) / 4)`.
 It is a conservative transport-level comparison, not a claim about a specific

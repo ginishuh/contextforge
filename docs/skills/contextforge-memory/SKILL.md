@@ -379,6 +379,9 @@ For derived-data cleanup:
    skips them because their missing index means their scope cannot be proven.
 5. Verify that current active memories and pending/promoted candidates remain
    indexed, then rebuild only sources that are legitimately stale.
+6. Preserve current failed jobs for retry. Retired model/dimension deletion
+   requires an active provider plus explicit `includeRetired: true`; review
+   `reindexSuggestedSourceIds` after hash-mismatch cleanup.
 
 Use `prune_raw_events` only according to retention policy; durable memory and checkpoints are preserved separately.
 

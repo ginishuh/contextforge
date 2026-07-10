@@ -727,7 +727,9 @@ node src/cli.js embeddingInventory --scope repo --scopeKey github.com/example/re
 ```
 
 없는 source, inactive memory, rejected/stale/snoozed candidate, content hash
-불일치, 폐기된 model/dimension, 오래된 terminal job을 분류한다. index가 사라진
+불일치, 폐기된 model/dimension, 오래된 completed job을 분류한다. current
+source/model을 가진 failed job은 재시도 이력으로 보존하고 orphan/retired failed
+job만 GC 후보로 삼는다. index가 사라진
 vector-only row는 scope 근거도 함께 사라지므로 scoped inventory/GC에서는
 건드리지 않고 global inventory에서만 대상으로 삼는다. inventory scan은
 `scanLimit`으로 제한하고 보수적인 table별 truncation flag를 반환하지만,
@@ -746,6 +748,10 @@ node src/cli.js pruneEmbeddingArtifacts --batchSize 100 --dryRun false
 물리 파일 크기 회수는 별도로 SQLite `incremental_vacuum`을 실행한다. remote
 storage mode에서는 이 명령이 canonical server에서 실행되므로, operator 실행 전
 현재 checkout이 DB를 소유한다고 가정하지 말고 `dbInfo.connection`을 확인한다.
+retired model/dimension row는 embedding provider가 활성일 때만 분류하며,
+`--includeRetired true`를 추가로 명시하지 않으면 삭제 계획에서 제외한다. content
+hash mismatch를 삭제한 경우 응답의 `reindexSuggestedSourceIds`를 확인하고 embedding
+job을 처리하거나 의도적인 scoped rebuild를 실행한다.
 
 ## 안전 원칙
 

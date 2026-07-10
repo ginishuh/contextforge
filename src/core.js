@@ -3399,6 +3399,7 @@ export function createContextForge(options = {}) {
     const current = {
       model: embeddingProvider?.model || config.embeddings.model,
       dimensions: embeddingProvider?.dimensions || config.embeddings.dimensions,
+      authoritative: Boolean(embeddingProvider),
     };
     const artifacts = [];
     const byReason = {};
@@ -3414,7 +3415,6 @@ export function createContextForge(options = {}) {
       const source = embeddingSourceForJob(store, jobShape);
       let reason = null;
       if (!source) reason = 'orphan_source';
-      else if (source.scopeType !== record.scopeType || source.scopeKey !== record.scopeKey) reason = 'source_scope_mismatch';
       else if (record.sourceType === 'memory' && source.memory.status !== 'active') reason = 'inactive_memory';
       else if (
         record.sourceType === 'memory_candidate' &&
@@ -3422,7 +3422,10 @@ export function createContextForge(options = {}) {
       ) {
         reason = `candidate_${source.candidate.status}`;
       } else if (source.contentHash !== record.contentHash) reason = 'content_hash_mismatch';
-      else if (record.model !== current.model || Number(record.dimensions) !== current.dimensions) {
+      else if (
+        current.authoritative &&
+        (record.model !== current.model || Number(record.dimensions) !== current.dimensions)
+      ) {
         reason = 'retired_model_or_dimensions';
       }
       if (!reason) continue;
@@ -3436,13 +3439,18 @@ export function createContextForge(options = {}) {
 
     const jobs = [];
     const jobStatus = store.countEmbeddingJobs(scope);
-    const scannedJobs = store.listEmbeddingJobs({ ...scope, limit: scanLimit });
+    const scannedJobs = store.listTerminalEmbeddingJobs({ ...scope, limit: scanLimit });
     for (const job of scannedJobs) {
       if (!['completed', 'failed'].includes(job.status)) continue;
       const source = embeddingSourceForJob(store, job);
       let reason = null;
       if (!source) reason = 'orphan_job_source';
-      else if (job.model !== current.model || Number(job.dimensions) !== current.dimensions) reason = 'retired_job_model_or_dimensions';
+      else if (
+        current.authoritative &&
+        (job.model !== current.model || Number(job.dimensions) !== current.dimensions)
+      ) {
+        reason = 'retired_job_model_or_dimensions';
+      }
       else if (job.status === 'completed' && job.completedAt && job.completedAt < completedBefore) reason = 'old_completed_job';
       if (reason) jobs.push({ id: job.id, sourceType: job.sourceType, recordId: job.recordId, status: job.status, reason });
     }
@@ -6942,11 +6950,18 @@ export function createContextForge(options = {}) {
     pruneEmbeddingArtifacts(options = {}) {
       const dryRun = options.dryRun !== false;
       const force = options.force === true;
+      const includeRetired = options.includeRetired === true;
       const batchSize = Math.min(500, positiveInteger(options.batchSize == null ? 100 : options.batchSize, 'batchSize'));
       return useStore((store) => {
         const inventory = embeddingMaintenanceInventory(store, options);
+        const eligibleArtifacts = inventory.artifacts.filter(
+          (item) => includeRetired || item.reason !== 'retired_model_or_dimensions',
+        );
+        const eligibleJobs = inventory.jobs.filter(
+          (item) => includeRetired || item.reason !== 'retired_job_model_or_dimensions',
+        );
         let remaining = batchSize;
-        const artifacts = inventory.artifacts.slice(0, remaining);
+        const artifacts = eligibleArtifacts.slice(0, remaining);
         remaining -= artifacts.length;
         const vectorOnly = inventory.vectorOnlySourceIds.slice(0, remaining).map((sourceId) => ({
           sourceId,
@@ -6954,7 +6969,10 @@ export function createContextForge(options = {}) {
           reason: 'vector_without_index',
         }));
         remaining -= vectorOnly.length;
-        const jobs = inventory.jobs.slice(0, remaining);
+        const jobs = eligibleJobs.slice(0, remaining);
+        const reindexSuggestedSourceIds = artifacts
+          .filter((item) => item.reason === 'content_hash_mismatch')
+          .map((item) => item.sourceId);
         const plan = {
           artifacts,
           vectorOnly,
@@ -6965,14 +6983,27 @@ export function createContextForge(options = {}) {
           kind: 'embedding_maintenance_gc',
           dryRun,
           force,
+          includeRetired,
           batchSize,
           inventory,
           plan,
+          skippedRetiredArtifacts: inventory.artifacts.length - eligibleArtifacts.length,
+          skippedRetiredJobs: inventory.jobs.length - eligibleJobs.length,
+          reindexSuggestedSourceIds,
           blocked: false,
           deleted: { vectors: 0, indexRows: 0, jobs: 0 },
           warnings: [
             'Back up the canonical SQLite store and stop embedding workers before non-dry-run GC.',
             'Run incremental_vacuum separately when file-size reclamation is required.',
+            ...(!inventory.current.authoritative
+              ? ['Retired model/dimension classification is disabled because no embedding provider is active.']
+              : []),
+            ...(inventory.artifacts.length > eligibleArtifacts.length || inventory.jobs.length > eligibleJobs.length
+              ? ['Retired model/dimension artifacts are excluded unless includeRetired=true is explicit.']
+              : []),
+            ...(reindexSuggestedSourceIds.length
+              ? ['Content-hash mismatch removals require embedding job processing or an intentional rebuild.']
+              : []),
           ],
         };
         if (!dryRun && inventory.processingJobs > 0 && !force) {

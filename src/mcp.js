@@ -1005,7 +1005,7 @@ export function createContextForgeMcpServer({
     'embedding_inventory',
     {
       title: 'Embedding Maintenance Inventory',
-      description: 'Inspect orphaned, inactive, stale-hash, retired-model, and old terminal embedding artifacts without deleting them.',
+      description: 'Inspect orphaned, inactive, stale-hash, retired-model, and old completed embedding artifacts without deleting them.',
       inputSchema: {
         ...scopedSchema,
         scanLimit: z.number().int().positive().max(50000).optional(),
@@ -1032,6 +1032,7 @@ export function createContextForgeMcpServer({
         batchSize: z.number().int().positive().max(500).optional(),
         dryRun: z.boolean().optional(),
         force: z.boolean().optional(),
+        includeRetired: z.boolean().optional(),
       },
       annotations: {
         title: 'Prune Embedding Artifacts',

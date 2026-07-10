@@ -4702,6 +4702,8 @@ test('embedding maintenance inventory and GC remove only eligible artifacts in b
           { key: 'pending-candidate', content: 'Keep pending candidate embedding.', reason: 'Awaiting review.' },
           { key: 'promoted-candidate', content: 'Keep promoted candidate embedding.', reason: 'Approved.' },
           { key: 'rejected-candidate', content: 'Delete rejected candidate embedding.', reason: 'Rejected.' },
+          { key: 'stale-candidate', content: 'Delete stale candidate embedding.', reason: 'Stale.' },
+          { key: 'snoozed-candidate', content: 'Delete snoozed candidate embedding.', reason: 'Snoozed.' },
         ],
         sourceEventCount: 1,
         metadata: { synthetic: true },
@@ -4752,6 +4754,8 @@ test('embedding maintenance inventory and GC remove only eligible artifacts in b
     const pendingCandidate = candidates.find((item) => item.candidate.key === 'pending-candidate');
     const promotedCandidate = candidates.find((item) => item.candidate.key === 'promoted-candidate');
     const rejectedCandidate = candidates.find((item) => item.candidate.key === 'rejected-candidate');
+    const staleCandidate = candidates.find((item) => item.candidate.key === 'stale-candidate');
+    const snoozedCandidate = candidates.find((item) => item.candidate.key === 'snoozed-candidate');
     app.promoteMemoryCandidate({
       scope: 'repo',
       scopeKey,
@@ -4796,6 +4800,8 @@ test('embedding maintenance inventory and GC remove only eligible artifacts in b
       store.db
         .prepare('UPDATE embedding_index SET model = ? WHERE source_id = ?')
         .run('retired-embedding-model', `memory:${retired.id}`);
+      store.db.prepare('UPDATE memory_candidate_index SET status = ? WHERE id = ?').run('stale', staleCandidate.id);
+      store.db.prepare('UPDATE memory_candidate_index SET status = ? WHERE id = ?').run('snoozed', snoozedCandidate.id);
       store.db
         .prepare(
           "UPDATE embedding_jobs SET completed_at = '2000-01-01T00:00:00.000Z', updated_at = '2000-01-01T00:00:00.000Z' WHERE record_id = ?",
@@ -4847,6 +4853,8 @@ test('embedding maintenance inventory and GC remove only eligible artifacts in b
     assert.equal(inventory.processingJobs, 1);
     assert.ok(inventory.byReason.inactive_memory >= 1);
     assert.ok(inventory.byReason.candidate_rejected >= 1);
+    assert.ok(inventory.byReason.candidate_stale >= 1);
+    assert.ok(inventory.byReason.candidate_snoozed >= 1);
     assert.ok(inventory.byReason.orphan_source >= 1);
     assert.ok(inventory.byReason.vector_without_index >= 1);
     assert.ok(inventory.byReason.content_hash_mismatch >= 1);
@@ -4857,10 +4865,27 @@ test('embedding maintenance inventory and GC remove only eligible artifacts in b
     assert.ok(!inventory.artifacts.some((item) => item.sourceId === `memory_candidate:${pendingCandidate.id}`));
     assert.ok(!inventory.artifacts.some((item) => item.sourceId === `memory_candidate:${promotedCandidate.id}`));
 
+    const disabledApp = createContextForge({
+      env: { CONTEXTFORGE_DATA_DIR: dataDir, CONTEXTFORGE_EMBEDDINGS_PROVIDER: 'none' },
+      cwd: process.cwd(),
+    });
+    try {
+      const disabledInventory = disabledApp.embeddingInventory({ completedJobRetentionDays: 1 });
+      assert.equal(disabledInventory.current.authoritative, false);
+      assert.ok(!disabledInventory.artifacts.some((item) => item.reason === 'retired_model_or_dimensions'));
+      assert.ok(!disabledInventory.jobs.some((item) => item.reason === 'retired_job_model_or_dimensions'));
+    } finally {
+      disabledApp.close();
+    }
+
     const dryRun = app.pruneEmbeddingArtifacts({ completedJobRetentionDays: 1, batchSize: 100 });
     assert.equal(dryRun.dryRun, true);
     assert.equal(dryRun.deleted.vectors, 0);
     assert.ok(dryRun.plan.total > 0);
+    assert.equal(dryRun.includeRetired, false);
+    assert.equal(dryRun.skippedRetiredArtifacts, 1);
+    assert.ok(!dryRun.plan.artifacts.some((item) => item.reason === 'retired_model_or_dimensions'));
+    assert.ok(dryRun.reindexSuggestedSourceIds.includes(`memory:${staleHash.id}`));
     assert.ok(dryRun.plan.artifacts.every((item) => item.sourceType && item.reason));
     assert.ok(dryRun.plan.vectorOnly.every((item) => item.sourceType && item.reason === 'vector_without_index'));
     assert.ok(dryRun.plan.jobs.every((item) => item.sourceType && item.status && item.reason));
@@ -4879,6 +4904,7 @@ test('embedding maintenance inventory and GC remove only eligible artifacts in b
       batchSize: 100,
       dryRun: false,
       force: true,
+      includeRetired: true,
     });
     assert.equal(pruned.blocked, false);
     assert.ok(pruned.deleted.vectors >= 6);
@@ -4897,6 +4923,8 @@ test('embedding maintenance inventory and GC remove only eligible artifacts in b
       assert.ok(remainingIds.includes(`memory_candidate:${promotedCandidate.id}`));
       assert.ok(!remainingIds.includes(`memory:${inactive.id}`));
       assert.ok(!remainingIds.includes(`memory_candidate:${rejectedCandidate.id}`));
+      assert.ok(!remainingIds.includes(`memory_candidate:${staleCandidate.id}`));
+      assert.ok(!remainingIds.includes(`memory_candidate:${snoozedCandidate.id}`));
     } finally {
       verifyStore.close();
     }
@@ -14458,6 +14486,8 @@ test('CLI supports the v0 workflow with synthetic data', async () => {
           'cli-repo',
           '--batchSize',
           '5',
+          '--includeRetired',
+          'false',
         ],
         { env },
       )
@@ -14466,6 +14496,7 @@ test('CLI supports the v0 workflow with synthetic data', async () => {
   assert.equal(embeddingGc.kind, 'embedding_maintenance_gc');
   assert.equal(embeddingGc.dryRun, true);
   assert.equal(embeddingGc.batchSize, 5);
+  assert.equal(embeddingGc.includeRetired, false);
 });
 
 test('CLI submits, inspects, processes, and cancels durable operation jobs', async () => {
@@ -14680,6 +14711,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     const pruneEmbeddingArtifactsTool = toolList.tools.find((tool) => tool.name === 'prune_embedding_artifacts');
     assert.ok(pruneEmbeddingArtifactsTool.inputSchema.properties.batchSize);
     assert.ok(pruneEmbeddingArtifactsTool.inputSchema.properties.dryRun);
+    assert.ok(pruneEmbeddingArtifactsTool.inputSchema.properties.includeRetired);
     assert.equal(pruneEmbeddingArtifactsTool.annotations.readOnlyHint, false);
     assert.equal(pruneEmbeddingArtifactsTool.annotations.destructiveHint, true);
     for (const name of [

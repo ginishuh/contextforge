@@ -1735,6 +1735,29 @@ export class ContextForgeStore {
       .map(hydrateEmbeddingJob);
   }
 
+  listTerminalEmbeddingJobs({ scopeType = null, scopeKey = null, limit = 5000 } = {}) {
+    const conditions = ["status IN ('completed', 'failed')"];
+    const values = [];
+    if (scopeType) {
+      conditions.push('scope_type = ?');
+      values.push(scopeType);
+    }
+    if (scopeKey) {
+      conditions.push('scope_key = ?');
+      values.push(scopeKey);
+    }
+    values.push(Number(limit));
+    return this.db
+      .prepare(`
+        SELECT * FROM embedding_jobs
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY updated_at ASC, id ASC
+        LIMIT ?
+      `)
+      .all(...values)
+      .map(hydrateEmbeddingJob);
+  }
+
   countEmbeddingJobs({ scopeType = null, scopeKey = null } = {}) {
     const conditions = [];
     const values = [];

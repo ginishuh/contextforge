@@ -265,6 +265,7 @@ function toCoreOptions(options) {
     confidence: options.confidence == null ? undefined : Number(options.confidence),
     batchSize: options.batchSize == null ? undefined : Number(options.batchSize),
     force: options.force === true || options.force === 'true',
+    includeRetired: options.includeRetired === true || options.includeRetired === 'true',
     includeEvents: options.includeEvents === true || options.includeEvents === 'true',
     retryFailed: options.retryFailed === true || options.retryFailed === 'true',
     staleAfterMs: options.staleAfterMs == null ? undefined : Number(options.staleAfterMs),
