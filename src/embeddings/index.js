@@ -1,4 +1,6 @@
-export function createEmbeddingProvider(config, providers = {}, { fetchImpl = globalThis.fetch } = {}) {
+import { assertExternalProviderAllowed } from '../testing/external_provider.js';
+
+export function createEmbeddingProvider(config, providers = {}, { fetchImpl } = {}) {
   const embeddingConfig = config.embeddings || {};
   if (providers[embeddingConfig.provider]) {
     return providers[embeddingConfig.provider];
@@ -39,7 +41,10 @@ function supportsDimensionsParameter(model) {
   return String(model || '').startsWith('text-embedding-3-');
 }
 
-export function createOpenAiEmbeddingProvider(config, { fetchImpl = globalThis.fetch } = {}) {
+export function createOpenAiEmbeddingProvider(config, options = {}) {
+  const fetchInjected = typeof options.fetchImpl === 'function';
+  assertExternalProviderAllowed('openai_embeddings', { injected: fetchInjected });
+  const fetchImpl = options.fetchImpl || globalThis.fetch;
   if (!config.apiKey) {
     throw new Error('OpenAI embeddings require CONTEXTFORGE_OPENAI_API_KEY or OPENAI_API_KEY.');
   }
@@ -52,6 +57,7 @@ export function createOpenAiEmbeddingProvider(config, { fetchImpl = globalThis.f
     model: config.model,
     dimensions: config.dimensions,
     async embed(texts) {
+      assertExternalProviderAllowed('openai_embeddings', { injected: fetchInjected });
       const input = Array.isArray(texts) ? texts : [texts];
       if (input.length === 0) {
         return [];

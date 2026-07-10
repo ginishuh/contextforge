@@ -269,6 +269,17 @@ npm install
 npm test
 ```
 
+일반 테스트는 fail-closed test mode로 실행한다. fake가 주입되지 않은 실제
+Codex/Python provider runner와 기본 외부 provider fetch는 즉시 거부한다.
+JUnit/JSON duration artifact는 `artifacts/test/`에 생성되며 기본 budget은
+테스트별 10초, 전체 suite 120초다. 필요하면
+`CONTEXTFORGE_TEST_SLOW_MS`, `CONTEXTFORGE_TEST_BUDGET_MS`로 조정할 수 있다.
+실제 provider smoke test는 별도 script와 명시적 opt-in을 함께 사용한다.
+
+```bash
+CONTEXTFORGE_LIVE_TESTS=true npm run test:live
+```
+
 로컬 DB 확인:
 
 ```bash

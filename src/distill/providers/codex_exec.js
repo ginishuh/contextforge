@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { assertExternalProviderAllowed } from '../../testing/external_provider.js';
 import { STRUCTURED_CHECKPOINT_SCHEMA_VERSION } from '../validate.js';
 
 export const CODEX_EXEC_PROMPT_VERSION = 'codex_exec.prompt.v9';
@@ -494,6 +495,7 @@ function summarizeStderr(stderr) {
 }
 
 export function runCodexExecCommand({ command, args, prompt, timeoutMs, cwd, env = process.env }) {
+  assertExternalProviderAllowed('codex_exec', { env });
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd,
@@ -700,6 +702,8 @@ export async function checkCodexExecProvider(options = {}) {
 }
 
 export function createCodexExecProvider(options = {}) {
+  const runnerInjected = typeof options.runner === 'function';
+  assertExternalProviderAllowed('codex_exec', { injected: runnerInjected });
   const runner = options.runner || runCodexExecCommand;
   const command = options.command || 'codex';
   const model = options.model || null;
@@ -716,6 +720,7 @@ export function createCodexExecProvider(options = {}) {
   };
 
   async function distillWithCodexExecProvider(input) {
+    assertExternalProviderAllowed('codex_exec', { injected: runnerInjected });
     const startedAt = Date.now();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'contextforge-codex-exec-'));
     const schemaPath = path.join(tempDir, 'checkpoint.schema.json');

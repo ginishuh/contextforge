@@ -7,6 +7,7 @@ import {
   AUTO_PROMOTE_AUDIT_SCHEMA_VERSION,
   buildAuditPrompt,
 } from './codex_exec.js';
+import { assertExternalProviderAllowed } from '../testing/external_provider.js';
 
 export const AUTO_PROMOTE_AUDIT_PYTHON_SDK_PROMPT_VERSION = 'auto_promote_audit.codex_sdk_python.v2';
 
@@ -45,6 +46,7 @@ export function runCodexSdkPythonCommand({
   cwd,
   env = process.env,
 }) {
+  assertExternalProviderAllowed('codex_sdk_python_audit', { env });
   return new Promise((resolve, reject) => {
     const args = [
       scriptPath || RUNNER_PATH,
@@ -120,6 +122,7 @@ export function runCodexSdkPythonCommand({
 }
 
 export function createCodexSdkPythonAutoPromoteAuditor(options = {}) {
+  const runnerInjected = typeof options.runner === 'function';
   const runner = options.runner || runCodexSdkPythonCommand;
   const pythonCommand = options.pythonCommand || 'python3';
   const pythonPath = options.pythonPath || null;
@@ -149,6 +152,7 @@ export function createCodexSdkPythonAutoPromoteAuditor(options = {}) {
   };
 
   async function audit(input) {
+    assertExternalProviderAllowed('codex_sdk_python_audit', { injected: runnerInjected });
     const startedAt = Date.now();
     const result = await runner({
       pythonCommand,

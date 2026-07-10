@@ -685,6 +685,12 @@ function errorSummary(error) {
   };
 }
 
+function rethrowExternalProviderTestError(error) {
+  if (error?.code === 'CONTEXTFORGE_EXTERNAL_PROVIDER_DISABLED_IN_TEST') {
+    throw error;
+  }
+}
+
 function bootstrapResultSummary(result) {
   if (result.memory) {
     return {
@@ -5364,6 +5370,7 @@ export function createContextForge(options = {}) {
             });
             audited.push({ ...item, candidate: auditedCandidate, audit });
           } catch (error) {
+            rethrowExternalProviderTestError(error);
             const audit = {
               approved: false,
               decision: 'needs_review',
@@ -5652,6 +5659,7 @@ export function createContextForge(options = {}) {
                 });
                 audited.push({ ...item, audit });
               } catch (error) {
+                rethrowExternalProviderTestError(error);
                 const audit = {
                   approved: false,
                   decision: 'needs_review',
@@ -7082,6 +7090,7 @@ export function createContextForge(options = {}) {
               try {
                 audit = await auditAutoPromotionCandidate({ auditor, store, scope, item });
               } catch (error) {
+                rethrowExternalProviderTestError(error);
                 audit = {
                   approved: false,
                   decision: 'needs_review',
@@ -7155,6 +7164,7 @@ export function createContextForge(options = {}) {
             };
           }
         } catch (error) {
+          rethrowExternalProviderTestError(error);
           candidateAudit = {
             enabled: true,
             executed: false,
