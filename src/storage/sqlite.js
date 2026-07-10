@@ -6,6 +6,19 @@ import * as sqliteVec from 'sqlite-vec';
 
 export const SCHEMA_VERSION = 18;
 
+export class UnsupportedSchemaVersionError extends Error {
+  constructor(existingVersion, supportedVersion) {
+    super(
+      `ContextForge database schema version ${existingVersion} is newer than supported version ${supportedVersion}. ` +
+        'Upgrade ContextForge before opening this database; the database was not modified.',
+    );
+    this.name = 'UnsupportedSchemaVersionError';
+    this.code = 'CONTEXTFORGE_SCHEMA_TOO_NEW';
+    this.existingSchemaVersion = existingVersion;
+    this.supportedSchemaVersion = supportedVersion;
+  }
+}
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -557,9 +570,38 @@ export class ContextForgeStore {
     fs.mkdirSync(dataDir, { recursive: true });
     this.dbPath = path.join(dataDir, 'contextforge.db');
     this.db = new Database(this.dbPath);
-    this.db.exec('PRAGMA foreign_keys = ON;');
-    this.vectorStatus = this.loadVectorExtension();
-    this.migrate();
+    try {
+      this.assertSupportedSchemaVersion();
+      this.db.exec('PRAGMA foreign_keys = ON;');
+      this.vectorStatus = this.loadVectorExtension();
+      this.migrate();
+    } catch (error) {
+      this.db.close();
+      throw error;
+    }
+  }
+
+  assertSupportedSchemaVersion() {
+    const hasSchemaMeta = this.db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_meta'")
+      .get();
+    if (!hasSchemaMeta) {
+      return;
+    }
+    const stored = this.db.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").get()?.value;
+    if (stored == null || stored === '') {
+      return;
+    }
+    const existingVersion = Number(stored);
+    if (!Number.isInteger(existingVersion) || existingVersion < 0) {
+      const error = new Error(`Invalid ContextForge schema version metadata: ${String(stored)}`);
+      error.name = 'InvalidSchemaVersionError';
+      error.code = 'CONTEXTFORGE_SCHEMA_VERSION_INVALID';
+      throw error;
+    }
+    if (existingVersion > SCHEMA_VERSION) {
+      throw new UnsupportedSchemaVersionError(existingVersion, SCHEMA_VERSION);
+    }
   }
 
   loadVectorExtension() {

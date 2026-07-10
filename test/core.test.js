@@ -440,6 +440,64 @@ test('dbInfo initializes a fresh SQLite store', async () => {
   assert.match(info.dbPath, /contextforge\.db$/);
 });
 
+test('ContextForgeStore refuses a newer schema before modifying the database', async () => {
+  const dataDir = await makeTempDir();
+  const dbPath = path.join(dataDir, 'contextforge.db');
+  const futureVersion = SCHEMA_VERSION + 1;
+  const db = new Database(dbPath);
+  try {
+    db.exec(`
+      CREATE TABLE schema_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+      CREATE TABLE future_sentinel (
+        id INTEGER PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+    `);
+    db.prepare('INSERT INTO schema_meta (key, value) VALUES (?, ?)').run('schema_version', String(futureVersion));
+    db.prepare('INSERT INTO future_sentinel (value) VALUES (?)').run('preserve-me');
+  } finally {
+    db.close();
+  }
+  const before = await fs.readFile(dbPath);
+
+  assert.throws(
+    () => new ContextForgeStore({ dataDir }),
+    (error) => {
+      assert.equal(error.name, 'UnsupportedSchemaVersionError');
+      assert.equal(error.code, 'CONTEXTFORGE_SCHEMA_TOO_NEW');
+      assert.equal(error.existingSchemaVersion, futureVersion);
+      assert.equal(error.supportedSchemaVersion, SCHEMA_VERSION);
+      assert.match(error.message, new RegExp(`schema version ${futureVersion} is newer than supported version ${SCHEMA_VERSION}`));
+      assert.match(error.message, /database was not modified/);
+      return true;
+    },
+  );
+
+  const after = await fs.readFile(dbPath);
+  assert.deepEqual(after, before);
+
+  const verificationDb = new Database(dbPath);
+  try {
+    assert.equal(
+      verificationDb.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").get().value,
+      String(futureVersion),
+    );
+    assert.equal(verificationDb.prepare('SELECT value FROM future_sentinel').get().value, 'preserve-me');
+    assert.deepEqual(
+      verificationDb
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name ASC")
+        .all()
+        .map((row) => row.name),
+      ['future_sentinel', 'schema_meta'],
+    );
+  } finally {
+    verificationDb.close();
+  }
+});
+
 test('dbInfo reports configured embedding stale timeout', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({
