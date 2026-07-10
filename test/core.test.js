@@ -6349,6 +6349,13 @@ test('distillCheckpoint records checkpoint level and coverage metadata', async (
   assert.ok(checkpoint.coversTo);
   assert.equal(checkpoint.source, 'daily_consolidation');
   assert.equal(checkpoint.sourceRef, '2026-05-08');
+  store.db
+    .prepare(`
+      UPDATE checkpoints
+      SET created_at = ?
+      WHERE scope_type = ? AND scope_key = ? AND session_id = ?
+    `)
+    .run('2026-05-08T00:00:00.000Z', 'repo', 'repo-level', 'level-session');
   assert.equal(app.listCheckpoints({ scope: 'repo', scopeKey: 'repo-level', level: 1 }).length, 1);
   assert.equal(app.listCheckpoints({ scope: 'repo', scopeKey: 'repo-level', level: 0 }).length, 1);
   assert.equal(store.getLatestCheckpoint({ scopeType: 'repo', scopeKey: 'repo-level', sessionId: 'level-session' }).level, 1);
