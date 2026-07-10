@@ -6,6 +6,18 @@ import path from 'node:path';
 const root = process.cwd();
 const reportFile = path.resolve(process.env.CONTEXTFORGE_RELEASE_REPORT || 'artifacts/release/package-report.json');
 const budgets = Object.freeze({ packedBytes: 400_000, unpackedBytes: 1_500_000, entryCount: 90 });
+const publishedScripts = Object.freeze([
+  'scripts/benchmark-retrieval.js',
+  'scripts/check-release.js',
+  'scripts/install-agent-router-service.sh',
+  'scripts/install-claude-code-router-service.sh',
+  'scripts/install-codex-router-service.sh',
+  'scripts/install-codex-watch-service.sh',
+  'scripts/junit-report.js',
+  'scripts/lint-source.js',
+  'scripts/run-quality-eval.js',
+  'scripts/run-tests.js',
+]);
 
 async function readJson(file) {
   return JSON.parse(await fs.readFile(path.join(root, file), 'utf8'));
@@ -60,6 +72,8 @@ async function inspectMarkdown(packageManifest) {
   let localLinks = 0;
   let commandFileReferences = 0;
   let packageScriptReferences = 0;
+  const localTargets = [];
+  const commandTargets = [];
   for (const file of files) {
     const content = await fs.readFile(path.join(root, file), 'utf8');
     for (const rawTarget of markdownTargets(content)) {
@@ -69,6 +83,11 @@ async function inspectMarkdown(packageManifest) {
       const resolved = target.startsWith('/')
         ? path.join(root, target.slice(1))
         : path.resolve(root, path.dirname(file), target);
+      localTargets.push({
+        file,
+        target,
+        resolved: path.relative(root, resolved).split(path.sep).join('/'),
+      });
       try {
         await fs.access(resolved);
       } catch {
@@ -78,6 +97,7 @@ async function inspectMarkdown(packageManifest) {
     const commands = commandReferences(content);
     for (const target of commands.files) {
       commandFileReferences += 1;
+      commandTargets.push({ file, target });
       try {
         await fs.access(path.join(root, target));
       } catch {
@@ -97,6 +117,8 @@ async function inspectMarkdown(packageManifest) {
     brokenLinks,
     missingCommandFiles,
     missingPackageScripts,
+    localTargets,
+    commandTargets,
   };
 }
 
@@ -141,6 +163,7 @@ function inspectPackage() {
     'LICENSE',
     'README.md',
     'README.ko.md',
+    'CHANGELOG.md',
     'package.json',
     'src/cli.js',
     'src/mcp.js',
@@ -149,6 +172,7 @@ function inspectPackage() {
     'docs/runtime-modes.md',
     'docs/operations.md',
     'docs/skills/contextforge-memory/SKILL.md',
+    ...publishedScripts,
   ];
   const forbiddenPatterns = [
     /^artifacts\//,
@@ -161,6 +185,9 @@ function inspectPackage() {
   ];
   const missingRequired = required.filter((file) => !paths.includes(file));
   const forbidden = paths.filter((file) => forbiddenPatterns.some((pattern) => pattern.test(file)));
+  const actualScripts = paths.filter((file) => file.startsWith('scripts/')).sort();
+  const missingPublishedScripts = publishedScripts.filter((file) => !actualScripts.includes(file));
+  const unexpectedPublishedScripts = actualScripts.filter((file) => !publishedScripts.includes(file));
   const budgetChecks = {
     packedBytes: result.size <= budgets.packedBytes,
     unpackedBytes: result.unpackedSize <= budgets.unpackedBytes,
@@ -176,11 +203,43 @@ function inspectPackage() {
     budgetChecks,
     missingRequired,
     forbidden,
+    publishedScripts,
+    missingPublishedScripts,
+    unexpectedPublishedScripts,
     files: result.files,
     passed:
       missingRequired.length === 0 &&
       forbidden.length === 0 &&
+      missingPublishedScripts.length === 0 &&
+      unexpectedPublishedScripts.length === 0 &&
       Object.values(budgetChecks).every(Boolean),
+  };
+}
+
+function packageContains(paths, target) {
+  return paths.has(target) || [...paths].some((file) => file.startsWith(`${target}/`));
+}
+
+function inspectPublishedMarkdown(markdown, packageResult) {
+  const paths = new Set(packageResult.files.map((file) => file.path));
+  const publishedSources = new Set(
+    [...new Set([...markdown.localTargets, ...markdown.commandTargets].map((item) => item.file))].filter((file) =>
+      packageContains(paths, file),
+    ),
+  );
+  const missingLocalTargets = markdown.localTargets.filter(
+    ({ file, resolved }) => publishedSources.has(file) && !packageContains(paths, resolved),
+  );
+  const missingCommandTargets = markdown.commandTargets.filter(
+    ({ file, target }) => publishedSources.has(file) && !packageContains(paths, target),
+  );
+  return {
+    publishedMarkdownFiles: publishedSources.size,
+    checkedLocalTargets: markdown.localTargets.filter(({ file }) => publishedSources.has(file)).length,
+    checkedCommandTargets: markdown.commandTargets.filter(({ file }) => publishedSources.has(file)).length,
+    missingLocalTargets,
+    missingCommandTargets,
+    passed: missingLocalTargets.length === 0 && missingCommandTargets.length === 0,
   };
 }
 
@@ -193,14 +252,21 @@ try {
     inspectVersions(packageManifest, packageLock),
   ]);
   const packageResult = inspectPackage();
+  const publishedMarkdown = inspectPublishedMarkdown(markdown, packageResult);
   const markdownPassed =
     markdown.brokenLinks.length === 0 &&
     markdown.missingCommandFiles.length === 0 &&
     markdown.missingPackageScripts.length === 0;
   report = {
     kind: 'release_hygiene_report',
-    passed: markdownPassed && versions.passed && packageResult.passed,
-    markdown: { ...markdown, passed: markdownPassed },
+    passed: markdownPassed && publishedMarkdown.passed && versions.passed && packageResult.passed,
+    markdown: {
+      ...markdown,
+      localTargets: undefined,
+      commandTargets: undefined,
+      publishedPackage: publishedMarkdown,
+      passed: markdownPassed && publishedMarkdown.passed,
+    },
     versions,
     package: packageResult,
   };

@@ -7806,6 +7806,7 @@ export function createContextForge(options = {}) {
         ...scope,
         sessionId: options.sessionId || null,
         level: options.level == null ? null : Number(options.level),
+        sort: 'created_at_storage_sequence_desc',
       };
       return useStore((store) =>
         pagedList({
@@ -7813,7 +7814,7 @@ export function createContextForge(options = {}) {
           filters,
           options,
           load: ({ limit, after }) => store.listCheckpoints({ ...filters, limit, after }),
-          positionForItem: (item) => [item.createdAt, item.id],
+          positionForItem: (item) => [item.createdAt, item._storageSequence],
         }),
       );
     },

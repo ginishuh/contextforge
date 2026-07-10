@@ -6190,6 +6190,57 @@ test('public list pagination is bounded, stable across timestamp ties, and filte
   }
 });
 
+test('checkpoint latest, recent, and paged lists share insertion-order tie-breaking', async () => {
+  const dataDir = await makeTempDir();
+  const store = new ContextForgeStore({ dataDir });
+  const scopeType = 'repo';
+  const scopeKey = 'checkpoint-order-repo';
+  const sessionId = 'checkpoint-order-session';
+  const timestamp = '2026-07-10T00:00:00.000Z';
+  const ids = ['checkpoint-z', 'checkpoint-a', 'checkpoint-m'];
+  try {
+    ids.forEach((id, index) => {
+      const checkpoint = store.insertCheckpoint({
+        scopeType,
+        scopeKey,
+        sessionId,
+        summaryShort: `Checkpoint ${index}`,
+        summaryText: `Checkpoint insertion ${index}`,
+        provider: 'mock',
+      });
+      store.db
+        .prepare('UPDATE checkpoints SET id = ?, created_at = ? WHERE id = ?')
+        .run(id, timestamp, checkpoint.id);
+    });
+
+    assert.equal(store.getLatestCheckpoint({ scopeType, scopeKey, sessionId }).id, 'checkpoint-m');
+    assert.deepEqual(
+      store.listRecentCheckpoints({ scopeType, scopeKey, limit: 3 }).map((item) => item.id),
+      ['checkpoint-m', 'checkpoint-a', 'checkpoint-z'],
+    );
+  } finally {
+    store.close();
+  }
+
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+  try {
+    const first = app.listCheckpoints({ scope: 'repo', scopeKey, sessionId, limit: 2, page: true });
+    assert.deepEqual(first.items.map((item) => item.id), ['checkpoint-m', 'checkpoint-a']);
+    assert.equal(JSON.stringify(first.items).includes('_storageSequence'), false);
+    const second = app.listCheckpoints({
+      scope: 'repo',
+      scopeKey,
+      sessionId,
+      limit: 2,
+      cursor: first.page.nextCursor,
+    });
+    assert.deepEqual(second.items.map((item) => item.id), ['checkpoint-z']);
+    assert.equal(second.page.nextCursor, null);
+  } finally {
+    app.close?.();
+  }
+});
+
 test('listDistillRuns can return newest runs first when limited', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({

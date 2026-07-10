@@ -11,7 +11,7 @@ LLM으로 최근 작업 상태를 checkpoint로 압축해 다음 에이전트가
 
 현재 package version: `0.5.1`
 
-![ContextForge 설명 만화](assets/contextforge-explainer-comic-ko.jpg)
+![ContextForge 설명 만화](https://raw.githubusercontent.com/ginishuh/contextforge/main/docs/assets/contextforge-explainer-comic-ko.jpg)
 
 ## 핵심 개념
 
@@ -454,6 +454,56 @@ proxy를 통해서만 접근 가능한 경우에만 사용한다. Node가 직접
 보낸 forwarded header를 반드시 덮어써야 한다. Failed-login state는 기본
 `10000`개 key로 제한되며 `CONTEXTFORGE_ADMIN_LOGIN_MAX_KEYS`로 조정할 수 있다.
 
+### HTTP 원격 배포와 새 머신 연결
+
+원격 모드에서는 서버가 canonical SQLite를 소유하고 client는 HTTP/MCP로만 접근한다.
+먼저 서버를 loopback에 bind하고 긴 random token 또는 capability token을 private env
+file에 둔다.
+
+```bash
+CONTEXTFORGE_REMOTE_HOST=127.0.0.1 \
+CONTEXTFORGE_REMOTE_PORT=8765 \
+CONTEXTFORGE_REMOTE_TOKEN=change-me \
+CONTEXTFORGE_SERVER_STORAGE_MODE=local \
+CONTEXTFORGE_DATA_DIR=/var/lib/contextforge \
+node src/server.js
+```
+
+공개 인터넷에서는 nginx/Caddy 같은 TLS reverse proxy 뒤에 두고 direct HTTP port를
+노출하지 않는다. Proxy가 같은 머신에 있으면 `CONTEXTFORGE_TRUST_PROXY=loopback`을
+설정하고, proxy는 client가 보낸 `X-Forwarded-For`/`X-Forwarded-Proto`를 그대로
+전달하지 말고 반드시 덮어쓴다. 배포 확인은 liveness만 보지 말고 readiness까지
+수행한다.
+
+```bash
+curl -fsS https://memory.example.com/healthz
+curl -fsS https://memory.example.com/readyz
+```
+
+새 머신에서는 server token을 private env file에 저장한 뒤 같은 canonical endpoint를
+등록한다.
+
+```bash
+set -a
+. ~/.config/contextforge/server.env
+set +a
+
+codex mcp add contextforge \
+  --url https://memory.example.com/mcp \
+  --bearer-token-env-var CONTEXTFORGE_REMOTE_TOKEN
+
+CONTEXTFORGE_STORAGE_MODE=remote \
+CONTEXTFORGE_REMOTE_URL=https://memory.example.com \
+CONTEXTFORGE_REMOTE_TOKEN="$CONTEXTFORGE_REMOTE_TOKEN" \
+node src/cli.js dbInfo
+```
+
+`dbInfo.connection.summary`가 remote-client 경로를 가리키는지 확인해야 한다. Checkout의
+project-local DB와 원격 canonical DB는 서로 다른 authority이므로 backup·prune·GC
+같은 operator 명령 전에 어느 store에 연결됐는지 다시 확인한다. Systemd,
+backup/restore, graceful shutdown 전체 절차는 [Operations](operations.md), 저장 모드별
+환경 변수는 [Runtime modes](runtime-modes.md)를 따른다.
+
 ## 모델 분리
 
 ContextForge는 distill과 audit을 분리하는 구성을 권장한다.
@@ -791,6 +841,95 @@ provider와 다른 row가 전체 index의 절반 이상이면 non-dry retired cl
 job을 처리하거나 의도적인 scoped rebuild를 실행한다.
 차단 응답은 `blockedRetry=true`, `needsRescan=true`를 반환하고 입력 cursor를
 유지한다. 차단 원인을 해소한 뒤 같은 cursor를 재시도하고 나서 전진한다.
+
+## v0 CLI와 목록 pagination
+
+CLI method 이름은 core operation의 camelCase를 사용한다. Scope가 필요한 명령에는
+`--scope`와 `--scopeKey`를 함께 넘기고, repo checkout에서 key 추론이 필요하면
+`--repoPath`를 사용한다.
+
+```bash
+node src/cli.js remember \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --key architecture.storage \
+  --content "Remote server owns canonical SQLite."
+
+node src/cli.js search \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --query "canonical storage"
+```
+
+공개 list operation은 기본 `100`, 최대 `500`으로 제한된다. 한 page의 metadata가
+필요하면 `--page true`, 전체 순회가 필요하면 명시적으로 `--allPages true`를 쓴다.
+Cursor는 operation·scope·filter·정렬에 묶인 opaque 값이므로 decode하거나 재작성하지
+않는다.
+
+```bash
+node src/cli.js listCheckpoints \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --limit 50 \
+  --page true
+```
+
+동일 timestamp의 checkpoint는 SQLite 삽입 순서를 보조 정렬로 사용한다. 따라서
+latest checkpoint, recent handoff, paged checkpoint list가 같은 순서를 내며 내부 삽입
+sequence는 응답 필드로 노출하지 않는다. 자세한 계약은
+[List Pagination](list-pagination.md)에 있다.
+
+## MCP 서버 실행
+
+기본 stdio MCP는 `agent-core` profile로 시작한다. 운영·정비 도구가 필요한 trusted
+operator만 더 넓은 profile이나 allowlist를 명시한다.
+
+```bash
+node src/mcp.js
+node src/mcp.js --profile operator
+node src/mcp.js --describe-surface --profile agent-core
+```
+
+HTTP MCP는 `node src/server.js` 또는 `node src/cli.js serve`가 제공하는 `/mcp`
+endpoint를 사용한다. stdio와 HTTP는 같은 core contract와 authorization matrix를
+공유하지만 transport와 storage authority는 다를 수 있으므로 bootstrap 응답의
+`storage.connection`을 확인한다.
+
+## Provider 설정 요약
+
+`codex_exec`는 설치·로그인된 Codex CLI를 child process로 실행한다. Server에서
+사용할 binary와 모델을 고정하고 provider timeout이 remote request timeout보다
+짧도록 구성한다.
+
+```bash
+CONTEXTFORGE_DISTILL_PROVIDER=codex_exec
+CONTEXTFORGE_CODEX_EXEC_BIN=/usr/local/bin/codex
+CONTEXTFORGE_CODEX_EXEC_MODEL=gpt-5.4-mini
+CONTEXTFORGE_CODEX_EXEC_REASONING_EFFORT=low
+CONTEXTFORGE_CODEX_EXEC_TIMEOUT_MS=90000
+```
+
+`openai_compatible`는 Chat Completions 호환 endpoint를 사용한다. API key는 server
+환경에만 두고 base URL, model, response format을 provider별로 명시한다. Provider
+health check와 실제 distill은 비용·권한이 발생할 수 있으므로 일반 read token이 아닌
+operator 권한에서 실행한다. Audit provider는 distill provider와 독립적으로 설정되며,
+candidate audit은 현재 선택된 후보마다 provider를 한 번씩 호출하는 bounded
+pseudo-batch다.
+
+## 릴리스와 npm package 검증
+
+릴리스 전에는 아래 gate를 실행한다.
+
+```bash
+npm run verify:release
+npm pack --dry-run --json
+```
+
+Gate는 README/reference/package version 동기화, Markdown의 workspace-local 링크와
+명령 존재 여부, 실제 npm package 안에서의 로컬 링크·명령 도달성, 필수/금지 파일,
+명시된 `scripts/` allowlist, packed/unpacked 크기와 entry budget을 함께 검사한다.
+Package에 포함되는 문서가 가리키는 로컬 파일도 inventory에 없으면 실패한다. 자세한
+정책은 [Releases](releases.md), 전체 변경 이력은 [Changelog](../CHANGELOG.md)에 있다.
 
 ## 안전 원칙
 
