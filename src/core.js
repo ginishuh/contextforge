@@ -6361,15 +6361,24 @@ export function createContextForge(options = {}) {
       if (!ttlDays) {
         return {
           deletedRawEvents: 0,
+          candidateRawEvents: 0,
+          eligibleRawEvents: 0,
+          blockedRawEvents: 0,
           cutoffIso: null,
           ttlDays: null,
+          dryRun: options.dryRun === true,
+          force: options.force === true,
+          sessions: [],
           skipped: true,
           reason: 'raw_ttl_disabled',
         };
       }
       const cutoffIso = rawTtlCutoffIso(ttlDays);
       return useStore((store) => ({
-        ...store.pruneRawEventsOlderThan(cutoffIso),
+        ...store.pruneRawEventsOlderThan(cutoffIso, {
+          dryRun: options.dryRun === true,
+          force: options.force === true,
+        }),
         ttlDays,
         skipped: false,
       }));

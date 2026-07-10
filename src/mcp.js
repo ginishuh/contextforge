@@ -731,9 +731,11 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     {
       title: 'Prune Raw Evidence',
       description:
-        'Delete raw evidence older than the configured raw TTL. Checkpoints, distill runs, and durable memories are preserved.',
+        'Delete only raw evidence older than the configured TTL that is covered by a successful level-0 checkpoint. Sessions without successful coverage or with a latest failed/incomplete distill run are blocked. Use dryRun to inspect session-level eligibility; force explicitly restores age-only deletion.',
       inputSchema: {
         ttlDays: z.number().int().positive().optional(),
+        dryRun: z.boolean().optional(),
+        force: z.boolean().optional(),
       },
       annotations: {
         title: 'Prune Raw Evidence',
