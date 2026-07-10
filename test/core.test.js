@@ -14075,3 +14075,12 @@ test('CI path filter runs tests for source, workflow, test, and eval fixture cha
   assert.equal(ciDetectRunTests(['docs/skills/contextforge-memory/SKILL.md']), 'true');
   assert.equal(ciDetectRunTests(['README.md', 'src/cli.js']), 'true');
 });
+
+test('CI rejects high-severity production dependency advisories', async () => {
+  const workflow = await fs.readFile('.github/workflows/ci.yml', 'utf8');
+
+  assert.match(workflow, /^  dependency-audit:$/m);
+  assert.match(workflow, /npm audit --omit=dev --audit-level=high/);
+  assert.match(workflow, /^      - dependency-audit$/m);
+  assert.match(workflow, /needs\.dependency-audit\.result/);
+});

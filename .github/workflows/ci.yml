@@ -101,12 +101,29 @@ jobs:
           path: artifacts/test/
           if-no-files-found: error
 
+  dependency-audit:
+    name: Production dependency audit
+    needs: changes
+    if: (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && needs.changes.outputs.run-tests == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Reject high-severity production advisories
+        run: npm audit --omit=dev --audit-level=high
+
   ci-summary:
     name: CI Summary
     needs:
       - changes
       - workflow-lint
       - test
+      - dependency-audit
     if: (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && always()
     runs-on: ubuntu-latest
     steps:
@@ -120,6 +137,10 @@ jobs:
           fi
           if [[ "${{ needs.changes.outputs.run-tests }}" == "true" && "${{ needs.test.result }}" != "success" ]]; then
             echo "tests failed"
+            exit 1
+          fi
+          if [[ "${{ needs.changes.outputs.run-tests }}" == "true" && "${{ needs.dependency-audit.result }}" != "success" ]]; then
+            echo "production dependency audit failed"
             exit 1
           fi
           if [[ "${{ needs.changes.outputs.run-tests }}" != "true" ]]; then
