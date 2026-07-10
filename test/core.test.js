@@ -4823,6 +4823,8 @@ test('indexed retrieval bounds candidates and exposes legacy full scan only by e
     candidateLimit: 1000,
   });
   assert.deepEqual(indexed, []);
+  assert.equal(indexed.diagnostics.returnedRows, 0);
+  assert.equal(indexed.diagnostics.scannedRows, 0);
   assert.deepEqual(observedLimits, [400]);
 
   const diagnostic = searchMemories(store, {
@@ -4864,6 +4866,18 @@ test('core search keeps arbitrary substring fallback behind legacyFullScan', asy
       query: 'nterna',
     });
     assert.deepEqual(indexed, []);
+
+    const zeroHitEnvelope = app.search({
+      scope: 'repo',
+      scopeKey: 'repo-substring-diagnostic',
+      query: 'nterna',
+      includeDiagnostics: true,
+    });
+    assert.equal(zeroHitEnvelope.kind, 'search_results');
+    assert.deepEqual(zeroHitEnvelope.results, []);
+    assert.equal(zeroHitEnvelope.diagnostics.returnedRows, 0);
+    assert.equal(zeroHitEnvelope.diagnostics.sources.fts, 0);
+    assert.ok(zeroHitEnvelope.diagnostics.elapsedMs >= 0);
 
     const legacy = app.search({
       scope: 'repo',
@@ -14111,9 +14125,10 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.ok(bootstrapTool.description.includes('memoryMap'));
     const searchTool = toolList.tools.find((tool) => tool.name === 'search');
     assert.ok(searchTool.inputSchema.properties.workspaceKey);
-    assert.equal(searchTool.inputSchema.properties.limit.maximum, 100);
-    assert.equal(searchTool.inputSchema.properties.candidateLimit.maximum, 500);
+    assert.ok(searchTool.inputSchema.properties.limit);
+    assert.ok(searchTool.inputSchema.properties.candidateLimit);
     assert.ok(searchTool.inputSchema.properties.legacyFullScan);
+    assert.ok(searchTool.inputSchema.properties.includeDiagnostics);
     assert.ok(searchTool.inputSchema.properties.workspaceMode);
     assert.ok(searchTool.inputSchema.properties.workspaceResultLimit);
     assert.ok(searchTool.inputSchema.properties.workspacePerScopeLimit);

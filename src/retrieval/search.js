@@ -159,6 +159,16 @@ function safeVectorSearch(source, search, diagnostics) {
   }
 }
 
+function finalizeResults(results, diagnostics, startedAt) {
+  diagnostics.elapsedMs = Number(elapsedMilliseconds(startedAt).toFixed(3));
+  diagnostics.returnedRows = results.length;
+  for (const result of results) {
+    result.retrieval.diagnostics = diagnostics;
+  }
+  Object.defineProperty(results, 'diagnostics', { value: diagnostics, enumerable: false });
+  return results;
+}
+
 export function searchMemories(
   store,
   {
@@ -175,10 +185,6 @@ export function searchMemories(
 ) {
   const startedAt = process.hrtime.bigint();
   const queryTokens = unique(tokenize(query));
-  if (queryTokens.length === 0 && !queryEmbedding) {
-    return [];
-  }
-
   const requestedLimit = Number(limit);
   const resultLimit = boundedPositiveInteger(
     limit,
@@ -213,6 +219,9 @@ export function searchMemories(
     },
   };
   const allResults = [];
+  if (queryTokens.length === 0 && !queryEmbedding) {
+    return finalizeResults([], diagnostics, startedAt);
+  }
 
   for (const source of scopes) {
     const ftsMatches = store.searchMemoryIndex && ftsQuery
@@ -358,10 +367,5 @@ export function searchMemories(
         resultTimestamp(b).localeCompare(resultTimestamp(a)),
     )
     .slice(0, resultLimit);
-  diagnostics.elapsedMs = Number(elapsedMilliseconds(startedAt).toFixed(3));
-  diagnostics.returnedRows = results.length;
-  for (const result of results) {
-    result.retrieval.diagnostics = diagnostics;
-  }
-  return results;
+  return finalizeResults(results, diagnostics, startedAt);
 }

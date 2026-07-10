@@ -967,13 +967,14 @@ export function createContextForgeMcpServer({
     {
       title: 'Search Memory',
       description:
-        'Search bounded indexed scoped memory. Results can be reviewed memory, checkpoint handoff, or unreviewed memory_candidate; retrieval.diagnostics reports latency and candidate counts. candidateLimit caps each index source at 500; legacyFullScan enables linear substring diagnosis only. Use repoPath/cwd or scopeKey for repo identity and workspaceKey for bounded workspace federation.',
+        'Search bounded indexed scoped memory. Results can be reviewed memory, checkpoint, or unreviewed memory_candidate. includeDiagnostics returns an envelope even for zero hits. The per-index window is min(max(limit*4,50),candidateLimit), hard-capped at 500; results cap at 100. legacyFullScan enables linear substring diagnosis only. Use repoPath/cwd or scopeKey for repo identity and workspaceKey for bounded workspace federation.',
       inputSchema: {
         ...scopedSchema,
         query: z.string(),
-        limit: z.number().int().positive().max(100).optional(),
-        candidateLimit: z.number().int().positive().max(500).optional(),
+        limit: z.number().int().positive().optional(),
+        candidateLimit: z.number().int().positive().optional(),
         legacyFullScan: z.boolean().optional(),
+        includeDiagnostics: z.boolean().optional(),
         searchScopes: z.enum(['scope', 'repo', 'shared', 'repo+shared', 'local']).optional(),
         sharedScopeKey: z.string().optional(),
         workspaceKey: z.string().optional(),

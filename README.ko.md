@@ -335,6 +335,8 @@ candidate window는 기본 최대 `200`이고 hard cap은 `500`이다. 임의 su
 비교가 필요한 진단에서만 `--legacyFullScan true`를 사용한다. 이 옵션은 scope
 크기에 선형이므로 일반 agent traffic에는 켜지 않는다. 계측 metadata와 100~100k
 fixture 결과는 [Retrieval Performance](docs/retrieval-performance.md)를 참고한다.
+0건 검색의 진단값까지 필요하면 `--includeDiagnostics true`로 envelope 응답을
+요청한다.
 
 - `project-local`: checkout-local SQLite. 기본값이며 실험에 좋다.
 - `local`: 사용자 홈 디렉터리 아래 단일 머신 SQLite.

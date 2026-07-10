@@ -14,11 +14,13 @@ available source:
 - sqlite-vec checkpoint candidates when available;
 - sqlite-vec memory-candidate rows when available.
 
-The result limit is capped at `100`. The default candidate window is at least
-`50`, grows up to four times the effective result limit, and is capped at `200`
-rows per index source. Callers may lower it or raise it only as far as the hard
-cap of `500` with `candidateLimit`. Increasing `limit` therefore cannot restore
-an unbounded scope scan.
+The result limit is silently capped at `100` on core, CLI, HTTP, and MCP
+surfaces. The effective per-index window is
+`min(max(effectiveResultLimit * 4, 50), candidateLimit)`. `candidateLimit`
+therefore acts as a ceiling, defaults to `200`, and is itself silently capped at
+`500`; values below `50` deliberately lower the window. Increasing either input
+cannot restore an unbounded scope scan. The diagnostics preserve both
+`requestedLimit` and the capped `resultLimit` so truncation is visible.
 
 FTS5 preserves the supported exact/prefix, path, API/error identifier, Korean,
 and mixed-language query behavior. Arbitrary substring matching inside a token
@@ -34,7 +36,9 @@ node src/cli.js search \
   --scope repo \
   --scopeKey github.com/example/repo \
   --query 'POST /v0/dbInfo SQLITE_BUSY' \
-  --candidateLimit 100
+  --limit 50 \
+  --candidateLimit 200 \
+  --includeDiagnostics true
 ```
 
 Diagnostic substring comparison:
@@ -47,7 +51,10 @@ node src/cli.js search \
   --legacyFullScan true
 ```
 
-Each returned result includes the same `retrieval.diagnostics` block:
+Each returned result includes the same `retrieval.diagnostics` block. Pass
+`includeDiagnostics: true` (or `--includeDiagnostics true`) to receive
+`{ kind, scope, query, results, diagnostics }`, preserving diagnostics when
+`results` is empty. The default response remains the legacy result array.
 
 - `elapsedMs`: in-process search time;
 - `requestedLimit` and capped `resultLimit`;

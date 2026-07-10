@@ -115,6 +115,7 @@ function toCoreOptions(options) {
     query: options.query,
     candidateLimit: options.candidateLimit == null ? undefined : Number(options.candidateLimit),
     legacyFullScan: cliBooleanOption(options.legacyFullScan, 'legacyFullScan'),
+    includeDiagnostics: cliBooleanOption(options.includeDiagnostics, 'includeDiagnostics'),
     clusterId: options.clusterId,
     consultReason: options.consultReason,
     limit: options.limit == null ? 10 : Number(options.limit),

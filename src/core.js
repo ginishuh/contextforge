@@ -3454,12 +3454,22 @@ export function createContextForge(options = {}) {
   }
 
   function searchWithScope(scope, options) {
+    const formatResults = (results) =>
+      options.includeDiagnostics
+        ? {
+            kind: 'search_results',
+            scope,
+            query: options.query,
+            results,
+            diagnostics: results.diagnostics,
+          }
+        : results;
     if (!embeddingProvider) {
-      return useStore((store) => searchStoreWithScope(store, scope, options));
+      return useStore((store) => formatResults(searchStoreWithScope(store, scope, options)));
     }
     return useStore(async (store) => {
       const [queryEmbedding] = await embeddingProvider.embed([options.query]);
-      return searchStoreWithScope(store, scope, options, queryEmbedding);
+      return formatResults(searchStoreWithScope(store, scope, options, queryEmbedding));
     });
   }
 
@@ -6774,6 +6784,7 @@ export function createContextForge(options = {}) {
               scope,
               query: options.query,
               results,
+              ...(options.includeDiagnostics ? { diagnostics: results.diagnostics } : {}),
               workspace: buildWorkspaceFederationBlock(store, scope, options, {
                 resultMapper: workspaceSearchResult,
               }),
@@ -6788,6 +6799,7 @@ export function createContextForge(options = {}) {
             scope,
             query: options.query,
             results,
+            ...(options.includeDiagnostics ? { diagnostics: results.diagnostics } : {}),
             workspace: buildWorkspaceFederationBlock(store, scope, options, {
               queryEmbedding,
               resultMapper: workspaceSearchResult,
