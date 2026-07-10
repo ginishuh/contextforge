@@ -2,6 +2,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { parseJunitReport } from './junit-report.js';
 
 const args = process.argv.slice(2);
 const liveIndex = args.indexOf('--live');
@@ -45,6 +46,7 @@ if (live && !hasExplicitTestPath) {
   testArgs.push(...liveTests);
 }
 
+const startedAt = Date.now();
 const child = spawn(process.execPath, testArgs, {
   cwd: process.cwd(),
   env: {
@@ -66,6 +68,7 @@ const exitCode = await new Promise((resolve, reject) => {
     resolve(code ?? 1);
   });
 });
+const wallClockDurationMs = Date.now() - startedAt;
 
 let junit = '';
 try {
@@ -75,22 +78,19 @@ try {
   process.exit(exitCode || 1);
 }
 
-const totalDurationMs = Number(junit.match(/<!-- duration_ms ([0-9.]+) -->/)?.[1] || 0);
-const testCases = [...junit.matchAll(/<testcase\s+name="([^"]*)"\s+time="([0-9.]+)"/g)].map((match) => ({
-  name: match[1],
-  durationMs: Number(match[2]) * 1000,
-}));
+const { testCases, reportedDurationMs } = parseJunitReport(junit);
 const slowTests = testCases.filter((entry) => entry.durationMs > slowThresholdMs);
 const summary = {
   live,
   testMode: true,
   exitCode,
-  totalDurationMs,
+  totalDurationMs: wallClockDurationMs,
+  reportedDurationMs,
   totalBudgetMs,
   slowThresholdMs,
   testCount: testCases.length,
   slowTests,
-  passedBudget: totalDurationMs <= totalBudgetMs && slowTests.length === 0,
+  passedBudget: wallClockDurationMs <= totalBudgetMs && slowTests.length === 0 && testCases.length > 0,
 };
 await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, 'utf8');
 
@@ -100,8 +100,11 @@ if (slowTests.length > 0) {
     console.error(`- ${entry.name}: ${entry.durationMs.toFixed(3)}ms`);
   }
 }
-if (totalDurationMs > totalBudgetMs) {
-  console.error(`Total test budget exceeded: ${totalDurationMs.toFixed(3)}ms > ${totalBudgetMs}ms.`);
+if (wallClockDurationMs > totalBudgetMs) {
+  console.error(`Total test budget exceeded: ${wallClockDurationMs.toFixed(3)}ms > ${totalBudgetMs}ms.`);
+}
+if (testCases.length === 0) {
+  console.error('JUnit report contained no testcase entries; refusing a vacuous duration-budget pass.');
 }
 if (exitCode === 0 && !summary.passedBudget) {
   process.exit(1);

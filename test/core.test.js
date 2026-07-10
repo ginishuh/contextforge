@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import test from 'node:test';
+import { parseJunitReport } from '../scripts/junit-report.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -179,6 +180,21 @@ test('normal test mode fails closed before external provider runners or fetch ex
       }),
     (error) => expectedError(error, 'openai_embeddings'),
   );
+});
+
+test('JUnit duration parser is independent of testcase attribute order', () => {
+  const report = parseJunitReport(`
+    <testsuites>
+      <testcase classname="test" time="0.125" name="classname-first" />
+      <testcase name="name-first" file="test/example.test.js" time="1.5" />
+      <!-- duration_ms 1700.25 -->
+    </testsuites>
+  `);
+  assert.deepEqual(report.testCases, [
+    { name: 'classname-first', durationMs: 125 },
+    { name: 'name-first', durationMs: 1500 },
+  ]);
+  assert.equal(report.reportedDurationMs, 1700.25);
 });
 
 async function makeGitRepo(remoteUrl = 'git@github.com:example/contextforge.git') {
