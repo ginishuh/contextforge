@@ -4192,6 +4192,150 @@ test('search uses explainable FTS-backed ranking while keeping durable memory ca
   assert.equal(fetched.content, 'Use SQLite FTS for explainable retrieval ranking.');
 });
 
+test('search retrieves Korean keys, content, and tags without embeddings', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_EMBEDDINGS_PROVIDER: 'none',
+    },
+    cwd: process.cwd(),
+  });
+
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-korean-lexical',
+    key: '배포-체크리스트',
+    content: '운영 서버 배포 절차와 복구 기준을 기록한다.',
+    category: 'runbook',
+    tags: ['장애복구'],
+  });
+
+  for (const [query, token, field] of [
+    ['체크리스트', '체크리스트', 'key'],
+    ['운영 절차', '운영', 'content'],
+    ['장애복구', '장애복구', 'tags'],
+    ['값', '값', 'content'],
+  ]) {
+    if (query === '값') {
+      app.remember({
+        scope: 'repo',
+        scopeKey: 'repo-korean-lexical',
+        key: '단일-문자',
+        content: '설정 키 값 보존 규칙.',
+      });
+    }
+    const results = app.search({
+      scope: 'repo',
+      scopeKey: 'repo-korean-lexical',
+      query,
+    });
+    assert.ok(results.length > 0, `Expected a lexical result for ${query}`);
+    const expectedKey = query === '값' ? '단일-문자' : '배포-체크리스트';
+    const result = results.find((item) => item.memory.key === expectedKey);
+    assert.ok(result, `Expected ${expectedKey} for ${query}`);
+    assert.match(result.retrieval.method, /lexical/);
+    assert.ok(result.why.some((hit) => hit.token === token && hit.fields.includes(field)));
+  }
+});
+
+test('mixed Korean and ASCII lexical ranking preserves path API and error tokens', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_EMBEDDINGS_PROVIDER: 'none',
+    },
+    cwd: process.cwd(),
+  });
+
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-mixed-lexical',
+    key: 'api-장애대응',
+    content: 'POST /v0/dbInfo 요청의 SQLITE_BUSY 오류 복구 절차.',
+    tags: ['운영'],
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-mixed-lexical',
+    key: 'api-request-note',
+    content: 'POST /v0/other 요청을 기록한다.',
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-mixed-lexical',
+    key: 'unicode-normalization',
+    content: 'Ｆｕｌｌｗｉｄｔｈ ＡＰＩ 호환성 규칙.',
+  });
+
+  const results = app.search({
+    scope: 'repo',
+    scopeKey: 'repo-mixed-lexical',
+    query: 'POST 장애대응 /v0/dbInfo SQLITE_BUSY',
+  });
+
+  assert.equal(results[0].memory.key, 'api-장애대응');
+  assert.ok(results[0].why.some((hit) => hit.token === '장애대응' && hit.fields.includes('key')));
+  assert.ok(results[0].why.some((hit) => hit.token === '/v0/dbinfo' && hit.fields.includes('content')));
+  assert.ok(results[0].why.some((hit) => hit.token === 'sqlite_busy' && hit.fields.includes('content')));
+
+  const normalizedResults = app.search({
+    scope: 'repo',
+    scopeKey: 'repo-mixed-lexical',
+    query: 'fullwidth API 호환성',
+  });
+  assert.equal(normalizedResults[0].memory.key, 'unicode-normalization');
+  assert.ok(normalizedResults[0].why.some((hit) => hit.token === 'api'));
+});
+
+test('Korean lexical matches remain ranked when embeddings are enabled', async () => {
+  const dataDir = await makeTempDir();
+  const provider = {
+    name: 'test-vector',
+    model: 'test-embedding',
+    dimensions: 3,
+    async embed(texts) {
+      return texts.map((text) =>
+        String(text).includes('한국어 검색 정책') || String(text) === '한국어 정책' ? [1, 0, 0] : [0, 1, 0],
+      );
+    },
+  };
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_EMBEDDINGS_PROVIDER: 'openai',
+      CONTEXTFORGE_EMBEDDINGS_DIMENSIONS: '3',
+    },
+    cwd: process.cwd(),
+    embeddingProviders: { openai: provider },
+  });
+
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-korean-hybrid',
+    key: '한국어-정책',
+    content: '한국어 검색 정책은 lexical 결과를 유지한다.',
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-korean-hybrid',
+    key: 'unrelated-note',
+    content: 'An unrelated embedding neighbor.',
+  });
+  await app.rebuildEmbeddings({ scope: 'repo', scopeKey: 'repo-korean-hybrid' });
+
+  const results = await app.search({
+    scope: 'repo',
+    scopeKey: 'repo-korean-hybrid',
+    query: '한국어 정책',
+  });
+
+  assert.equal(results[0].memory.key, '한국어-정책');
+  assert.equal(results[0].retrieval.method, 'hybrid:fts5+vector+lexical');
+  assert.ok(results[0].why.some((hit) => hit.token === '한국어'));
+});
+
 test('embedding rebuild populates sqlite-vec index for hybrid retrieval', async () => {
   const dataDir = await makeTempDir();
   const provider = {
@@ -4259,7 +4403,7 @@ test('embedding rebuild populates sqlite-vec index for hybrid retrieval', async 
   assert.equal(info.vector.dimensions, 3);
 });
 
-test('vector search still runs for Korean queries that have no lexical tokens', () => {
+test('vector search still runs alongside Korean lexical tokens', () => {
   const memory = {
     id: 'memory-korean',
     key: 'korean-memory',
@@ -4273,9 +4417,7 @@ test('vector search still runs for Korean queries that have no lexical tokens', 
   const results = searchMemories(
     {
       searchMemoryVectorIndex: () => [{ memory, distance: 0, model: 'test-embedding', dimensions: 3 }],
-      listMemories: () => {
-        throw new Error('listMemories should not be called when the query has no lexical tokens.');
-      },
+      listMemories: () => [],
     },
     {
       scopeType: 'repo',
