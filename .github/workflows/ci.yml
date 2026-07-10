@@ -92,6 +92,10 @@ jobs:
 
       - run: npm ci
       - run: npm test
+        env:
+          # Hosted runners, especially Node 24, can be materially slower while
+          # individual slow-test detection still catches localized regressions.
+          CONTEXTFORGE_TEST_BUDGET_MS: 180000
 
       - name: Upload test duration artifacts
         if: always()
