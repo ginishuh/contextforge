@@ -44,7 +44,8 @@ implicitly selects the page envelope even when `page` is omitted.
 Cursors are opaque, versioned, and bound to the operation plus its scope and
 filters. A cursor from another session, scope, status, sort order, or list
 operation fails clearly. Malformed cursors also fail; clients must not decode,
-edit, or synthesize them.
+edit, or synthesize them. Cursor tuple arity and primitive types are validated
+per operation before any SQL query is executed.
 
 Ordering is deterministic and uses a unique tie-breaker:
 
@@ -93,6 +94,11 @@ node src/cli.js listRawEvents \
 envelope. It is intentionally explicit because collecting all rows can still be
 expensive even though each server request is bounded. A 10,000-page client-side
 safety limit prevents a broken cursor loop.
+
+Only the pageable list commands omit the CLI's historical implicit `limit=10`
+so they can use the common server default of 100. Non-pageable commands retain
+their existing CLI default; #175 does not widen worker, rollup, search, or scope
+inventory calls.
 
 ## MCP And Compatibility
 

@@ -5398,6 +5398,17 @@ test('public list pagination is bounded, stable across timestamp ties, and filte
           .prepare('UPDATE raw_events SET id = ?, created_at = ? WHERE id = ?')
           .run(`raw-${String(index).padStart(4, '0')}`, timestamp, event.id);
       }
+      for (let index = 0; index < 3; index += 1) {
+        const run = store.startDistillRun({
+          scopeType,
+          scopeKey,
+          sessionId: 'pagination-runs',
+          provider: 'mock',
+        });
+        store.db
+          .prepare('UPDATE distill_runs SET id = ?, created_at = ? WHERE id = ?')
+          .run(`run-${String(index).padStart(4, '0')}`, timestamp, run.id);
+      }
     });
   } finally {
     store.close();
@@ -5425,6 +5436,36 @@ test('public list pagination is bounded, stable across timestamp ties, and filte
       cursor: memoryFirst.page.nextCursor,
     });
     assert.deepEqual(memorySecond.items.map((item) => item.key), ['memory-c']);
+
+    const runFirst = app.listDistillRuns({
+      scope: 'repo',
+      scopeKey,
+      sessionId: 'pagination-runs',
+      order: 'desc',
+      limit: 2,
+      page: true,
+    });
+    assert.deepEqual(runFirst.items.map((item) => item.id), ['run-0002', 'run-0001']);
+    const runSecond = app.listDistillRuns({
+      scope: 'repo',
+      scopeKey,
+      sessionId: 'pagination-runs',
+      order: 'desc',
+      limit: 2,
+      cursor: runFirst.page.nextCursor,
+    });
+    assert.deepEqual(runSecond.items.map((item) => item.id), ['run-0000']);
+    assert.throws(
+      () =>
+        app.listDistillRuns({
+          scope: 'repo',
+          scopeKey,
+          sessionId: 'pagination-runs',
+          order: 'asc',
+          cursor: runFirst.page.nextCursor,
+        }),
+      /cursor does not match this list operation or filter set/i,
+    );
 
     const bounded = app.listRawEvents({ scope: 'repo', scopeKey, sessionId: 'large-session' });
     assert.equal(bounded.length, 100);
@@ -5488,6 +5529,18 @@ test('public list pagination is bounded, stable across timestamp ties, and filte
       () => app.listRawEvents({ scope: 'repo', scopeKey, sessionId: 'small-session', cursor: 'not-a-cursor' }),
       /Invalid pagination cursor encoding/,
     );
+    const malformedPosition = JSON.parse(Buffer.from(first.page.nextCursor, 'base64url').toString('utf8'));
+    malformedPosition.position = [timestamp];
+    assert.throws(
+      () =>
+        app.listRawEvents({
+          scope: 'repo',
+          scopeKey,
+          sessionId: 'small-session',
+          cursor: Buffer.from(JSON.stringify(malformedPosition)).toString('base64url'),
+        }),
+      /Pagination cursor position is invalid/,
+    );
 
     const remote = await startContextForgeServer({
       app,
@@ -5517,6 +5570,39 @@ test('public list pagination is bounded, stable across timestamp ties, and filte
       remoteClient.close?.();
       await remote.close();
     }
+
+    for (let index = 0; index < 12; index += 1) {
+      app.remember({
+        scope: 'repo',
+        scopeKey,
+        key: `memory-extra-${String(index).padStart(2, '0')}`,
+        content: 'Pageable CLI lists use the core default instead of the legacy global CLI limit.',
+      });
+      app.remember({
+        scope: 'repo',
+        scopeKey: `pagination-scope-${String(index).padStart(2, '0')}`,
+        key: 'scope-marker',
+        content: 'Non-pageable CLI commands retain the legacy default limit of ten.',
+      });
+    }
+    const cliMemories = JSON.parse(
+      (
+        await execFileAsync(
+          'node',
+          ['src/cli.js', 'listMemories', '--scope', 'repo', '--scopeKey', scopeKey],
+          { env: { ...process.env, CONTEXTFORGE_DATA_DIR: dataDir } },
+        )
+      ).stdout,
+    );
+    assert.equal(cliMemories.length, 15);
+    const cliScopeKeys = JSON.parse(
+      (
+        await execFileAsync('node', ['src/cli.js', 'listScopeKeys', '--scope', 'repo'], {
+          env: { ...process.env, CONTEXTFORGE_DATA_DIR: dataDir },
+        })
+      ).stdout,
+    );
+    assert.equal(cliScopeKeys.length, 10);
 
     const cliAllPages = JSON.parse(
       (

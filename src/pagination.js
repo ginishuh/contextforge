@@ -1,6 +1,18 @@
 import { createHash } from 'node:crypto';
 
 export const LIST_PAGE_LIMITS = Object.freeze({ default: 100, max: 500 });
+const CURSOR_POSITION_TYPES = Object.freeze({
+  memories: ['number', 'string', 'string'],
+  raw_events: ['string', 'string'],
+  checkpoints: ['string', 'string'],
+  embedding_jobs: ['string', 'string'],
+  memory_candidates: ['string', 'string'],
+  memory_events: ['string', 'string'],
+  preference_occurrences: ['number', 'string', 'string'],
+  memory_update_candidates: ['string', 'string'],
+  distill_runs: ['string', 'string'],
+  llm_usage_events: ['string', 'string'],
+});
 
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
@@ -34,7 +46,18 @@ export function resolvePageRequest({ kind, filters = {}, limit, cursor = null, p
     if (decoded?.v !== 1 || decoded.kind !== kind || decoded.binding !== binding(kind, filters)) {
       throw new Error('Pagination cursor does not match this list operation or filter set.');
     }
-    if (!Array.isArray(decoded.position) || decoded.position.length === 0) {
+    const expectedTypes = CURSOR_POSITION_TYPES[kind];
+    if (
+      !expectedTypes ||
+      !Array.isArray(decoded.position) ||
+      decoded.position.length !== expectedTypes.length ||
+      decoded.position.some(
+        (value, index) =>
+          typeof value !== expectedTypes[index] ||
+          (expectedTypes[index] === 'number' && !Number.isFinite(value)) ||
+          (expectedTypes[index] === 'string' && value.length === 0),
+      )
+    ) {
       throw new Error('Pagination cursor position is invalid.');
     }
     position = decoded.position;
