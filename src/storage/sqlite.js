@@ -3646,6 +3646,7 @@ export class ContextForgeStore {
               error_message = NULL,
               error_code = NULL,
               retryable = NULL,
+              result_json = NULL,
               updated_at = ?,
               started_at = NULL,
               completed_at = NULL

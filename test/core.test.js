@@ -7835,6 +7835,7 @@ test('durable distill jobs do not swallow lease loss during embedded closeout au
 test('durable distill jobs retry embedded closeout audit provider failures', async () => {
   const dataDir = await makeTempDir();
   let auditInvocations = 0;
+  let distillInvocations = 0;
   const app = createContextForge({
     env: {
       CONTEXTFORGE_DATA_DIR: dataDir,
@@ -7853,29 +7854,37 @@ test('durable distill jobs retry embedded closeout audit provider failures', asy
       };
     },
     distillProviders: {
-      embedded_audit_retry_provider: async () => ({
-        summaryShort: 'Embedded audit retry checkpoint.',
-        summaryText: 'The checkpoint remains unique while its closeout audit retries.',
-        decisions: [],
-        todos: [],
-        openQuestions: [],
-        memoryCandidates: [
-          {
-            key: 'embedded-audit-retry',
-            content: 'Retry a failed embedded closeout audit without redistilling.',
-            category: 'runbook',
-            candidateType: 'runbook',
-            confidence: 0.96,
-            stability: 0.96,
-            sensitivity: 'low',
-            promotionRecommendation: 'promote',
-          },
-        ],
-      }),
+      embedded_audit_retry_provider: async () => {
+        distillInvocations += 1;
+        return {
+          summaryShort: `Embedded audit retry checkpoint ${distillInvocations}.`,
+          summaryText: 'The job checkpoint remains unique while an older checkpoint candidate audit retries.',
+          decisions: [],
+          todos: [],
+          openQuestions: [],
+          memoryCandidates:
+            distillInvocations === 1
+              ? [
+                  {
+                    key: 'embedded-audit-retry',
+                    content: 'Retry an older checkpoint candidate audit without redistilling the job checkpoint.',
+                    category: 'runbook',
+                    candidateType: 'runbook',
+                    confidence: 0.96,
+                    stability: 0.96,
+                    sensitivity: 'low',
+                    promotionRecommendation: 'promote',
+                  },
+                ]
+              : [],
+        };
+      },
     },
   });
   const source = { scope: 'repo', scopeKey: 'embedded-audit-retry-repo', sessionId: 'embedded-audit-retry-session' };
-  app.appendRaw({ ...source, role: 'assistant', content: 'Create a candidate whose first audit times out.' });
+  app.appendRaw({ ...source, role: 'assistant', content: 'Create an older checkpoint candidate.' });
+  await app.distillCheckpoint(source);
+  app.appendRaw({ ...source, role: 'assistant', content: 'Create the job checkpoint before auditing the older candidate.' });
   app.submitDistillJob({ ...source, auditTrigger: 'manual_closeout', maxAttempts: 2 });
 
   const first = await app.processJobs({ workerId: 'embedded-retry-worker-1', leaseMs: 1000 });
@@ -7883,17 +7892,20 @@ test('durable distill jobs retry embedded closeout audit provider failures', asy
   assert.equal(first.requeued, 1);
   assert.equal(first.jobs[0].status, 'queued');
   assert.equal(first.jobs[0].result.candidateAudit.needsRetry, true);
-  assert.equal(app.listCheckpoints(source).length, 1);
+  assert.equal(app.listCheckpoints(source).length, 2);
 
   const second = await app.processJobs({ workerId: 'embedded-retry-worker-2', leaseMs: 1000 });
   assert.equal(second.succeeded, 1);
   assert.equal(second.jobs[0].status, 'succeeded');
   assert.equal(second.jobs[0].attempts, 2);
   assert.equal(second.jobs[0].result.candidateAudit.needsRetry, false);
-  assert.equal(app.listCheckpoints(source).length, 1);
+  const checkpoints = app.listCheckpoints(source);
+  assert.equal(checkpoints.length, 2);
+  assert.equal(checkpoints.filter((checkpoint) => checkpoint.metadata.operationJobId).length, 1);
   const [candidate] = app.listMemoryCandidates({ ...source, status: 'pending' });
   assert.equal(candidate.reviewMetadata.audit.decision, 'approve');
   assert.equal(auditInvocations, 2);
+  assert.equal(distillInvocations, 2);
 });
 
 test('durable audit jobs persist job provenance without promoting memory', async () => {

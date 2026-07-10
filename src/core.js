@@ -7360,7 +7360,6 @@ export function createContextForge(options = {}) {
             const auditResult = await this.auditMemoryCandidates({
               ...scope,
               sessionId: options.sessionId,
-              checkpointId: existingCheckpoint.id,
               trigger: auditTrigger,
               jobId: options.jobId,
               _jobLeaseOwner: options._jobLeaseOwner,
@@ -7948,6 +7947,35 @@ export function createContextForge(options = {}) {
             throw error;
           }
           rethrowExternalProviderTestError(error);
+          if (options.jobId && CLOSEOUT_TRIGGERS.has(options.auditTrigger || options.trigger)) {
+            const failedAt = new Date().toISOString();
+            recordLlmUsageEvent(store, {
+              scope,
+              operation: 'checkpoint_distill',
+              provider: output.provider || provider.name,
+              model: providerModelFromMetadata(output.metadata, providerMetadata.model),
+              status: 'failed',
+              sessionId: options.sessionId,
+              distillRunId: distillRun.id,
+              checkpointId: checkpoint.id,
+              jobId: options.jobId,
+              metadata: { ...output.metadata, candidateAuditIncomplete: true, auditError: errorSummary(error) },
+              startedAt: distillRun.createdAt,
+              completedAt: failedAt,
+              elapsedMs: Date.parse(failedAt) - Date.parse(distillRun.createdAt),
+            });
+            store.failDistillRun({
+              id: distillRun.id,
+              error,
+              outputMetadata: {
+                checkpointId: checkpoint.id,
+                retryable: providerFailureRetryable(error),
+                candidateAuditIncomplete: true,
+                providerMetadata: output.metadata,
+              },
+            });
+            throw error;
+          }
           candidateAudit = {
             enabled: true,
             executed: false,
