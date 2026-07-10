@@ -3796,7 +3796,7 @@ export class ContextForgeStore {
     return claimed;
   }
 
-  completeOperationJob({ jobId, workerId, checkpointId = null, result = {}, metadata = {} }) {
+  completeOperationJob({ jobId, workerId, attempt, checkpointId = null, result = {}, metadata = {} }) {
     const timestamp = nowIso();
     const row = this.db
       .prepare(`
@@ -3813,15 +3813,29 @@ export class ContextForgeStore {
             metadata_json = ?,
             updated_at = ?,
             completed_at = ?
-        WHERE id = ? AND status = 'running' AND lease_owner = ?
+        WHERE id = ?
+          AND status = 'running'
+          AND lease_owner = ?
+          AND attempts = ?
+          AND lease_expires_at > ?
         RETURNING *
       `)
-      .get(checkpointId, json(result, {}), json(metadata, {}), timestamp, timestamp, jobId, workerId);
+      .get(
+        checkpointId,
+        json(result, {}),
+        json(metadata, {}),
+        timestamp,
+        timestamp,
+        jobId,
+        workerId,
+        Number(attempt),
+        timestamp,
+      );
     if (!row) throw new Error(`Running operation job lease not found: ${jobId}`);
     return hydrateOperationJob(row);
   }
 
-  extendOperationJobLease({ jobId, workerId, leaseMs, now = new Date() }) {
+  extendOperationJobLease({ jobId, workerId, attempt, leaseMs, now = new Date() }) {
     const nowText = now.toISOString();
     const leaseExpiresAt = new Date(now.getTime() + Number(leaseMs)).toISOString();
     return hydrateOperationJob(
@@ -3829,10 +3843,14 @@ export class ContextForgeStore {
         .prepare(`
           UPDATE operation_jobs
           SET lease_expires_at = ?, updated_at = ?
-          WHERE id = ? AND status = 'running' AND lease_owner = ?
+          WHERE id = ?
+            AND status = 'running'
+            AND lease_owner = ?
+            AND attempts = ?
+            AND lease_expires_at > ?
           RETURNING *
         `)
-        .get(leaseExpiresAt, nowText, jobId, workerId),
+        .get(leaseExpiresAt, nowText, jobId, workerId, Number(attempt), nowText),
     );
   }
 
@@ -3861,7 +3879,7 @@ export class ContextForgeStore {
     });
   }
 
-  failOperationJob({ jobId, workerId, error, retryable = false, result = {}, metadata = {} }) {
+  failOperationJob({ jobId, workerId, attempt, error, retryable = false, result = {}, metadata = {} }) {
     const timestamp = nowIso();
     const row = this.db
       .prepare(`
@@ -3877,7 +3895,11 @@ export class ContextForgeStore {
             metadata_json = ?,
             updated_at = ?,
             completed_at = CASE WHEN ? = 1 AND attempts < max_attempts THEN NULL ELSE ? END
-        WHERE id = ? AND status = 'running' AND lease_owner = ?
+        WHERE id = ?
+          AND status = 'running'
+          AND lease_owner = ?
+          AND attempts = ?
+          AND lease_expires_at > ?
         RETURNING *
       `)
       .get(
@@ -3893,6 +3915,8 @@ export class ContextForgeStore {
         timestamp,
         jobId,
         workerId,
+        Number(attempt),
+        timestamp,
       );
     if (!row) throw new Error(`Running operation job lease not found: ${jobId}`);
     return hydrateOperationJob(row);

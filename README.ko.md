@@ -459,6 +459,12 @@ Candidate audit은 `submitAuditJob`으로 제출하며 `sessionId` 또는
 않고 `running_not_interruptible`을 반환한다. Audit은 여전히 선택된 candidate마다
 provider를 한 번씩 호출하며 true batch contract를 뜻하지 않는다.
 
+Provider 실행 자체는 at-least-once다. Lease를 잃은 process가 이미 provider
+비용을 발생시켰을 수 있지만, lease attempt fencing으로 stale worker의 checkpoint·
+audit side effect commit은 막는다. `maxAttempts`를 모두 소진한 뒤에는 terminal
+failure를 검토하고 의도적으로 새 `idempotencyKey`를 제출해야 한다.
+`retryFailed`는 소진된 attempt budget을 초기화하지 않는다.
+
 DeepSeek 같은 Chat Completions 호환 provider는 `openai_compatible`로 사용할 수
 있다.
 

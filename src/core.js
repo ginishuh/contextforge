@@ -97,8 +97,8 @@ function operationJobResultSummary(operation, result) {
   };
 }
 
-function retryableAuditJobError(result) {
-  const count = Number(result?.policy?.audit?.retryableFailureCount || 0);
+function retryableAuditJobError(result, audit = result?.policy?.audit) {
+  const count = Number(audit?.retryableFailureCount || 0);
   const error = new Error(`Candidate audit job has ${count} retryable provider failure(s).`);
   error.name = 'RetryableCandidateAuditJobError';
   error.code = 'CONTEXTFORGE_AUDIT_JOB_RETRYABLE_FAILURE';
@@ -4629,10 +4629,14 @@ export function createContextForge(options = {}) {
         } else if (options.sessionId) {
           canonicalCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId, level: 0 });
         }
+        if (canonicalCheckpoint) {
+          payload.sessionId = canonicalCheckpoint.sessionId;
+          payload.checkpointId = canonicalCheckpoint.id;
+        }
         const pendingCandidates = store.listMemoryCandidates({
           ...scope,
-          sessionId: options.sessionId || null,
-          checkpointId: options.checkpointId || null,
+          sessionId: canonicalCheckpoint ? null : options.sessionId || null,
+          checkpointId: canonicalCheckpoint?.id || null,
           status: 'pending',
           sort: 'recommendation',
           limit: scanLimit,
@@ -4669,8 +4673,8 @@ export function createContextForge(options = {}) {
         const queued = store.enqueueOperationJob({
           operation: 'audit_memory_candidates',
           ...scope,
-          sessionId: options.sessionId || null,
-          checkpointId: options.checkpointId || null,
+          sessionId: canonicalCheckpoint?.sessionId || options.sessionId || null,
+          checkpointId: canonicalCheckpoint?.id || null,
           idempotencyKey,
           payload,
           maxAttempts,
@@ -4773,7 +4777,12 @@ export function createContextForge(options = {}) {
         const heartbeat = setInterval(() => {
           try {
             useStore((store) =>
-              store.extendOperationJobLease({ jobId: job.id, workerId, leaseMs }),
+              store.extendOperationJobLease({
+                jobId: job.id,
+                workerId,
+                attempt: job.attempts,
+                leaseMs,
+              }),
             );
           } catch {
             // Completion/failure detects a lost lease. A heartbeat must never crash the worker.
@@ -4807,6 +4816,7 @@ export function createContextForge(options = {}) {
             store.completeOperationJob({
               jobId: job.id,
               workerId,
+              attempt: job.attempts,
               checkpointId,
               result: operationJobResultSummary(job.operation, operationResult),
               metadata: {
@@ -4824,6 +4834,7 @@ export function createContextForge(options = {}) {
               store.failOperationJob({
                 jobId: job.id,
                 workerId,
+                attempt: job.attempts,
                 error,
                 retryable: providerFailureRetryable(error),
                 result: error.operationResult
@@ -7341,7 +7352,32 @@ export function createContextForge(options = {}) {
       return runInFlightOnce(inFlightKey, () => useStore(async (store) => {
         if (options.jobId) {
           const existingCheckpoint = store.findCheckpointByJobId({ ...scope, jobId: options.jobId });
-          if (existingCheckpoint) return existingCheckpoint;
+          if (existingCheckpoint) {
+            const auditTrigger = options.auditTrigger || options.trigger || null;
+            if (!CLOSEOUT_TRIGGERS.has(auditTrigger)) return existingCheckpoint;
+            const auditResult = await this.auditMemoryCandidates({
+              ...scope,
+              sessionId: options.sessionId,
+              checkpointId: existingCheckpoint.id,
+              trigger: auditTrigger,
+              jobId: options.jobId,
+              _jobLeaseOwner: options._jobLeaseOwner,
+              _jobLeaseAttempt: options._jobLeaseAttempt,
+              _clientTimeoutMs: options._clientTimeoutMs,
+            });
+            const recoveredResult = {
+              ...existingCheckpoint,
+              memoryCandidateCount: Array.isArray(existingCheckpoint.metadata?.memoryCandidates)
+                ? existingCheckpoint.metadata.memoryCandidates.length
+                : null,
+              candidateAudit: auditResult.policy?.audit || null,
+              recoveredFromOperationJob: true,
+            };
+            if (auditResult.policy?.audit?.needsRetry === true) {
+              throw retryableAuditJobError(recoveredResult, auditResult.policy.audit);
+            }
+            return recoveredResult;
+          }
         }
         const effective = getEffectiveRuntime(store);
         const provider = createDistillProvider(options.provider || effective.distillProvider, distillProviders, {
@@ -7497,11 +7533,11 @@ export function createContextForge(options = {}) {
             operation: 'checkpoint_distill',
             provider: output.provider || provider.name,
             model: providerModelFromMetadata(output.metadata, providerMetadata.model),
-            status: 'succeeded',
+            status: 'failed',
             sessionId: options.sessionId,
             distillRunId: distillRun.id,
             jobId: options.jobId || null,
-            metadata: output.metadata,
+            metadata: { ...output.metadata, leaseLost: true, discarded: true },
             startedAt: distillRun.createdAt,
             completedAt,
             elapsedMs: Date.parse(completedAt) - Date.parse(distillRun.createdAt),
@@ -7870,6 +7906,36 @@ export function createContextForge(options = {}) {
             },
           );
         } catch (error) {
+          if (error?.code === 'CONTEXTFORGE_JOB_LEASE_LOST') {
+            const failedAt = new Date().toISOString();
+            recordLlmUsageEvent(store, {
+              scope,
+              operation: 'checkpoint_distill',
+              provider: output.provider || provider.name,
+              model: providerModelFromMetadata(output.metadata, providerMetadata.model),
+              status: 'failed',
+              sessionId: options.sessionId,
+              distillRunId: distillRun.id,
+              checkpointId: checkpoint.id,
+              jobId: options.jobId || null,
+              metadata: { ...output.metadata, leaseLost: true, candidateAuditIncomplete: true },
+              startedAt: distillRun.createdAt,
+              completedAt: failedAt,
+              elapsedMs: Date.parse(failedAt) - Date.parse(distillRun.createdAt),
+            });
+            store.failDistillRun({
+              id: distillRun.id,
+              error,
+              outputMetadata: {
+                checkpointId: checkpoint.id,
+                leaseLost: true,
+                retryable: true,
+                candidateAuditIncomplete: true,
+                providerMetadata: output.metadata,
+              },
+            });
+            throw error;
+          }
           rethrowExternalProviderTestError(error);
           candidateAudit = {
             enabled: true,

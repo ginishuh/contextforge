@@ -249,6 +249,10 @@ disconnect or server restart:
    provider call returns `running_not_interruptible` and is not force-killed.
 6. Candidate audit jobs still call the provider once per selected candidate;
    the durable queue is not a true provider batch contract.
+7. Provider execution is at-least-once. Lease-attempt fencing blocks stale
+   checkpoint/audit commits, but a lost lease may already have incurred model
+   cost. After `maxAttempts` exhaustion, review the failure before using a new
+   `idempotencyKey`; `retryFailed` does not reset the budget.
 
 ## Checkpoint Consolidation
 

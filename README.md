@@ -1561,6 +1561,12 @@ running provider calls report `running_not_interruptible` and are not
 force-killed. Candidate audits are still one provider call per selected
 candidate; this API does not claim true provider batching.
 
+Provider execution is at-least-once: a process that loses its lease may already
+have incurred provider cost, but lease-attempt fencing prevents it from
+committing checkpoint or audit side effects. After `maxAttempts` is exhausted,
+submit a deliberately new `idempotencyKey` only after reviewing the terminal
+failure; `retryFailed` does not reset an exhausted attempt budget.
+
 Inspect or create scope/time-window checkpoint consolidation:
 
 ```bash

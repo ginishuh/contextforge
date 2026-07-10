@@ -148,10 +148,16 @@ Safety:
   server-side worker or timer when clients use `submitDistillJob` or
   `submitAuditJob`. Submission only writes a durable queued row; it does not
   execute provider work inside the client request. Worker leases are renewed
-  while calls run and expired leases are recovered after crashes.
+  while calls run and expired leases are recovered after crashes. Provider
+  execution is at-least-once, so a lost lease can still incur duplicate provider
+  cost; lease-owner plus attempt fencing prevents stale workers from committing
+  checkpoint or audit writes.
 - Queued jobs can be cancelled. Running provider calls are intentionally not
   force-cancelled; stop accepting new work and let the lease/result settle
   before maintenance when graceful cancellation is required.
+- `retryFailed` does not reset an exhausted `maxAttempts` budget. Review the
+  terminal failure and submit a deliberate new `idempotencyKey` only when a new
+  execution is warranted.
 - Prefer `CONTEXTFORGE_OPENAI_COMPATIBLE_API_KEY` over DB-backed runtime
   secrets. SQLite stores runtime secrets as plaintext; new DB-backed secret
   writes require the explicit
