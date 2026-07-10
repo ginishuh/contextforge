@@ -855,7 +855,7 @@ test('MCP tool profiles have exact bounded surfaces and reject invalid configura
   assert.deepEqual(MCP_TOOL_PROFILES['agent-core'], expectedAgentCore);
   assert.deepEqual(
     Object.fromEntries(Object.entries(MCP_TOOL_PROFILES).map(([name, tools]) => [name, tools.length])),
-    { 'agent-core': 24, review: 37, operator: 54, 'workspace-admin': 11, all: 60 },
+    { 'agent-core': 24, review: 37, operator: 56, 'workspace-admin': 11, all: 62 },
   );
   assert.deepEqual(MCP_TOOL_PROFILES.all, ALL_MCP_TOOL_NAMES);
 
@@ -900,7 +900,7 @@ test('MCP default profile stays within the context budget without requiring an i
     const surface = getContextForgeMcpSurfaceInfo(defaultServer);
     const allSurface = getContextForgeMcpSurfaceInfo(allServer);
     assert.equal(surface.toolCount, 24);
-    assert.equal(allSurface.toolCount, 60);
+    assert.equal(allSurface.toolCount, 62);
     assert.ok(surface.instructionsBytes <= 1600, `instructions=${surface.instructionsBytes}`);
     assert.ok(surface.toolSchemaBytes <= 26000, `schema=${surface.toolSchemaBytes}`);
     assert.ok(surface.estimatedInitialTokens <= 6700, `tokens=${surface.estimatedInitialTokens}`);
@@ -4669,6 +4669,240 @@ test('embedding rebuild populates sqlite-vec index for hybrid retrieval', async 
   assert.equal(info.tables.embeddings, 2);
   assert.equal(info.vector.sqliteVecAvailable, true);
   assert.equal(info.vector.dimensions, 3);
+});
+
+test('embedding maintenance inventory and GC remove only eligible artifacts in bounded batches', async () => {
+  const dataDir = await makeTempDir();
+  const scopeKey = 'repo-embedding-maintenance';
+  const embeddingProvider = {
+    name: 'test-vector',
+    model: 'test-embedding',
+    dimensions: 3,
+    async embed(texts) {
+      return texts.map(() => [1, 0, 0]);
+    },
+  };
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'maintenance_provider',
+      CONTEXTFORGE_EMBEDDINGS_PROVIDER: 'openai',
+      CONTEXTFORGE_EMBEDDINGS_DIMENSIONS: '3',
+    },
+    cwd: process.cwd(),
+    embeddingProviders: { openai: embeddingProvider },
+    distillProviders: {
+      maintenance_provider: async () => ({
+        summaryShort: 'Embedding maintenance checkpoint.',
+        summaryText: 'Candidates exercise pending, promoted, and rejected retention.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [
+          { key: 'pending-candidate', content: 'Keep pending candidate embedding.', reason: 'Awaiting review.' },
+          { key: 'promoted-candidate', content: 'Keep promoted candidate embedding.', reason: 'Approved.' },
+          { key: 'rejected-candidate', content: 'Delete rejected candidate embedding.', reason: 'Rejected.' },
+        ],
+        sourceEventCount: 1,
+        metadata: { synthetic: true },
+      }),
+    },
+  });
+
+  try {
+    const active = app.remember({
+      scope: 'repo',
+      scopeKey,
+      key: 'active-current',
+      content: 'This current active embedding must survive GC.',
+    });
+    const inactive = app.remember({
+      scope: 'repo',
+      scopeKey,
+      key: 'inactive-memory',
+      content: 'This inactive memory embedding is eligible for GC.',
+    });
+    const staleHash = app.remember({
+      scope: 'repo',
+      scopeKey,
+      key: 'stale-hash',
+      content: 'This source has a deliberately stale content hash.',
+    });
+    const retired = app.remember({
+      scope: 'repo',
+      scopeKey,
+      key: 'retired-model',
+      content: 'This source was indexed with a retired model.',
+    });
+    app.appendRaw({
+      scope: 'repo',
+      scopeKey,
+      sessionId: 'embedding-maintenance-session',
+      role: 'assistant',
+      content: 'Create candidate lifecycle fixtures.',
+    });
+    await app.distillCheckpoint({
+      scope: 'repo',
+      scopeKey,
+      sessionId: 'embedding-maintenance-session',
+    });
+    await app.processEmbeddingJobs({ scope: 'repo', scopeKey, limit: 100 });
+
+    const candidates = app.listMemoryCandidates({ scope: 'repo', scopeKey });
+    const pendingCandidate = candidates.find((item) => item.candidate.key === 'pending-candidate');
+    const promotedCandidate = candidates.find((item) => item.candidate.key === 'promoted-candidate');
+    const rejectedCandidate = candidates.find((item) => item.candidate.key === 'rejected-candidate');
+    app.promoteMemoryCandidate({
+      scope: 'repo',
+      scopeKey,
+      candidateId: promotedCandidate.id,
+      reason: 'Promotion fixture.',
+    });
+    app.rejectMemoryCandidate({
+      scope: 'repo',
+      scopeKey,
+      candidateId: rejectedCandidate.id,
+      reason: 'Rejection fixture.',
+    });
+    await app.processEmbeddingJobs({ scope: 'repo', scopeKey, limit: 100 });
+    app.deactivateMemory({ scope: 'repo', scopeKey, key: inactive.key, reason: 'Maintenance fixture.' });
+
+    const store = new ContextForgeStore({ dataDir });
+    try {
+      store.upsertEmbedding({
+        sourceType: 'memory',
+        recordId: 'missing-memory',
+        scopeType: 'repo',
+        scopeKey,
+        model: 'test-embedding',
+        dimensions: 3,
+        contentHash: 'missing-source-hash',
+        embedding: [0, 1, 0],
+      });
+      store.upsertEmbedding({
+        sourceType: 'memory',
+        recordId: 'vector-only-memory',
+        scopeType: 'repo',
+        scopeKey,
+        model: 'test-embedding',
+        dimensions: 3,
+        contentHash: 'vector-only-hash',
+        embedding: [0, 0, 1],
+      });
+      store.db.prepare('DELETE FROM embedding_index WHERE source_id = ?').run('memory:vector-only-memory');
+      store.db
+        .prepare('UPDATE embedding_index SET content_hash = ? WHERE source_id = ?')
+        .run('stale-index-hash', `memory:${staleHash.id}`);
+      store.db
+        .prepare('UPDATE embedding_index SET model = ? WHERE source_id = ?')
+        .run('retired-embedding-model', `memory:${retired.id}`);
+      store.db
+        .prepare(
+          "UPDATE embedding_jobs SET completed_at = '2000-01-01T00:00:00.000Z', updated_at = '2000-01-01T00:00:00.000Z' WHERE record_id = ?",
+        )
+        .run(active.id);
+      const [processingJob] = store.enqueueEmbeddingJobs(
+        [
+          {
+            sourceType: 'memory',
+            scopeType: 'repo',
+            scopeKey,
+            recordId: 'processing-missing-memory',
+            contentHash: 'processing-hash',
+          },
+        ],
+        { model: 'test-embedding', dimensions: 3 },
+      );
+      store.markEmbeddingJobProcessing(processingJob.id);
+      const [failedJob] = store.enqueueEmbeddingJobs(
+        [
+          {
+            sourceType: 'memory',
+            scopeType: 'repo',
+            scopeKey,
+            recordId: 'failed-missing-memory',
+            contentHash: 'failed-hash',
+          },
+        ],
+        { model: 'test-embedding', dimensions: 3 },
+      );
+      store.markEmbeddingJobProcessing(failedJob.id);
+      store.markEmbeddingJobFailed(failedJob.id, new Error('Synthetic maintenance failure.'));
+    } finally {
+      store.close();
+    }
+
+    const scopedInventory = app.embeddingInventory({
+      scope: 'repo',
+      scopeKey,
+      completedJobRetentionDays: 1,
+    });
+    assert.equal(scopedInventory.eligible.vectorOnly, 0);
+    assert.equal(scopedInventory.skippedUnknownScopeVectorRows, 1);
+    const limitedInventory = app.embeddingInventory({ scope: 'repo', scopeKey, scanLimit: 1 });
+    assert.equal(limitedInventory.scanned.jobs, 1);
+    assert.equal(limitedInventory.truncated.jobs, true);
+    assert.equal(limitedInventory.processingJobs, 1);
+    const inventory = app.embeddingInventory({ completedJobRetentionDays: 1 });
+    assert.equal(inventory.processingJobs, 1);
+    assert.ok(inventory.byReason.inactive_memory >= 1);
+    assert.ok(inventory.byReason.candidate_rejected >= 1);
+    assert.ok(inventory.byReason.orphan_source >= 1);
+    assert.ok(inventory.byReason.vector_without_index >= 1);
+    assert.ok(inventory.byReason.content_hash_mismatch >= 1);
+    assert.ok(inventory.byReason.retired_model_or_dimensions >= 1);
+    assert.ok(inventory.byReason.old_completed_job >= 1);
+    assert.ok(inventory.byReason.orphan_job_source >= 1);
+    assert.ok(!inventory.artifacts.some((item) => item.sourceId === `memory:${active.id}`));
+    assert.ok(!inventory.artifacts.some((item) => item.sourceId === `memory_candidate:${pendingCandidate.id}`));
+    assert.ok(!inventory.artifacts.some((item) => item.sourceId === `memory_candidate:${promotedCandidate.id}`));
+
+    const dryRun = app.pruneEmbeddingArtifacts({ completedJobRetentionDays: 1, batchSize: 100 });
+    assert.equal(dryRun.dryRun, true);
+    assert.equal(dryRun.deleted.vectors, 0);
+    assert.ok(dryRun.plan.total > 0);
+    assert.ok(dryRun.plan.artifacts.every((item) => item.sourceType && item.reason));
+    assert.ok(dryRun.plan.vectorOnly.every((item) => item.sourceType && item.reason === 'vector_without_index'));
+    assert.ok(dryRun.plan.jobs.every((item) => item.sourceType && item.status && item.reason));
+
+    const blocked = app.pruneEmbeddingArtifacts({
+      completedJobRetentionDays: 1,
+      batchSize: 100,
+      dryRun: false,
+    });
+    assert.equal(blocked.blocked, true);
+    assert.equal(blocked.blockedReason, 'embedding_jobs_processing');
+    assert.deepEqual(blocked.deleted, { vectors: 0, indexRows: 0, jobs: 0 });
+
+    const pruned = app.pruneEmbeddingArtifacts({
+      completedJobRetentionDays: 1,
+      batchSize: 100,
+      dryRun: false,
+      force: true,
+    });
+    assert.equal(pruned.blocked, false);
+    assert.ok(pruned.deleted.vectors >= 6);
+    assert.ok(pruned.deleted.indexRows >= 5);
+    assert.ok(pruned.deleted.jobs >= 2);
+
+    const after = app.embeddingInventory({ completedJobRetentionDays: 1 });
+    assert.equal(after.eligible.total, 0);
+    assert.equal(after.processingJobs, 1);
+    const verifyStore = new ContextForgeStore({ dataDir });
+    try {
+      const remainingIds = verifyStore.listEmbeddingIndexRecords({ scopeType: 'repo', scopeKey, limit: 100 })
+        .map((item) => item.sourceId);
+      assert.ok(remainingIds.includes(`memory:${active.id}`));
+      assert.ok(remainingIds.includes(`memory_candidate:${pendingCandidate.id}`));
+      assert.ok(remainingIds.includes(`memory_candidate:${promotedCandidate.id}`));
+      assert.ok(!remainingIds.includes(`memory:${inactive.id}`));
+      assert.ok(!remainingIds.includes(`memory_candidate:${rejectedCandidate.id}`));
+    } finally {
+      verifyStore.close();
+    }
+  } finally {
+    app.close();
+  }
 });
 
 test('vector search still runs alongside Korean lexical tokens', () => {
@@ -12687,6 +12921,8 @@ test('REMOTE_METHODS exposes resume, suggestion, auto-promotion, and reconciliat
   assert.ok(REMOTE_METHODS.includes('applyMemoryUpdateCandidate'));
   assert.ok(REMOTE_METHODS.includes('rejectMemoryUpdateCandidate'));
   assert.ok(REMOTE_METHODS.includes('skipMemoryUpdateCandidate'));
+  assert.ok(REMOTE_METHODS.includes('embeddingInventory'));
+  assert.ok(REMOTE_METHODS.includes('pruneEmbeddingArtifacts'));
   assert.ok(REMOTE_METHODS.includes('processEmbeddingJobs'));
   assert.ok(REMOTE_METHODS.includes('listEmbeddingJobs'));
   assert.ok(REMOTE_METHODS.includes('listCheckpoints'));
@@ -14187,6 +14423,49 @@ test('CLI supports the v0 workflow with synthetic data', async () => {
     { env },
   );
   assert.match(usageEvents.stdout, /\[/);
+
+  const embeddingInventory = JSON.parse(
+    (
+      await execFileAsync(
+        'node',
+        [
+          'src/cli.js',
+          'embeddingInventory',
+          '--scope',
+          'repo',
+          '--scopeKey',
+          'cli-repo',
+          '--completedJobRetentionDays',
+          '7',
+        ],
+        { env },
+      )
+    ).stdout,
+  );
+  assert.equal(embeddingInventory.kind, 'embedding_maintenance_inventory');
+  assert.equal(embeddingInventory.completedJobRetentionDays, 7);
+
+  const embeddingGc = JSON.parse(
+    (
+      await execFileAsync(
+        'node',
+        [
+          'src/cli.js',
+          'pruneEmbeddingArtifacts',
+          '--scope',
+          'repo',
+          '--scopeKey',
+          'cli-repo',
+          '--batchSize',
+          '5',
+        ],
+        { env },
+      )
+    ).stdout,
+  );
+  assert.equal(embeddingGc.kind, 'embedding_maintenance_gc');
+  assert.equal(embeddingGc.dryRun, true);
+  assert.equal(embeddingGc.batchSize, 5);
 });
 
 test('CLI submits, inspects, processes, and cancels durable operation jobs', async () => {
@@ -14284,6 +14563,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'deactivate_workspace_profile',
       'distill_checkpoint',
       'distill_usage',
+      'embedding_inventory',
       'expand_memory_cluster',
       'get_job',
       'get_memory',
@@ -14310,6 +14590,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'process_jobs',
       'promote_memory',
       'promote_memory_candidate',
+      'prune_embedding_artifacts',
       'prune_raw_events',
       'rebuild_embeddings',
       'reconcile_memory',
@@ -14393,6 +14674,14 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.ok(processEmbeddingJobsTool.inputSchema.properties.retryFailed);
     const listEmbeddingJobsTool = toolList.tools.find((tool) => tool.name === 'list_embedding_jobs');
     assert.ok(listEmbeddingJobsTool.inputSchema.properties.status);
+    const embeddingInventoryTool = toolList.tools.find((tool) => tool.name === 'embedding_inventory');
+    assert.ok(embeddingInventoryTool.inputSchema.properties.completedJobRetentionDays);
+    assert.equal(embeddingInventoryTool.annotations.readOnlyHint, true);
+    const pruneEmbeddingArtifactsTool = toolList.tools.find((tool) => tool.name === 'prune_embedding_artifacts');
+    assert.ok(pruneEmbeddingArtifactsTool.inputSchema.properties.batchSize);
+    assert.ok(pruneEmbeddingArtifactsTool.inputSchema.properties.dryRun);
+    assert.equal(pruneEmbeddingArtifactsTool.annotations.readOnlyHint, false);
+    assert.equal(pruneEmbeddingArtifactsTool.annotations.destructiveHint, true);
     for (const name of [
       'list_embedding_jobs',
       'list_checkpoints',

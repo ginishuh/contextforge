@@ -347,9 +347,9 @@ clients that need it:
 | --- | ---: | --- |
 | `agent-core` | 24 | normal agent bootstrap, retrieval, evidence, distillation, and closeout |
 | `review` | 37 | candidate and durable-memory review |
-| `operator` | 54 | queues, retention, embeddings, usage, and server maintenance |
+| `operator` | 56 | queues, retention, embeddings, usage, and server maintenance |
 | `workspace-admin` | 11 | workspace topology and scope migration |
-| `all` | 60 | compatibility with the pre-profile MCP surface |
+| `all` | 62 | complete surface, including compatibility with pre-profile tools |
 
 Set `CONTEXTFORGE_MCP_PROFILE`, or use `CONTEXTFORGE_MCP_TOOLS` as an exact
 comma-separated allowlist. An allowlist takes precedence over the profile;
@@ -786,6 +786,38 @@ want to reset and repopulate the derived sqlite-vec tables:
 ```bash
 node src/cli.js rebuildEmbeddings --scope repo --scopeKey github.com/example/repo --force
 ```
+
+Embedding vectors, index rows, and completed jobs are derived data, but their
+lifecycle still needs an explicit operator workflow. Inventory is read-only:
+
+```bash
+node src/cli.js embeddingInventory --scope repo --scopeKey github.com/example/repo
+```
+
+It reports missing sources, inactive-memory rows, rejected/stale/snoozed
+candidate rows, content-hash mismatches, retired model/dimension rows,
+vector-only rows, and old terminal jobs. Scoped inventory does not classify or
+delete vector-only rows because a missing index also removes the only stored
+scope evidence; run a global inventory to inspect those rows. Inventory scans
+are bounded by `scanLimit` and report conservative per-table truncation flags,
+while the processing-job safety check always uses complete status counts.
+
+GC is a bounded dry-run by default:
+
+```bash
+node src/cli.js pruneEmbeddingArtifacts --batchSize 100
+node src/cli.js pruneEmbeddingArtifacts --batchSize 100 --dryRun false
+```
+
+Before applying it, back up the canonical SQLite store and stop embedding
+workers. A non-dry run refuses to start while `processing` jobs exist unless
+`--force true` is supplied. Each call removes at most `batchSize` eligible
+vector/index/job records in one transaction; repeat dry-run and apply calls
+until the plan is empty. Current active-memory embeddings and pending/promoted
+candidate embeddings are preserved. Run SQLite `incremental_vacuum` separately
+when physical file-size reclamation is required. In remote storage mode these
+methods execute on the canonical server; verify `dbInfo.connection` before an
+operator run instead of assuming the current checkout owns the database.
 
 ContextForge uses the npm `sqlite-vec` package and expects sqlite-vec 0.1.x with
 `vec0` support for auxiliary primary-key columns. Check `node src/cli.js dbInfo`
@@ -1804,6 +1836,8 @@ The MCP server exposes a narrow tool surface over the same core API:
 - `reject_memory_candidate`
 - `correct_memory`
 - `deactivate_memory`
+- `embedding_inventory`
+- `prune_embedding_artifacts`
 - `process_embedding_jobs`
 - `list_embedding_jobs`
 - `rebuild_embeddings`

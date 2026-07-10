@@ -17,7 +17,7 @@ The stdio and HTTP MCP transports use the same profile resolver. The default
 retention, embedding maintenance, usage inspection, and workspace mutations.
 Use `review` for candidate review, `operator` for server maintenance,
 `workspace-admin` for workspace topology, or `all` for compatibility with the
-former 60-tool surface.
+former full surface plus newly added tools.
 
 `migrate_scope` belongs to both `operator` and `workspace-admin`: it is storage
 maintenance as well as workspace lifecycle work. Other workspace mutations are

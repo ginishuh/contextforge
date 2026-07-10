@@ -3387,6 +3387,99 @@ export function createContextForge(options = {}) {
     return candidate && store.embeddingSourceForMemoryCandidate(candidate);
   }
 
+  function embeddingMaintenanceInventory(store, options = {}) {
+    const narrowed = Boolean(options.scope || options.scopeKey || options.cwd || options.repoPath);
+    const scope = narrowed ? normalizeScopeOptions(options, config) : { scopeType: null, scopeKey: null };
+    const scanLimit = Math.min(50000, positiveInteger(options.scanLimit == null ? 5000 : options.scanLimit, 'scanLimit'));
+    const completedJobRetentionDays = positiveInteger(
+      options.completedJobRetentionDays == null ? 30 : options.completedJobRetentionDays,
+      'completedJobRetentionDays',
+    );
+    const completedBefore = new Date(Date.now() - completedJobRetentionDays * 86400000).toISOString();
+    const current = {
+      model: embeddingProvider?.model || config.embeddings.model,
+      dimensions: embeddingProvider?.dimensions || config.embeddings.dimensions,
+    };
+    const artifacts = [];
+    const byReason = {};
+    const bySourceType = {};
+    const indexRecords = store.listEmbeddingIndexRecords({ ...scope, limit: scanLimit });
+    for (const record of indexRecords) {
+      const jobShape = {
+        sourceType: record.sourceType,
+        scopeType: record.scopeType,
+        scopeKey: record.scopeKey,
+        recordId: record.recordId,
+      };
+      const source = embeddingSourceForJob(store, jobShape);
+      let reason = null;
+      if (!source) reason = 'orphan_source';
+      else if (source.scopeType !== record.scopeType || source.scopeKey !== record.scopeKey) reason = 'source_scope_mismatch';
+      else if (record.sourceType === 'memory' && source.memory.status !== 'active') reason = 'inactive_memory';
+      else if (
+        record.sourceType === 'memory_candidate' &&
+        !['pending', 'promoted'].includes(source.candidate.status)
+      ) {
+        reason = `candidate_${source.candidate.status}`;
+      } else if (source.contentHash !== record.contentHash) reason = 'content_hash_mismatch';
+      else if (record.model !== current.model || Number(record.dimensions) !== current.dimensions) {
+        reason = 'retired_model_or_dimensions';
+      }
+      if (!reason) continue;
+      artifacts.push({ ...record, reason });
+      byReason[reason] = (byReason[reason] || 0) + 1;
+      bySourceType[record.sourceType] = (bySourceType[record.sourceType] || 0) + 1;
+    }
+    const discoveredVectorOnlySourceIds = store.listOrphanEmbeddingVectorIds({ limit: scanLimit });
+    const vectorOnlySourceIds = narrowed ? [] : discoveredVectorOnlySourceIds;
+    if (vectorOnlySourceIds.length) byReason.vector_without_index = vectorOnlySourceIds.length;
+
+    const jobs = [];
+    const jobStatus = store.countEmbeddingJobs(scope);
+    const scannedJobs = store.listEmbeddingJobs({ ...scope, limit: scanLimit });
+    for (const job of scannedJobs) {
+      if (!['completed', 'failed'].includes(job.status)) continue;
+      const source = embeddingSourceForJob(store, job);
+      let reason = null;
+      if (!source) reason = 'orphan_job_source';
+      else if (job.model !== current.model || Number(job.dimensions) !== current.dimensions) reason = 'retired_job_model_or_dimensions';
+      else if (job.status === 'completed' && job.completedAt && job.completedAt < completedBefore) reason = 'old_completed_job';
+      if (reason) jobs.push({ id: job.id, sourceType: job.sourceType, recordId: job.recordId, status: job.status, reason });
+    }
+    for (const job of jobs) byReason[job.reason] = (byReason[job.reason] || 0) + 1;
+    return {
+      kind: 'embedding_maintenance_inventory',
+      scope,
+      current,
+      scanLimit,
+      completedJobRetentionDays,
+      completedBefore,
+      scanned: {
+        indexRows: indexRecords.length,
+        jobs: scannedJobs.length,
+      },
+      truncated: {
+        indexRows: indexRecords.length === scanLimit,
+        vectorOnly: discoveredVectorOnlySourceIds.length === scanLimit,
+        jobs: scannedJobs.length === scanLimit,
+      },
+      eligible: {
+        total: artifacts.length + vectorOnlySourceIds.length + jobs.length,
+        artifacts: artifacts.length,
+        vectorOnly: vectorOnlySourceIds.length,
+        jobs: jobs.length,
+      },
+      byReason,
+      bySourceType,
+      jobStatus,
+      processingJobs: jobStatus.processing || 0,
+      skippedUnknownScopeVectorRows: narrowed ? discoveredVectorOnlySourceIds.length : 0,
+      artifacts,
+      vectorOnlySourceIds,
+      jobs,
+    };
+  }
+
   async function processEmbeddingJobBatch(store, jobs) {
     const result = {
       processed: 0,
@@ -6840,6 +6933,78 @@ export function createContextForge(options = {}) {
         });
       }
       return searchWithScope(scope, options);
+    },
+
+    embeddingInventory(options = {}) {
+      return useStore((store) => embeddingMaintenanceInventory(store, options));
+    },
+
+    pruneEmbeddingArtifacts(options = {}) {
+      const dryRun = options.dryRun !== false;
+      const force = options.force === true;
+      const batchSize = Math.min(500, positiveInteger(options.batchSize == null ? 100 : options.batchSize, 'batchSize'));
+      return useStore((store) => {
+        const inventory = embeddingMaintenanceInventory(store, options);
+        let remaining = batchSize;
+        const artifacts = inventory.artifacts.slice(0, remaining);
+        remaining -= artifacts.length;
+        const vectorOnly = inventory.vectorOnlySourceIds.slice(0, remaining).map((sourceId) => ({
+          sourceId,
+          sourceType: sourceId.includes(':') ? sourceId.slice(0, sourceId.indexOf(':')) : 'unknown',
+          reason: 'vector_without_index',
+        }));
+        remaining -= vectorOnly.length;
+        const jobs = inventory.jobs.slice(0, remaining);
+        const plan = {
+          artifacts,
+          vectorOnly,
+          jobs,
+          total: artifacts.length + vectorOnly.length + jobs.length,
+        };
+        const base = {
+          kind: 'embedding_maintenance_gc',
+          dryRun,
+          force,
+          batchSize,
+          inventory,
+          plan,
+          blocked: false,
+          deleted: { vectors: 0, indexRows: 0, jobs: 0 },
+          warnings: [
+            'Back up the canonical SQLite store and stop embedding workers before non-dry-run GC.',
+            'Run incremental_vacuum separately when file-size reclamation is required.',
+          ],
+        };
+        if (!dryRun && inventory.processingJobs > 0 && !force) {
+          return { ...base, blocked: true, blockedReason: 'embedding_jobs_processing' };
+        }
+        if (dryRun || plan.total === 0) {
+          return {
+            ...base,
+            coverage: store.embeddingCoverage({
+              scopeType: inventory.scope.scopeType,
+              scopeKey: inventory.scope.scopeKey,
+              model: inventory.current.model,
+              dimensions: inventory.current.dimensions,
+            }),
+          };
+        }
+        const deleted = store.deleteEmbeddingMaintenanceBatch({
+          sourceIds: artifacts.map((item) => item.sourceId),
+          vectorOnlySourceIds: vectorOnly.map((item) => item.sourceId),
+          jobIds: jobs.map((item) => item.id),
+        });
+        return {
+          ...base,
+          deleted,
+          coverage: store.embeddingCoverage({
+            scopeType: inventory.scope.scopeType,
+            scopeKey: inventory.scope.scopeKey,
+            model: inventory.current.model,
+            dimensions: inventory.current.dimensions,
+          }),
+        };
+      });
     },
 
     async rebuildEmbeddings(options = {}) {

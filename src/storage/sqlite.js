@@ -1540,6 +1540,92 @@ export class ContextForgeStore {
     };
   }
 
+  listEmbeddingIndexRecords({ scopeType = null, scopeKey = null, limit = 5000 } = {}) {
+    if (!this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'embedding_index'").get()) {
+      return [];
+    }
+    const filters = [];
+    const values = [];
+    if (scopeType) {
+      filters.push('scope_type = ?');
+      values.push(scopeType);
+    }
+    if (scopeKey) {
+      filters.push('scope_key = ?');
+      values.push(scopeKey);
+    }
+    values.push(Number(limit));
+    return this.db
+      .prepare(`
+        SELECT * FROM embedding_index
+        ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''}
+        ORDER BY updated_at ASC, source_id ASC
+        LIMIT ?
+      `)
+      .all(...values)
+      .map((row) => ({
+        sourceId: row.source_id,
+        sourceType: row.source_type,
+        scopeType: row.scope_type,
+        scopeKey: row.scope_key,
+        recordId: row.record_id,
+        model: row.model,
+        dimensions: row.dimensions,
+        contentHash: row.content_hash,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      }));
+  }
+
+  listOrphanEmbeddingVectorIds({ limit = 5000 } = {}) {
+    if (
+      !this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'embedding_vec'").get() ||
+      !this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'embedding_index'").get()
+    ) {
+      return [];
+    }
+    return this.db
+      .prepare(`
+        SELECT embedding_vec.source_id
+        FROM embedding_vec
+        LEFT JOIN embedding_index ON embedding_index.source_id = embedding_vec.source_id
+        WHERE embedding_index.source_id IS NULL
+        ORDER BY embedding_vec.source_id ASC
+        LIMIT ?
+      `)
+      .all(Number(limit))
+      .map((row) => row.source_id);
+  }
+
+  deleteEmbeddingMaintenanceBatch({ sourceIds = [], vectorOnlySourceIds = [], jobIds = [] } = {}) {
+    return this.withTransaction(() => {
+      const result = { vectors: 0, indexRows: 0, jobs: 0 };
+      const hasVectorTable = Boolean(
+        this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'embedding_vec'").get(),
+      );
+      const hasIndexTable = Boolean(
+        this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'embedding_index'").get(),
+      );
+      const deleteVector = hasVectorTable
+        ? this.db.prepare('DELETE FROM embedding_vec WHERE source_id = ?')
+        : null;
+      const deleteIndex = hasIndexTable
+        ? this.db.prepare('DELETE FROM embedding_index WHERE source_id = ?')
+        : null;
+      const deleteJob = this.db.prepare('DELETE FROM embedding_jobs WHERE id = ?');
+      for (const sourceId of deleteVector ? [...new Set([...sourceIds, ...vectorOnlySourceIds])] : []) {
+        result.vectors += deleteVector.run(sourceId).changes;
+      }
+      for (const sourceId of deleteIndex ? [...new Set(sourceIds)] : []) {
+        result.indexRows += deleteIndex.run(sourceId).changes;
+      }
+      for (const jobId of [...new Set(jobIds)]) {
+        result.jobs += deleteJob.run(jobId).changes;
+      }
+      return result;
+    });
+  }
+
   enqueueEmbeddingJobs(sources, { model, dimensions, force = false } = {}) {
     if (!model) throw new Error('model is required.');
     const parsedDimensions = validateDimensions(dimensions);
