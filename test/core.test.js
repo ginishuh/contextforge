@@ -6,14 +6,22 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import test from 'node:test';
+import { parseJunitReport } from '../scripts/junit-report.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import Database from 'better-sqlite3';
-import { createCodexSdkPythonAutoPromoteAuditor } from '../src/audit/codex_sdk_python.js';
+import {
+  createCodexSdkPythonAutoPromoteAuditor,
+  runCodexSdkPythonCommand,
+} from '../src/audit/codex_sdk_python.js';
 import { canonicalizeScope, parseScopeAliases } from '../src/config/index.js';
 import { createContextForge } from '../src/core.js';
-import { OPENAI_COMPATIBLE_CHECKPOINT_OUTPUT_SCHEMA } from '../src/distill/providers/openai_compatible.js';
+import { runCodexExecCommand } from '../src/distill/providers/codex_exec.js';
+import {
+  createOpenAiCompatibleProvider,
+  OPENAI_COMPATIBLE_CHECKPOINT_OUTPUT_SCHEMA,
+} from '../src/distill/providers/openai_compatible.js';
 import { STRUCTURED_CHECKPOINT_SCHEMA_VERSION, validateDistillOutput } from '../src/distill/validate.js';
 import { createOpenAiEmbeddingProvider } from '../src/embeddings/index.js';
 import { createInterruptibleSleep, normalizeRepoIdentity, shouldSkipRecentFailedAutoDistill } from '../src/ingest/common.js';
@@ -24,6 +32,7 @@ import { searchMemories } from '../src/retrieval/search.js';
 import { REMOTE_METHODS } from '../src/remote/client.js';
 import { startContextForgeServer } from '../src/server.js';
 import { ContextForgeStore, SCHEMA_VERSION } from '../src/storage/sqlite.js';
+import { ExternalProviderDisabledInTestError } from '../src/testing/external_provider.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -119,6 +128,73 @@ test('interruptible ingest sleep wakes when stopped', async () => {
   sleeper.stop();
   await wait;
   assert.equal(resolved, true);
+});
+
+test('normal test mode fails closed before external provider runners or fetch execute', async () => {
+  assert.equal(process.env.CONTEXTFORGE_TEST_MODE, 'true');
+  assert.equal(process.env.CONTEXTFORGE_LIVE_TESTS, 'false');
+  const expectedError = (error, provider) => {
+    assert.equal(error instanceof ExternalProviderDisabledInTestError, true);
+    assert.equal(error.code, 'CONTEXTFORGE_EXTERNAL_PROVIDER_DISABLED_IN_TEST');
+    assert.equal(error.provider, provider);
+    return true;
+  };
+
+  assert.throws(
+    () =>
+      runCodexExecCommand({
+        command: 'codex-must-not-run',
+        args: [],
+        prompt: '',
+        timeoutMs: 1000,
+        cwd: process.cwd(),
+      }),
+    (error) => expectedError(error, 'codex_exec'),
+  );
+  assert.throws(
+    () =>
+      runCodexSdkPythonCommand({
+        pythonCommand: 'python-must-not-run',
+        scriptPath: 'missing.py',
+        codexBin: 'codex-must-not-run',
+        model: 'test',
+        sandbox: 'read-only',
+        prompt: '',
+        timeoutMs: 1000,
+        cwd: process.cwd(),
+      }),
+    (error) => expectedError(error, 'codex_sdk_python_audit'),
+  );
+  assert.throws(
+    () => createOpenAiCompatibleProvider({ apiKey: 'synthetic-test-key' }),
+    (error) => expectedError(error, 'openai_compatible'),
+  );
+  assert.throws(
+    () =>
+      createOpenAiEmbeddingProvider({
+        apiKey: 'synthetic-test-key',
+        baseUrl: 'https://example.invalid/v1',
+        model: 'text-embedding-3-small',
+        dimensions: 3,
+        timeoutMs: 1000,
+      }),
+    (error) => expectedError(error, 'openai_embeddings'),
+  );
+});
+
+test('JUnit duration parser is independent of testcase attribute order', () => {
+  const report = parseJunitReport(`
+    <testsuites>
+      <testcase classname="test" time="0.125" name="classname-first" />
+      <testcase name="name-first" file="test/example.test.js" time="1.5" />
+      <!-- duration_ms 1700.25 -->
+    </testsuites>
+  `);
+  assert.deepEqual(report.testCases, [
+    { name: 'classname-first', durationMs: 125 },
+    { name: 'name-first', durationMs: 1500 },
+  ]);
+  assert.equal(report.reportedDurationMs, 1700.25);
 });
 
 async function makeGitRepo(remoteUrl = 'git@github.com:example/contextforge.git') {
@@ -8295,6 +8371,7 @@ test('suggestMemoryPromotions honors scanLimit and reports capped proposal limit
       CONTEXTFORGE_DISTILL_PROVIDER: 'scan_provider',
     },
     cwd: process.cwd(),
+    autoPromoteAuditor: null,
     distillProviders: {
       scan_provider: async () => ({
         summaryShort: 'Many candidates.',
@@ -11945,6 +12022,13 @@ test('agentCloseout distills, audits, suggests, and preserves adapter session id
       CONTEXTFORGE_DISTILL_PROVIDER: 'agent_closeout_provider',
     },
     cwd: process.cwd(),
+    autoPromoteAuditor: async () => ({
+      approved: true,
+      decision: 'approve',
+      reason: 'Synthetic closeout auditor approved the runbook candidate.',
+      riskCodes: [],
+      metadata: { provider: 'test' },
+    }),
     distillProviders: {
       agent_closeout_provider: async () => ({
         summaryShort: 'Agent closeout checkpoint.',

@@ -36,7 +36,8 @@
   },
   "homepage": "https://github.com/ginishuh/contextforge#readme",
   "scripts": {
-    "test": "node --test",
+    "test": "node scripts/run-tests.js",
+    "test:live": "node scripts/run-tests.js --live",
     "verify": "npm test"
   },
   "license": "MIT",

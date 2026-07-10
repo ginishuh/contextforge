@@ -1,5 +1,6 @@
 import { buildCodexExecPrompt, CHECKPOINT_OUTPUT_SCHEMA, CODEX_EXEC_OUTPUT_SCHEMA_VERSION } from './codex_exec.js';
 import { validateDistillOutput } from '../validate.js';
+import { assertExternalProviderAllowed } from '../../testing/external_provider.js';
 
 export const OPENAI_COMPATIBLE_PROMPT_VERSION = 'openai_compatible.prompt.v3';
 
@@ -153,6 +154,8 @@ async function postJson({ fetchImpl, url, apiKey, body, timeoutMs }) {
 }
 
 export function createOpenAiCompatibleProvider(options = {}) {
+  const fetchInjected = typeof options.fetchImpl === 'function';
+  assertExternalProviderAllowed('openai_compatible', { injected: fetchInjected });
   const fetchImpl = options.fetchImpl || globalThis.fetch;
   const preset = options.preset || 'deepseek';
   const baseUrl = normalizeBaseUrl(options.baseUrl || DEFAULT_BASE_URL);
@@ -174,6 +177,7 @@ export function createOpenAiCompatibleProvider(options = {}) {
   };
 
   async function distillWithOpenAiCompatibleProvider(input) {
+    assertExternalProviderAllowed('openai_compatible', { injected: fetchInjected });
     if (typeof fetchImpl !== 'function') {
       throw new Error('openai_compatible provider requires fetch.');
     }

@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { parseCodexExecJson, runCodexExecCommand } from '../distill/providers/codex_exec.js';
+import { assertExternalProviderAllowed } from '../testing/external_provider.js';
 
 export const AUTO_PROMOTE_AUDIT_PROMPT_VERSION = 'auto_promote_audit.codex_exec.v3';
 export const AUTO_PROMOTE_AUDIT_SCHEMA_VERSION = 'contextforge.auto_promote_audit.v1';
@@ -91,6 +92,7 @@ export function buildAuditPrompt(input, metadata) {
 }
 
 export function createCodexExecAutoPromoteAuditor(options = {}) {
+  const runnerInjected = typeof options.runner === 'function';
   const runner = options.runner || runCodexExecCommand;
   const command = options.command || 'codex';
   const model = options.model || 'gpt-5.5';
@@ -111,6 +113,7 @@ export function createCodexExecAutoPromoteAuditor(options = {}) {
   };
 
   async function audit(input) {
+    assertExternalProviderAllowed('codex_exec_audit', { injected: runnerInjected });
     const startedAt = Date.now();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'contextforge-auto-promote-audit-'));
     const schemaPath = path.join(tempDir, 'audit.schema.json');

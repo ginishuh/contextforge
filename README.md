@@ -245,6 +245,18 @@ Run the test suite:
 npm test
 ```
 
+Normal tests run in fail-closed test mode: real Codex/Python provider runners
+and default external provider fetches are rejected unless a fake is injected.
+JUnit and JSON duration artifacts are written to `artifacts/test/`; the default
+budgets are 10 seconds per test and 120 seconds for the suite. Override them
+with `CONTEXTFORGE_TEST_SLOW_MS` and `CONTEXTFORGE_TEST_BUDGET_MS` when needed.
+Live provider smoke tests are separate and require both the live script and an
+explicit opt-in:
+
+```bash
+CONTEXTFORGE_LIVE_TESTS=true npm run test:live
+```
+
 Inspect or initialize the local store:
 
 ```bash
