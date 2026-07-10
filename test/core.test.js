@@ -195,6 +195,7 @@ test('package, lockfile, CLI, and release docs share the canonical version', asy
   assert.ok(readme.includes('Current package version: `' + packageManifest.version + '`'));
   assert.match(readme, new RegExp(`## What's New In ${packageManifest.version.replaceAll('.', '\\.')}`));
   assert.ok(koreanReadme.includes('현재 package version: `' + packageManifest.version + '`'));
+  assert.ok(koreanReadme.includes(`## ${packageManifest.version}에서 좋아진 점`));
 
   for (const command of ['--version', 'version']) {
     const result = await execFileAsync('node', ['src/cli.js', command], { cwd: process.cwd() });
@@ -6348,6 +6349,13 @@ test('distillCheckpoint records checkpoint level and coverage metadata', async (
   assert.ok(checkpoint.coversTo);
   assert.equal(checkpoint.source, 'daily_consolidation');
   assert.equal(checkpoint.sourceRef, '2026-05-08');
+  store.db
+    .prepare(`
+      UPDATE checkpoints
+      SET created_at = ?
+      WHERE scope_type = ? AND scope_key = ? AND session_id = ?
+    `)
+    .run('2026-05-08T00:00:00.000Z', 'repo', 'repo-level', 'level-session');
   assert.equal(app.listCheckpoints({ scope: 'repo', scopeKey: 'repo-level', level: 1 }).length, 1);
   assert.equal(app.listCheckpoints({ scope: 'repo', scopeKey: 'repo-level', level: 0 }).length, 1);
   assert.equal(store.getLatestCheckpoint({ scopeType: 'repo', scopeKey: 'repo-level', sessionId: 'level-session' }).level, 1);

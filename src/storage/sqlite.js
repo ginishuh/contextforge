@@ -2994,7 +2994,7 @@ export class ContextForgeStore {
       .prepare(`
         SELECT * FROM checkpoints
         WHERE ${filters.join(' AND ')}
-        ORDER BY created_at DESC, id DESC
+        ORDER BY created_at DESC, rowid DESC
         LIMIT 1
       `)
       .get(...values);

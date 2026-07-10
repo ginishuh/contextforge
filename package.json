@@ -12,7 +12,9 @@
     "src",
     "scripts",
     "examples",
-    "docs",
+    "docs/*.md",
+    "docs/examples",
+    "docs/skills",
     "README.md",
     "README.ko.md",
     "LICENSE"
@@ -41,6 +43,7 @@
     "lint": "node scripts/lint-source.js",
     "test": "node scripts/run-tests.js",
     "test:live": "node scripts/run-tests.js --live",
+    "verify:release": "node scripts/check-release.js",
     "verify": "npm run lint && npm test"
   },
   "license": "MIT",

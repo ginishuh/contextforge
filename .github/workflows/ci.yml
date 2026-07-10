@@ -111,6 +111,28 @@ jobs:
           path: artifacts/eval/quality-report.json
           if-no-files-found: error
 
+  release-hygiene:
+    name: Release and package hygiene
+    needs: changes
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm run verify:release
+
+      - name: Upload npm package inventory
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-package-report
+          path: artifacts/release/package-report.json
+          if-no-files-found: error
+
   test:
     name: Test on Node ${{ matrix.node-version }}
     needs: changes
@@ -167,6 +189,7 @@ jobs:
       - workflow-lint
       - source-lint
       - quality-eval
+      - release-hygiene
       - test
       - dependency-audit
     if: (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && always()
@@ -188,6 +211,10 @@ jobs:
             echo "offline quality eval failed"
             exit 1
           fi
+          if [[ "${{ needs.release-hygiene.result }}" != "success" ]]; then
+            echo "release and package hygiene failed"
+            exit 1
+          fi
           if [[ "${{ needs.changes.outputs.run-tests }}" == "true" && "${{ needs.test.result }}" != "success" ]]; then
             echo "tests failed"
             exit 1
@@ -197,5 +224,5 @@ jobs:
             exit 1
           fi
           if [[ "${{ needs.changes.outputs.run-tests }}" != "true" ]]; then
-            echo "docs-only change: Node test matrix and production dependency audit skipped"
+            echo "docs-only change: release hygiene ran; Node test matrix and production dependency audit skipped"
           fi
