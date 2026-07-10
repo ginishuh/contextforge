@@ -274,6 +274,11 @@ npm test
 npm run verify
 ```
 
+외부 provider 없이 retrieval·distillation persistence/source-link contract·candidate
+품질 baseline을 검증하려면 `npm run eval:quality`를 실행한다. Live LLM 생성 품질은
+별도 opt-in eval 범위다. 지표, fixture, threshold와 CI report는
+[Memory Quality Evals](docs/quality-evals.md)에 정리돼 있다.
+
 일반 테스트는 fail-closed test mode로 실행한다. fake가 주입되지 않은 실제
 Codex/Python provider runner와 기본 외부 provider fetch는 즉시 거부한다.
 JUnit/JSON duration artifact는 `artifacts/test/`에 생성되며 기본 budget은

@@ -2450,7 +2450,7 @@ function promotionProposal(indexedCandidate, warnings, rank) {
   return proposal;
 }
 
-function memoryUpdateCandidateProposal(candidate) {
+function memoryUpdateCandidateProposal(candidate, promotionAssessment = null) {
   const proposal = {
     candidateId: candidate.id,
     action: candidate.action,
@@ -2468,6 +2468,14 @@ function memoryUpdateCandidateProposal(candidate) {
       candidateId: candidate.sourceCandidateId,
     },
     recommendedAction: 'ask_user',
+    ...(promotionAssessment
+      ? {
+          promotionAssessment: {
+            classification: promotionAssessment.classification,
+            recommendedAction: promotionAssessment.recommendedAction,
+          },
+        }
+      : {}),
   };
   if (candidate.correction) {
     proposal.correction = candidate.correction;
@@ -5955,7 +5963,7 @@ export function createContextForge(options = {}) {
           proposals: selected.map((item, index) => promotionProposal(item.candidate, item.warnings, index + 1)),
           updateCandidates: assessed
             .filter((item) => item.updateCandidate)
-            .map((item) => memoryUpdateCandidateProposal(item.updateCandidate)),
+            .map((item) => memoryUpdateCandidateProposal(item.updateCandidate, item.assessment)),
           skipped: assessed
             .filter((item) => item.score <= 0)
             .map((item) => ({

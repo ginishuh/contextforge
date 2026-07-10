@@ -1,0 +1,65 @@
+{
+  "name": "contextforge-quality-baseline-v1",
+  "baselineMetrics": {
+    "retrieval": {
+      "queries": 6,
+      "judgedQueries": 3,
+      "unjudgedQueries": 3,
+      "recallAtK": 1,
+      "mrr": 0.8333333333333334,
+      "ndcgAtK": 0.8769765845238192,
+      "scopeLeakageCount": 0,
+      "exactStringRate": 1,
+      "maxReturned": 3
+    },
+    "distillation": {
+      "cases": 2,
+      "preservationRate": 1,
+      "supportedClaimRate": 1,
+      "hallucinationCount": 0,
+      "sensitivityDetectionRate": 1
+    },
+    "candidate": {
+      "cases": 5,
+      "durableCandidatePrecision": 1,
+      "classificationAccuracy": 1,
+      "trustOrderingAccuracy": 1
+    }
+  },
+  "thresholds": {
+    "minimum": {
+      "retrieval.metrics.recallAtK": 1,
+      "retrieval.metrics.judgedQueries": 3,
+      "retrieval.metrics.mrr": 0.8333333333333333,
+      "retrieval.metrics.ndcgAtK": 0.85,
+      "retrieval.metrics.exactStringRate": 1,
+      "retrieval.metrics.byLanguage.ko.recallAtK": 1,
+      "retrieval.metrics.byLanguage.ko.mrr": 1,
+      "retrieval.metrics.byLanguage.ko.ndcgAtK": 1,
+      "retrieval.metrics.byLanguage.en.recallAtK": 1,
+      "retrieval.metrics.byLanguage.en.mrr": 1,
+      "retrieval.metrics.byLanguage.en.ndcgAtK": 1,
+      "retrieval.metrics.byLanguage.mixed.recallAtK": 1,
+      "retrieval.metrics.byLanguage.mixed.mrr": 0.5,
+      "retrieval.metrics.byLanguage.mixed.ndcgAtK": 0.63,
+      "distillation.metrics.preservationRate": 1,
+      "distillation.metrics.supportedClaimRate": 1,
+      "distillation.metrics.liveStateWarningAccuracy": 1,
+      "distillation.metrics.retrievalHookPreservation": 1,
+      "distillation.metrics.sensitivityDetectionRate": 1,
+      "candidate.metrics.durableCandidatePrecision": 1,
+      "candidate.metrics.promotionAcceptanceRate": 1,
+      "candidate.metrics.rejectionAccuracy": 1,
+      "candidate.metrics.classificationAccuracy": 1,
+      "candidate.metrics.preferenceEvidenceAccuracy": 1,
+      "candidate.metrics.trustOrderingAccuracy": 1
+    },
+    "maximum": {
+      "retrieval.metrics.scopeLeakageCount": 0,
+      "retrieval.metrics.forbiddenKeyCount": 0,
+      "retrieval.metrics.averageLatencyMs": 1000,
+      "retrieval.metrics.maxReturned": 10,
+      "distillation.metrics.hallucinationCount": 0
+    }
+  }
+}

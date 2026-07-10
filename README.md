@@ -261,6 +261,11 @@ npm test
 npm run verify
 ```
 
+Run the deterministic memory-quality baseline with `npm run eval:quality`. It
+covers retrieval, distillation persistence/source-link contracts, and candidate
+quality without external providers; live LLM writing quality remains a separate
+opt-in eval. See [Memory Quality Evals](docs/quality-evals.md).
+
 For bounded indexed-search behavior, diagnostics, and the 100-to-100,000-memory
 synthetic benchmark, see
 [Retrieval Performance](docs/retrieval-performance.md).

@@ -2233,6 +2233,7 @@ test('promotion quality assessment prefers update proposals over duplicate durab
   assert.equal(suggestions.updateCandidates.length, 1);
   assert.equal(suggestions.updateCandidates[0].action, 'correct_memory');
   assert.equal(suggestions.updateCandidates[0].targetMemoryKey, 'runtime-verification');
+  assert.equal(suggestions.updateCandidates[0].promotionAssessment.classification, 'refinement');
   assert.equal(suggestions.updateCandidates[0].proposedImportance, 10);
   assert.ok(
     suggestions.skipped.some(

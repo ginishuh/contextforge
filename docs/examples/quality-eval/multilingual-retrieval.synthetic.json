@@ -1,0 +1,101 @@
+{
+  "name": "synthetic-multilingual-retrieval",
+  "workspaceKey": "synthetic-quality-workspace",
+  "primaryScope": "repo",
+  "primaryScopeKey": "github.com/example/contextforge",
+  "sharedScopeKey": "global",
+  "topN": 6,
+  "workspace": {
+    "workspaceKey": "synthetic-quality-workspace",
+    "displayName": "Synthetic Quality Workspace",
+    "canonicalScope": "repo",
+    "canonicalScopeKey": "github.com/example/contextforge"
+  },
+  "members": [
+    {
+      "name": "contextforge",
+      "scope": "repo",
+      "scopeKey": "github.com/example/contextforge",
+      "role": "primary-repo",
+      "priority": 100,
+      "includeByDefault": true
+    }
+  ],
+  "memories": [
+    {
+      "scope": "repo",
+      "scopeKey": "github.com/example/contextforge",
+      "key": "korean-backup-runbook",
+      "category": "runbook",
+      "content": "백업 검증 실패 시 node src/cli.js verifyBackup --file /srv/contextforge/backup.db 명령을 실행하고 SQLITE_BUSY 오류를 확인한다.",
+      "tags": ["백업", "복구", "verifyBackup", "SQLITE_BUSY"],
+      "importance": 9
+    },
+    {
+      "scope": "repo",
+      "scopeKey": "github.com/example/contextforge",
+      "key": "english-readiness-contract",
+      "category": "contract",
+      "content": "The readiness endpoint is /readyz and returns HTTP 503 while the server is draining.",
+      "tags": ["readiness", "/readyz", "503"],
+      "importance": 8
+    },
+    {
+      "scope": "shared",
+      "scopeKey": "global",
+      "key": "shared-safety-policy",
+      "category": "policy",
+      "content": "공유 정책: raw evidence must survive distillation failure and provider timeout.",
+      "tags": ["raw evidence", "distillation", "timeout"],
+      "importance": 8
+    },
+    {
+      "scope": "local",
+      "scopeKey": "machine-a",
+      "key": "local-secret-decoy",
+      "category": "note",
+      "content": "백업 verifyBackup SQLITE_BUSY /readyz raw evidence local secret decoy",
+      "tags": ["decoy"],
+      "importance": 10
+    }
+  ],
+  "queries": [
+    {
+      "query": "백업 검증 실패 SQLITE_BUSY",
+      "language": "ko",
+      "expected": {
+        "relevantKeys": ["korean-backup-runbook"],
+        "relevance": { "korean-backup-runbook": 3 },
+        "mustContain": ["verifyBackup", "SQLITE_BUSY"],
+        "exactStrings": ["node src/cli.js verifyBackup --file /srv/contextforge/backup.db"],
+        "forbiddenKeys": ["local-secret-decoy"],
+        "forbiddenScopes": ["local:machine-a"]
+      }
+    },
+    {
+      "query": "readiness draining HTTP 503",
+      "language": "en",
+      "expected": {
+        "relevantKeys": ["english-readiness-contract"],
+        "relevance": { "english-readiness-contract": 3 },
+        "mustContain": ["readiness", "draining"],
+        "exactStrings": ["/readyz", "HTTP 503"],
+        "forbiddenKeys": ["local-secret-decoy"],
+        "forbiddenScopes": ["local:machine-a"]
+      }
+    },
+    {
+      "query": "distillation 실패 raw evidence provider timeout",
+      "language": "mixed",
+      "includeShared": true,
+      "sharedScopeKey": "global",
+      "expected": {
+        "relevantKeys": ["shared-safety-policy"],
+        "relevance": { "shared-safety-policy": 3 },
+        "mustContain": ["raw evidence", "distillation failure", "provider timeout"],
+        "forbiddenKeys": ["local-secret-decoy"],
+        "forbiddenScopes": ["local:machine-a"]
+      }
+    }
+  ]
+}
