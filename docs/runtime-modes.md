@@ -10,6 +10,33 @@ configuration. The first decision is the agent's role in the runtime topology:
 Do not mix setup commands from different modes in one change unless the user is
 explicitly migrating between them.
 
+## MCP Surface Selection
+
+The stdio and HTTP MCP transports use the same profile resolver. The default
+`agent-core` profile exposes 24 normal agent tools and hides queue workers,
+retention, embedding maintenance, usage inspection, and workspace mutations.
+Use `review` for candidate review, `operator` for server maintenance,
+`workspace-admin` for workspace topology, or `all` for compatibility with the
+former 60-tool surface.
+
+`migrate_scope` belongs to both `operator` and `workspace-admin`: it is storage
+maintenance as well as workspace lifecycle work. Other workspace mutations are
+excluded from `operator`.
+
+Configure the HTTP server with `CONTEXTFORGE_MCP_PROFILE` or an exact
+comma-separated `CONTEXTFORGE_MCP_TOOLS` allowlist. Configure direct stdio with
+the same environment variables or `node src/mcp.js --profile <name>` /
+`--tools <names>`. `node src/cli.js serve` also accepts `--mcpProfile` and
+`--mcpTools`. Explicit allowlists override profiles. Unknown values fail during
+startup rather than silently exposing a different surface.
+
+Use `node src/mcp.js --describe-surface` to inspect exact enabled/disabled tool
+names and context-size measurements before changing a client registration. If
+an existing client loses a tool after upgrade, first select the narrow profile
+that owns it; use `all` only as a temporary compatibility bridge. The packaged
+`contextforge-memory` skill carries detailed workflows, but server startup and
+profile selection do not require the skill to exist on the host.
+
 ## Quick Decision
 
 Use local all-in-one when one machine owns its own memory and no other machine

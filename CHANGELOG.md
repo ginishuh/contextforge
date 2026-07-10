@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added bounded MCP tool profiles (`agent-core`, `review`, `operator`,
+  `workspace-admin`, and `all`) with a 24-tool default, exact allowlist support,
+  stdio/HTTP parity, startup validation, and a surface-report command that
+  measures instructions, schemas, descriptions, and estimated prompt tokens.
+  The compact server instructions now defer detailed workflows to the packaged
+  `contextforge-memory` skill; `all` preserves the former 60-tool surface during
+  migration.
 - Added SQLite-backed durable distill and candidate-audit jobs with idempotent
   submission, queued/running/succeeded/failed/cancelled states, bounded worker
   claims, renewable leases, crash recovery, retry limits, queued cancellation,

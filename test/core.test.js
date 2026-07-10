@@ -31,6 +31,13 @@ import { createInterruptibleSleep, normalizeRepoIdentity, shouldSkipRecentFailed
 import { watchClaudeCodeSessions } from '../src/ingest/claude_code.js';
 import { ingestCodexRolloutFile, watchCodexSessions } from '../src/ingest/codex.js';
 import { ingestAgentRoutedSessions, ingestAgentSessions, listAgentAdapters, watchAgentRoutedSessions } from '../src/ingest/agents.js';
+import {
+  ALL_MCP_TOOL_NAMES,
+  createContextForgeMcpServer,
+  getContextForgeMcpSurfaceInfo,
+  MCP_TOOL_PROFILES,
+  resolveMcpToolSelection,
+} from '../src/mcp.js';
 import { searchMemories } from '../src/retrieval/search.js';
 import { REMOTE_METHODS } from '../src/remote/client.js';
 import { ProviderTimeoutError } from '../src/runtime/provider_execution.js';
@@ -810,13 +817,123 @@ test('processEmbeddingJobs reports an explicit no-op when the scoped queue is em
   assert.deepEqual(result.jobs, { pending: 0, processing: 0, completed: 0, failed: 0 });
 });
 
-test('MCP instructions require checking embedding queue state before processing jobs', async () => {
+test('MCP instructions keep embedding maintenance safety guidance compact', async () => {
   const source = await fs.readFile(path.join(process.cwd(), 'src', 'mcp.js'), 'utf8');
 
-  assert.match(source, /Before calling process_embedding_jobs/);
-  assert.match(source, /pending=0, failed=0, processing=0/);
-  assert.match(source, /failed jobs exist.*retryFailed=true/i);
-  assert.match(source, /skip/i);
+  assert.match(source, /Embedding maintenance is operator-profile work/);
+  assert.match(source, /inspect db_info coverage/);
+  assert.match(source, /packaged contextforge-memory skill/);
+});
+
+test('MCP tool profiles have exact bounded surfaces and reject invalid configuration', () => {
+  const expectedAgentCore = [
+    'db_info',
+    'resolve_workspace',
+    'bootstrap_context',
+    'expand_memory_cluster',
+    'sync_resume_context',
+    'begin_session',
+    'session_status',
+    'submit_distill_job',
+    'get_job',
+    'search',
+    'get_memory',
+    'remember',
+    'append_raw',
+    'get_working_summary',
+    'list_checkpoints',
+    'get_session_working_context',
+    'upsert_session_working_context',
+    'distill_checkpoint',
+    'distill_usage',
+    'list_memory_candidates',
+    'suggest_memory_promotions',
+    'reconcile_memory',
+    'promote_memory_candidate',
+    'reject_memory_candidate',
+  ];
+  assert.deepEqual(MCP_TOOL_PROFILES['agent-core'], expectedAgentCore);
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(MCP_TOOL_PROFILES).map(([name, tools]) => [name, tools.length])),
+    { 'agent-core': 24, review: 37, operator: 54, 'workspace-admin': 11, all: 60 },
+  );
+  assert.deepEqual(MCP_TOOL_PROFILES.all, ALL_MCP_TOOL_NAMES);
+
+  const defaultSelection = resolveMcpToolSelection({ env: {} });
+  assert.equal(defaultSelection.profile, 'agent-core');
+  assert.deepEqual(defaultSelection.enabledToolNames, expectedAgentCore);
+  assert.ok(defaultSelection.disabledToolNames.includes('process_jobs'));
+  assert.ok(defaultSelection.disabledToolNames.includes('upsert_workspace_profile'));
+
+  const customSelection = resolveMcpToolSelection({
+    env: { CONTEXTFORGE_MCP_PROFILE: 'operator', CONTEXTFORGE_MCP_TOOLS: 'db_info, search,db_info' },
+  });
+  assert.equal(customSelection.profile, 'custom');
+  assert.equal(customSelection.requestedProfile, 'operator');
+  assert.equal(customSelection.explicitAllowlist, true);
+  assert.deepEqual(customSelection.enabledToolNames, ['db_info', 'search']);
+  assert.deepEqual(customSelection.warnings, []);
+  const customWithUnknownProfile = resolveMcpToolSelection({
+    env: { CONTEXTFORGE_MCP_PROFILE: 'typo', CONTEXTFORGE_MCP_TOOLS: 'db_info,search' },
+  });
+  assert.equal(customWithUnknownProfile.profile, 'custom');
+  assert.match(customWithUnknownProfile.warnings[0], /Ignored unknown MCP profile typo/);
+  assert.throws(
+    () => resolveMcpToolSelection({ profile: 'mystery' }),
+    /Unknown ContextForge MCP profile: mystery.*agent-core.*workspace-admin/,
+  );
+  assert.throws(
+    () => resolveMcpToolSelection({ tools: 'db_info,launch_missiles' }),
+    /Unknown ContextForge MCP tool\(s\): launch_missiles/,
+  );
+});
+
+test('MCP default profile stays within the context budget without requiring an installed skill', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+  const defaultServer = createContextForgeMcpServer({
+    app,
+    env: { CONTEXTFORGE_MCP_PROFILE: 'agent-core', HOME: path.join(dataDir, 'missing-home') },
+  });
+  const allServer = createContextForgeMcpServer({ app, profile: 'all' });
+  try {
+    const surface = getContextForgeMcpSurfaceInfo(defaultServer);
+    const allSurface = getContextForgeMcpSurfaceInfo(allServer);
+    assert.equal(surface.toolCount, 24);
+    assert.equal(allSurface.toolCount, 60);
+    assert.ok(surface.instructionsBytes <= 1600, `instructions=${surface.instructionsBytes}`);
+    assert.ok(surface.toolSchemaBytes <= 26000, `schema=${surface.toolSchemaBytes}`);
+    assert.ok(surface.estimatedInitialTokens <= 6700, `tokens=${surface.estimatedInitialTokens}`);
+    assert.ok(surface.estimatedInitialTokens / allSurface.estimatedInitialTokens <= 0.5);
+    assert.equal(
+      surface.descriptionBytes,
+      surface.tools.reduce((total, tool) => total + tool.descriptionBytes, 0),
+    );
+    assert.deepEqual(surface.tools.map((tool) => tool.name), MCP_TOOL_PROFILES['agent-core']);
+    assert.ok(surface.disabledToolNames.includes('process_embedding_jobs'));
+  } finally {
+    await defaultServer.close().catch(() => {});
+    await allServer.close().catch(() => {});
+    app.close();
+  }
+});
+
+test('MCP surface CLI reports selected profile and explicit allowlist', async () => {
+  const profile = JSON.parse(
+    (await execFileAsync('node', ['src/mcp.js', '--describe-surface', '--profile', 'workspace-admin'])).stdout,
+  );
+  assert.equal(profile.profile, 'workspace-admin');
+  assert.deepEqual(profile.enabledToolNames, MCP_TOOL_PROFILES['workspace-admin']);
+
+  const custom = JSON.parse(
+    (await execFileAsync('node', ['src/mcp.js', '--describe-surface', '--tools', 'db_info,search'])).stdout,
+  );
+  assert.equal(custom.profile, 'custom');
+  assert.deepEqual(custom.enabledToolNames, ['db_info', 'search']);
+  await assert.rejects(
+    execFileAsync('node', ['src/mcp.js', '--describe-surface', '--profile', 'unknown']),
+    /Unknown ContextForge MCP profile: unknown/,
+  );
 });
 
 test('embedding jobs claim atomically and stale processing jobs reset', async () => {
@@ -13691,6 +13808,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     env: {
       ...process.env,
       CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_MCP_PROFILE: 'all',
     },
     stderr: 'pipe',
   });
@@ -13762,6 +13880,15 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'upsert_workspace_profile',
       'upsert_workspace_routing_rule',
     ]);
+    const reportedSurface = JSON.parse(
+      (
+        await execFileAsync('node', ['src/mcp.js', '--describe-surface', '--profile', 'all'], {
+          env: { ...process.env, CONTEXTFORGE_DATA_DIR: dataDir },
+        })
+      ).stdout,
+    );
+    assert.equal(Buffer.byteLength(client.getInstructions() || '', 'utf8'), reportedSurface.instructionsBytes);
+    assert.equal(Buffer.byteLength(JSON.stringify(toolList), 'utf8'), reportedSurface.toolSchemaBytes);
     const rememberTool = toolList.tools.find((tool) => tool.name === 'remember');
     assert.ok(rememberTool.inputSchema.properties.repoPath);
     assert.ok(rememberTool.inputSchema.properties.cwd);
@@ -14079,7 +14206,21 @@ test('MCP streamable HTTP endpoint exposes core tools with bearer auth', async (
     await client.connect(transport);
     assert.deepEqual(client.getServerVersion(), { name: 'contextforge', version: packageManifest.version });
     const toolList = await client.listTools();
-    assert.ok(toolList.tools.some((tool) => tool.name === 'remember'));
+    assert.deepEqual(
+      toolList.tools.map((tool) => tool.name),
+      MCP_TOOL_PROFILES['agent-core'],
+    );
+    const reportedSurface = JSON.parse(
+      (
+        await execFileAsync('node', ['src/mcp.js', '--describe-surface'], {
+          env: { ...process.env, CONTEXTFORGE_DATA_DIR: dataDir },
+        })
+      ).stdout,
+    );
+    assert.equal(Buffer.byteLength(client.getInstructions() || '', 'utf8'), reportedSurface.instructionsBytes);
+    assert.equal(Buffer.byteLength(JSON.stringify(toolList), 'utf8'), reportedSurface.toolSchemaBytes);
+    assert.ok(!toolList.tools.some((tool) => tool.name === 'process_jobs'));
+    assert.ok(!toolList.tools.some((tool) => tool.name === 'upsert_workspace_profile'));
 
     const infoResult = await client.callTool({ name: 'db_info', arguments: {} });
     assert.equal(infoResult.structuredContent.result.connection.mode, 'remote-client');

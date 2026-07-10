@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { normalizeObjectSchema } from '@modelcontextprotocol/sdk/server/zod-compat.js';
+import { toJsonSchemaCompat } from '@modelcontextprotocol/sdk/server/zod-json-schema-compat.js';
 import { z } from 'zod';
 import { createContextForge } from './core.js';
 import { CONTEXTFORGE_VERSION } from './version.js';
@@ -27,6 +29,179 @@ const closeoutTriggerSchema = z.enum([
   'manual_closeout',
 ]);
 
+export const ALL_MCP_TOOL_NAMES = Object.freeze([
+  'db_info',
+  'migrate_scope',
+  'get_runtime_settings',
+  'list_workspaces',
+  'get_workspace',
+  'resolve_workspace',
+  'upsert_workspace_profile',
+  'deactivate_workspace_profile',
+  'upsert_workspace_member',
+  'remove_workspace_member',
+  'upsert_workspace_routing_rule',
+  'remove_workspace_routing_rule',
+  'bootstrap_context',
+  'expand_memory_cluster',
+  'sync_resume_context',
+  'begin_session',
+  'session_status',
+  'submit_distill_job',
+  'submit_audit_job',
+  'get_job',
+  'list_jobs',
+  'process_jobs',
+  'cancel_job',
+  'list_due_distill_sessions',
+  'process_due_distills',
+  'list_due_consolidations',
+  'process_consolidations',
+  'search',
+  'rebuild_embeddings',
+  'process_embedding_jobs',
+  'list_embedding_jobs',
+  'get_memory',
+  'remember',
+  'append_raw',
+  'prune_raw_events',
+  'get_working_summary',
+  'list_checkpoints',
+  'get_session_working_context',
+  'upsert_session_working_context',
+  'distill_checkpoint',
+  'distill_usage',
+  'list_llm_usage_events',
+  'llm_usage_rollup',
+  'list_memory_events',
+  'list_memory_candidates',
+  'list_preference_occurrences',
+  'list_memory_update_candidates',
+  'audit_memory_duplicates',
+  'apply_memory_update_candidate',
+  'reject_memory_update_candidate',
+  'skip_memory_update_candidate',
+  'suggest_memory_promotions',
+  'auto_promote_memory_candidates',
+  'audit_memory_candidates',
+  'reconcile_memory',
+  'promote_memory',
+  'promote_memory_candidate',
+  'reject_memory_candidate',
+  'correct_memory',
+  'deactivate_memory',
+]);
+
+const AGENT_CORE_TOOLS = Object.freeze([
+  'db_info',
+  'bootstrap_context',
+  'expand_memory_cluster',
+  'resolve_workspace',
+  'sync_resume_context',
+  'begin_session',
+  'session_status',
+  'search',
+  'get_memory',
+  'remember',
+  'append_raw',
+  'get_working_summary',
+  'list_checkpoints',
+  'get_session_working_context',
+  'upsert_session_working_context',
+  'distill_checkpoint',
+  'submit_distill_job',
+  'get_job',
+  'distill_usage',
+  'list_memory_candidates',
+  'suggest_memory_promotions',
+  'promote_memory_candidate',
+  'reject_memory_candidate',
+  'reconcile_memory',
+]);
+
+const REVIEW_EXTRA_TOOLS = Object.freeze([
+  'submit_audit_job',
+  'list_memory_events',
+  'list_preference_occurrences',
+  'list_memory_update_candidates',
+  'audit_memory_duplicates',
+  'apply_memory_update_candidate',
+  'reject_memory_update_candidate',
+  'skip_memory_update_candidate',
+  'auto_promote_memory_candidates',
+  'audit_memory_candidates',
+  'promote_memory',
+  'correct_memory',
+  'deactivate_memory',
+]);
+
+const WORKSPACE_ADMIN_TOOLS = Object.freeze([
+  'db_info',
+  'migrate_scope',
+  'list_workspaces',
+  'get_workspace',
+  'resolve_workspace',
+  'upsert_workspace_profile',
+  'deactivate_workspace_profile',
+  'upsert_workspace_member',
+  'remove_workspace_member',
+  'upsert_workspace_routing_rule',
+  'remove_workspace_routing_rule',
+]);
+
+const WORKSPACE_MUTATION_TOOLS = new Set([
+  'upsert_workspace_profile',
+  'deactivate_workspace_profile',
+  'upsert_workspace_member',
+  'remove_workspace_member',
+  'upsert_workspace_routing_rule',
+  'remove_workspace_routing_rule',
+]);
+const canonicalToolList = (names) => {
+  const selected = new Set(names);
+  return Object.freeze(ALL_MCP_TOOL_NAMES.filter((name) => selected.has(name)));
+};
+
+export const MCP_TOOL_PROFILES = Object.freeze({
+  'agent-core': canonicalToolList(AGENT_CORE_TOOLS),
+  review: canonicalToolList([...AGENT_CORE_TOOLS, ...REVIEW_EXTRA_TOOLS]),
+  operator: Object.freeze(ALL_MCP_TOOL_NAMES.filter((name) => !WORKSPACE_MUTATION_TOOLS.has(name))),
+  'workspace-admin': canonicalToolList(WORKSPACE_ADMIN_TOOLS),
+  all: ALL_MCP_TOOL_NAMES,
+});
+
+function normalizeToolAllowlist(value) {
+  const values = Array.isArray(value) ? value : String(value || '').split(',');
+  return Array.from(new Set(values.map((item) => String(item).trim()).filter(Boolean)));
+}
+
+export function resolveMcpToolSelection({ env = process.env, profile = null, tools = null } = {}) {
+  const explicitTools = normalizeToolAllowlist(tools ?? env.CONTEXTFORGE_MCP_TOOLS);
+  const requestedProfile = profile || env.CONTEXTFORGE_MCP_PROFILE || 'agent-core';
+  const knownProfile = Object.hasOwn(MCP_TOOL_PROFILES, requestedProfile);
+  if (!knownProfile && explicitTools.length === 0) {
+    throw new Error(
+      `Unknown ContextForge MCP profile: ${requestedProfile}. Available profiles: ${Object.keys(MCP_TOOL_PROFILES).join(', ')}.`,
+    );
+  }
+  const selectedToolNames = explicitTools.length > 0 ? explicitTools : [...MCP_TOOL_PROFILES[requestedProfile]];
+  const unknownTools = selectedToolNames.filter((name) => !ALL_MCP_TOOL_NAMES.includes(name));
+  if (unknownTools.length > 0) {
+    throw new Error(`Unknown ContextForge MCP tool(s): ${unknownTools.join(', ')}.`);
+  }
+  const enabledToolNames = canonicalToolList(selectedToolNames);
+  return {
+    profile: explicitTools.length > 0 ? 'custom' : requestedProfile,
+    requestedProfile,
+    explicitAllowlist: explicitTools.length > 0,
+    warnings: !knownProfile
+      ? [`Ignored unknown MCP profile ${requestedProfile} because an explicit tool allowlist was provided.`]
+      : [],
+    enabledToolNames,
+    disabledToolNames: ALL_MCP_TOOL_NAMES.filter((name) => !enabledToolNames.includes(name)),
+  };
+}
+
 const scopedSchema = {
   scope: scopeSchema.optional(),
   scopeKey: z.string().optional(),
@@ -43,32 +218,80 @@ function jsonResult(result) {
 
 const MCP_INSTRUCTIONS = [
   'Use ContextForge for scoped memory retrieval on demand.',
-  'At the start of non-trivial project work or after resume/compaction/agent transfer, call bootstrap_context with repoPath, cwd, or an explicit scopeKey and consultReason=startup/resume/compaction_recovery/agent_switch. It summarizes storage authority, vector readiness, query retrieval results, trust hints, and query-independent latest checkpoint handoff in one response.',
-  'Do not call bootstrap_context merely to re-confirm current active-session intent. During uninterrupted work, prefer current conversation context; use search for targeted file/API/error/domain lookups and db_info/git/GitHub/health checks/service manager for mutable live state.',
-  'bootstrap_context does not create a session. In Codex or Claude Code auto-ingest environments, preserve or recover the adapter session id such as codex:<native-session-id> or claude_code:<native-session-id> before session_status, distill_checkpoint, or closeout promotion. Use begin_session only for manual ContextForge evidence streams where the agent will call append_raw itself; do not create a fresh cf_... session at closeout to review candidates from an existing Codex/Claude session.',
-  'Use db_info connection metadata for access path: prefer connection.summary, then connection.accessMode/accessPath and connection.serverRole. connection.mode is kept for compatibility. Top-level storageMode describes the responding ContextForge process; connection.server may describe the server-owned store behind a remote call.',
-  'Read bootstrap_context.handoff.latestCheckpoints before durable memory only when the consult reason is startup, resume, compaction recovery, or agent switch. Durable memory is for reviewed stable facts, contracts, policies, and runbooks. Verify mutable checkpoint claims with git/GitHub/CI/runtime/migrations before final action.',
-  'Search result types have different trust roles: memory is reviewed durable fact or decision; checkpoint is credible recent handoff state for continuity, planning, prior intent, recent decisions, and unfinished work, but mutable live-state claims must be verified with git/GitHub/CI/runtime/migrations before acting; memory_candidate is unreviewed promotion material and not durable truth.',
-  'bootstrap_context returns a compact memoryMap separately from raw retrieval hits. Use the map for durable-memory orientation, then call expand_memory_cluster only for clusters whose atomic details are needed.',
-  'For task start or loose continuation prompts such as "지난 환경 작업과 동기화", "어제 하던 거 이어서", "previous work", or "continue", call bootstrap_context first; it includes latest checkpoint handoff independent of search ranking. Use sync_resume_context only when you know the exact sessionId and need session working state or raw tail.',
-  'For closeout distillation, pass auditTrigger to distill_checkpoint. Candidate audit automatically selects a bounded session batch after closeout triggers or once the configured threshold is reached, then invokes the provider once per selected candidate. Audit results are stored on candidates; automatic promotion only controls whether approved strict-safe results are written to durable memory.',
-  'For provider work that must survive client disconnects, submit_distill_job or submit_audit_job, then poll get_job. A separate operator must run process_jobs; queued cancellation is guaranteed, but a running provider call is not force-cancelled.',
-  'When an agent needs to inspect audited recommendations, call audit_memory_candidates with sessionId or checkpointId. It returns stored audit proposals and audits unaudited candidates in the same scoped selection batch when needed. It persists candidate audit metadata and usage events but never promotes or mutates durable memory.',
-  'For strict closeout-scoped safe automatic promotion, call auto_promote_memory_candidates only when the user wants write-side automatic promotion and always include sessionId or checkpointId. By default use dryRun=true. Use dryRun=false only when CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true is intentionally configured; never use scope-wide backlog fallback and never auto-promote preference candidates.',
-  'Preference-like candidates are tracked as merged occurrences; use list_preference_occurrences to review repeated evidence and weakened corrections, but do not treat occurrence evidence alone as durable preference truth.',
-  'For user corrections such as "너 잘못 알고 있잖아", "그거 아니야", "그건 X가 아니라 Y야", or "기억 수정해", call reconcile_memory. Show the basis for prior knowledge, assess conflicts, and only apply safe corrections when the user explicitly asks to fix memory.',
-  'Use list_memory_update_candidates to review proposed durable-memory corrections, deactivations, duplicate merges, or corrective notes. reconcile_memory propose mode is read-only by default; pass createUpdateCandidates=true only when persistent review proposals are wanted. Apply or reject update candidates only after explicit user approval.',
-  'When resuming a known session, pass sessionId to bootstrap_context or call get_working_summary and get_session_working_context to load latest rolling handoff state separately from durable memory and checkpoint search results.',
-  'Embeddings are the supported retrieval-quality path. Successful distill_checkpoint calls may queue embedding jobs for the new checkpoint and memory candidates. Before calling process_embedding_jobs, inspect db_info embedding coverage/jobs or list_embedding_jobs. Only call process_embedding_jobs when pending or failed jobs exist, processing jobs are stale, or db_info reports stale vector sources. When failed jobs exist, call process_embedding_jobs with retryFailed=true. If pending=0, failed=0, processing=0, and staleSources=0, skip processing instead of treating lexical fallback as equivalent.',
-  'If working on a repository while the MCP process cwd is elsewhere, pass repoPath or cwd so repo scope resolves to that checkout; repoPath takes precedence when both are provided.',
-  'Treat scopeKey as the canonical repo memory key; pass an explicit normalized GitHub key when local paths differ across machines or the checkout cannot infer the right remote.',
-  'Use remember for reviewed durable facts the user or assistant intentionally wants saved.',
-  'At closeout after distill_checkpoint, keep the returned checkpointId and check memoryCandidateCount; if it is greater than zero, prefer suggest_memory_promotions with that checkpointId or the current sessionId, then promote only reviewed durable facts with promote_memory_candidate or reject unsuitable candidates with reject_memory_candidate.',
-  'When session_status reports latestCheckpointMemoryCandidateCount at closeout, use suggest_memory_promotions or list_memory_candidates with the latest checkpoint id or same sessionId before deciding what should become durable memory.',
-  'Keep local scope opt-in.',
+  'At non-trivial task start or resume, call bootstrap_context with repoPath/cwd or scopeKey and the matching consultReason. Use db_info to distinguish remote canonical storage from checkout-local context.',
+  'Trust roles differ: memory is reviewed durable state, checkpoint is recent handoff that needs live-state verification, and memory_candidate is unreviewed. Verify mutable git, CI, runtime, and migration claims at their live source.',
+  'bootstrap_context does not create sessions. Preserve adapter ids such as codex:<id> or claude_code:<id>; use begin_session only for manual append_raw streams. Keep local scope opt-in.',
+  'Distill failure must not erase raw evidence. At closeout, retain checkpointId and review candidates before promotion. Audit persists review metadata but does not itself promote durable memory.',
+  'Use durable submit/get job tools when provider work must survive disconnects; an operator must process queued jobs. Queued cancellation is guaranteed, running force-cancel is not, and candidate audit remains per-candidate rather than true provider batching.',
+  'Embedding maintenance is operator-profile work; inspect db_info coverage before handing it to an operator.',
+  'Profiles intentionally hide tools. Use the packaged contextforge-memory skill for detailed review, reconciliation, consolidation, embeddings, workspace administration, and closeout workflows.',
 ].join(' ');
 
-export function createContextForgeMcpServer({ app = createContextForge() } = {}) {
+function mcpSurfaceInfo(toolRegistrations, selection) {
+  const measuredTools = toolRegistrations.map(({ name, config }) => {
+    const inputSchemaSource =
+      config.inputSchema && Object.keys(config.inputSchema).length === 0 ? z.object({}) : config.inputSchema;
+    const normalizedInputSchema = normalizeObjectSchema(inputSchemaSource);
+    const inputSchema = normalizedInputSchema
+      ? toJsonSchemaCompat(normalizedInputSchema, { strictUnions: true, pipeStrategy: 'input' })
+      : { type: 'object', properties: {} };
+    const schema = {
+      name,
+      ...(config.title ? { title: config.title } : {}),
+      ...(config.description ? { description: config.description } : {}),
+      inputSchema,
+      ...(config.annotations ? { annotations: config.annotations } : {}),
+      execution: { taskSupport: 'forbidden' },
+      ...(config._meta ? { _meta: config._meta } : {}),
+    };
+    const normalizedOutputSchema = normalizeObjectSchema(config.outputSchema);
+    if (normalizedOutputSchema) {
+      schema.outputSchema = toJsonSchemaCompat(normalizedOutputSchema, {
+        strictUnions: true,
+        pipeStrategy: 'output',
+      });
+    }
+    return {
+      schema,
+      info: {
+        name,
+        descriptionBytes: Buffer.byteLength(config.description || '', 'utf8'),
+        schemaBytes: Buffer.byteLength(JSON.stringify(schema), 'utf8'),
+      },
+    };
+  });
+  const tools = measuredTools.map(({ info }) => info);
+  const instructionsBytes = Buffer.byteLength(MCP_INSTRUCTIONS, 'utf8');
+  const toolSchemaBytes = Buffer.byteLength(
+    JSON.stringify({ tools: measuredTools.map(({ schema }) => schema) }),
+    'utf8',
+  );
+  const descriptionBytes = tools.reduce((total, tool) => total + tool.descriptionBytes, 0);
+  return {
+    ...selection,
+    toolCount: tools.length,
+    totalKnownToolCount: ALL_MCP_TOOL_NAMES.length,
+    instructionsBytes,
+    toolSchemaBytes,
+    descriptionBytes,
+    estimatedInitialTokens: Math.ceil((instructionsBytes + toolSchemaBytes) / 4),
+    tools,
+  };
+}
+
+export function getContextForgeMcpSurfaceInfo(server) {
+  return server.contextForgeSurface;
+}
+
+export function createContextForgeMcpServer({
+  app = null,
+  env = process.env,
+  profile = null,
+  tools = null,
+} = {}) {
+  const selection = resolveMcpToolSelection({ env, profile, tools });
+  app ||= createContextForge({ env });
+  const enabledTools = new Set(selection.enabledToolNames);
   const server = new McpServer(
     {
       name: 'contextforge',
@@ -78,8 +301,17 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
       instructions: MCP_INSTRUCTIONS,
     },
   );
+  const toolDefinitions = [];
+  const toolRegistrations = [];
+  const sdkRegisterTool = server.registerTool.bind(server);
+  const registerTool = (name, config, handler) => {
+    toolDefinitions.push(name);
+    if (!enabledTools.has(name)) return null;
+    toolRegistrations.push({ name, config });
+    return sdkRegisterTool(name, config, handler);
+  };
 
-  server.registerTool(
+  registerTool(
     'db_info',
     {
       title: 'Database Info',
@@ -95,7 +327,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async () => jsonResult(await app.dbInfo()),
   );
 
-  server.registerTool(
+  registerTool(
     'migrate_scope',
     {
       title: 'Migrate Scope',
@@ -119,7 +351,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.migrateScope(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'get_runtime_settings',
     {
       title: 'Get Runtime Settings',
@@ -135,7 +367,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async () => jsonResult(await app.getRuntimeSettings()),
   );
 
-  server.registerTool(
+  registerTool(
     'list_workspaces',
     {
       title: 'List Workspaces',
@@ -154,7 +386,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.listWorkspaceProfiles(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'get_workspace',
     {
       title: 'Get Workspace',
@@ -173,7 +405,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.getWorkspaceProfile(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'resolve_workspace',
     {
       title: 'Resolve Workspace',
@@ -201,7 +433,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.resolveWorkspace(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'upsert_workspace_profile',
     {
       title: 'Upsert Workspace Profile',
@@ -225,7 +457,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.upsertWorkspaceProfile(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'deactivate_workspace_profile',
     {
       title: 'Deactivate Workspace Profile',
@@ -243,7 +475,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.deactivateWorkspaceProfile(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'upsert_workspace_member',
     {
       title: 'Upsert Workspace Member',
@@ -270,7 +502,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.upsertWorkspaceMember(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'remove_workspace_member',
     {
       title: 'Remove Workspace Member',
@@ -293,7 +525,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.removeWorkspaceMember(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'upsert_workspace_routing_rule',
     {
       title: 'Upsert Workspace Routing Rule',
@@ -319,7 +551,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.upsertWorkspaceRoutingRule(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'remove_workspace_routing_rule',
     {
       title: 'Remove Workspace Routing Rule',
@@ -338,7 +570,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.removeWorkspaceRoutingRule(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'bootstrap_context',
     {
       title: 'Bootstrap Context',
@@ -373,7 +605,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.bootstrapContext(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'expand_memory_cluster',
     {
       title: 'Expand Memory Cluster',
@@ -398,7 +630,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.expandMemoryCluster(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'sync_resume_context',
     {
       title: 'Sync Resume Context',
@@ -423,7 +655,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.syncResumeContext(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'begin_session',
     {
       title: 'Begin Session',
@@ -443,7 +675,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.beginSession(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'session_status',
     {
       title: 'Session Status',
@@ -468,7 +700,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.sessionStatus(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'submit_distill_job',
     {
       title: 'Submit Distill Job',
@@ -499,7 +731,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.submitDistillJob(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'submit_audit_job',
     {
       title: 'Submit Candidate Audit Job',
@@ -533,7 +765,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.submitAuditJob(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'get_job',
     {
       title: 'Get Operation Job',
@@ -551,7 +783,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.getJob(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'list_jobs',
     {
       title: 'List Operation Jobs',
@@ -574,7 +806,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.listJobs(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'process_jobs',
     {
       title: 'Process Operation Jobs',
@@ -598,7 +830,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.processJobs(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'cancel_job',
     {
       title: 'Cancel Queued Operation Job',
@@ -619,7 +851,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.cancelJob(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'list_due_distill_sessions',
     {
       title: 'List Due Distill Sessions',
@@ -648,7 +880,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.listDueDistillSessions(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'process_due_distills',
     {
       title: 'Process Due Distills',
@@ -695,7 +927,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     maxChars: z.number().int().positive().optional(),
   };
 
-  server.registerTool(
+  registerTool(
     'list_due_consolidations',
     {
       title: 'List Due Consolidations',
@@ -711,7 +943,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.listDueConsolidations(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'process_consolidations',
     {
       title: 'Process Consolidations',
@@ -730,7 +962,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.processConsolidations(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'search',
     {
       title: 'Search Memory',
@@ -759,7 +991,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.search(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'rebuild_embeddings',
     {
       title: 'Rebuild Embeddings',
@@ -779,7 +1011,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.rebuildEmbeddings(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'process_embedding_jobs',
     {
       title: 'Process Embedding Jobs',
@@ -802,7 +1034,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.processEmbeddingJobs(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'list_embedding_jobs',
     {
       title: 'List Embedding Jobs',
@@ -822,7 +1054,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.listEmbeddingJobs(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'get_memory',
     {
       title: 'Get Memory',
@@ -840,7 +1072,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.getMemory(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'remember',
     {
       title: 'Remember',
@@ -863,7 +1095,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.remember(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'append_raw',
     {
       title: 'Append Raw Evidence',
@@ -885,7 +1117,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.appendRaw(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'prune_raw_events',
     {
       title: 'Prune Raw Evidence',
@@ -905,7 +1137,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.pruneRawEvents(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'get_working_summary',
     {
       title: 'Get Working Summary',
@@ -924,7 +1156,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.getWorkingSummary(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'list_checkpoints',
     {
       title: 'List Checkpoints',
@@ -944,7 +1176,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.listCheckpoints(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'get_session_working_context',
     {
       title: 'Get Session Working Context',
@@ -963,7 +1195,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.getSessionWorkingContext(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'upsert_session_working_context',
     {
       title: 'Upsert Session Working Context',
@@ -994,7 +1226,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.upsertSessionWorkingContext(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'distill_checkpoint',
     {
       title: 'Distill Checkpoint',
@@ -1025,7 +1257,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.distillCheckpoint(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'distill_usage',
     {
       title: 'Distill Usage',
@@ -1045,7 +1277,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.distillUsage(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'list_llm_usage_events',
     {
       title: 'List LLM Usage Events',
@@ -1072,7 +1304,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.listLlmUsageEvents(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'llm_usage_rollup',
     {
       title: 'LLM Usage Rollup',
@@ -1100,7 +1332,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.llmUsageRollup(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'list_memory_events',
     {
       title: 'List Memory Events',
@@ -1118,7 +1350,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.listMemoryEvents(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'list_memory_candidates',
     {
       title: 'List Memory Candidates',
@@ -1143,7 +1375,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.listMemoryCandidates(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'list_preference_occurrences',
     {
       title: 'List Preference Occurrences',
@@ -1163,7 +1395,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.listPreferenceOccurrences(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'list_memory_update_candidates',
     {
       title: 'List Memory Update Candidates',
@@ -1186,7 +1418,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.listMemoryUpdateCandidates(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'audit_memory_duplicates',
     {
       title: 'Audit Memory Duplicates',
@@ -1208,7 +1440,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.auditMemoryDuplicates(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'apply_memory_update_candidate',
     {
       title: 'Apply Memory Update Candidate',
@@ -1235,7 +1467,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.applyMemoryUpdateCandidate(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'reject_memory_update_candidate',
     {
       title: 'Reject Memory Update Candidate',
@@ -1255,7 +1487,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.rejectMemoryUpdateCandidate(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'skip_memory_update_candidate',
     {
       title: 'Skip Memory Update Candidate',
@@ -1275,7 +1507,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.skipMemoryUpdateCandidate(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'suggest_memory_promotions',
     {
       title: 'Suggest Memory Promotions',
@@ -1307,7 +1539,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.suggestMemoryPromotions(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'auto_promote_memory_candidates',
     {
       title: 'Auto Promote Memory Candidates',
@@ -1339,7 +1571,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.autoPromoteMemoryCandidates(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'audit_memory_candidates',
     {
       title: 'Audit Memory Candidates',
@@ -1373,7 +1605,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.auditMemoryCandidates(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'reconcile_memory',
     {
       title: 'Reconcile Memory',
@@ -1400,7 +1632,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.reconcileMemory(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'promote_memory',
     {
       title: 'Promote Memory',
@@ -1428,7 +1660,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.promoteMemory(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'promote_memory_candidate',
     {
       title: 'Promote Memory Candidate',
@@ -1459,7 +1691,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.promoteMemoryCandidate(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'reject_memory_candidate',
     {
       title: 'Reject Memory Candidate',
@@ -1478,7 +1710,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.rejectMemoryCandidate(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'correct_memory',
     {
       title: 'Correct Memory',
@@ -1501,7 +1733,7 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.correctMemory(args)),
   );
 
-  server.registerTool(
+  registerTool(
     'deactivate_memory',
     {
       title: 'Deactivate Memory',
@@ -1520,18 +1752,61 @@ export function createContextForgeMcpServer({ app = createContextForge() } = {})
     async (args) => jsonResult(await app.deactivateMemory(args)),
   );
 
+  const duplicateDefinitions = toolDefinitions.filter((name, index) => toolDefinitions.indexOf(name) !== index);
+  const missingDefinitions = ALL_MCP_TOOL_NAMES.filter((name) => !toolDefinitions.includes(name));
+  const unknownDefinitions = toolDefinitions.filter((name) => !ALL_MCP_TOOL_NAMES.includes(name));
+  if (duplicateDefinitions.length > 0 || missingDefinitions.length > 0 || unknownDefinitions.length > 0) {
+    throw new Error(
+      `ContextForge MCP tool registry mismatch. Duplicate: ${duplicateDefinitions.join(', ') || 'none'}; missing: ${missingDefinitions.join(', ') || 'none'}; unknown: ${unknownDefinitions.join(', ') || 'none'}.`,
+    );
+  }
+  const registeredToolNames = toolRegistrations.map(({ name }) => name);
+  const missingTools = selection.enabledToolNames.filter((name) => !registeredToolNames.includes(name));
+  if (missingTools.length > 0) {
+    throw new Error(`ContextForge MCP profile references unregistered tool(s): ${missingTools.join(', ')}.`);
+  }
+  server.contextForgeSurface = mcpSurfaceInfo(toolRegistrations, selection);
   return server;
 }
 
-export async function startContextForgeMcpServer({ app } = {}) {
-  const server = createContextForgeMcpServer({ app });
+export async function startContextForgeMcpServer({ app, env = process.env, profile = null, tools = null } = {}) {
+  const server = createContextForgeMcpServer({ app, env, profile, tools });
   const transport = new StdioServerTransport();
   await server.connect(transport);
   return server;
 }
 
+function mcpCliOptions(argv) {
+  const options = {};
+  for (let index = 2; index < argv.length; index += 1) {
+    const token = argv[index];
+    if (token === '--describe-surface') {
+      options.describeSurface = true;
+      continue;
+    }
+    if (token === '--profile' || token === '--tools') {
+      const value = argv[index + 1];
+      if (!value || value.startsWith('--')) throw new Error(`${token} requires a value.`);
+      options[token.slice(2)] = value;
+      index += 1;
+      continue;
+    }
+    throw new Error(`Unknown MCP option: ${token}`);
+  }
+  return options;
+}
+
 if (process.argv[1] && import.meta.url === new URL(process.argv[1], 'file:').href) {
-  startContextForgeMcpServer().catch((error) => {
+  Promise.resolve().then(async () => {
+    const options = mcpCliOptions(process.argv);
+    if (options.describeSurface) {
+      const server = createContextForgeMcpServer({ profile: options.profile, tools: options.tools });
+      console.log(JSON.stringify(getContextForgeMcpSurfaceInfo(server), null, 2));
+      await server.close().catch(() => {});
+      return;
+    }
+    await startContextForgeMcpServer({ profile: options.profile, tools: options.tools });
+  }).catch((error) => {
     console.error(error.message);
     process.exitCode = 1;
   });

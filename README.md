@@ -331,6 +331,42 @@ setup commands is the most common source of confusion.
 - Use **HTTP remote mode** when memory must follow the same repo across
   different PCs or agent environments.
 
+### MCP Tool Profiles
+
+MCP exposes the bounded `agent-core` profile by default instead of preloading
+every maintenance and administration schema. Select a broader surface only for
+clients that need it:
+
+| Profile | Tools | Intended caller |
+| --- | ---: | --- |
+| `agent-core` | 24 | normal agent bootstrap, retrieval, evidence, distillation, and closeout |
+| `review` | 37 | candidate and durable-memory review |
+| `operator` | 54 | queues, retention, embeddings, usage, and server maintenance |
+| `workspace-admin` | 11 | workspace topology and scope migration |
+| `all` | 60 | compatibility with the pre-profile MCP surface |
+
+Set `CONTEXTFORGE_MCP_PROFILE`, or use `CONTEXTFORGE_MCP_TOOLS` as an exact
+comma-separated allowlist. An allowlist takes precedence over the profile;
+unknown profiles and tool names fail at startup. For local stdio, the equivalent
+CLI flags are `--profile` and `--tools`. For `node src/cli.js serve`, use
+`--mcpProfile` and `--mcpTools`.
+
+Inspect the selected surface without opening a transport:
+
+```bash
+node src/mcp.js --describe-surface --profile agent-core
+```
+
+The report includes enabled and disabled names, instruction/schema byte counts,
+per-tool description/schema counts, and a conservative initial-token estimate.
+The current default budget is at most 1,600 instruction bytes, 26,000 tool
+schema bytes, and 6,700 estimated tokens. Use `--profile all` temporarily when
+migrating an existing client that depended on the old full surface. Detailed
+workflow guidance lives in the packaged `contextforge-memory` skill; profile
+selection does not depend on that skill being installed.
+See [MCP Surface Budget](docs/mcp-surface-budget.md) for the reproducible
+transport measurements, selection contract, and host-token caveat.
+
 ### Local-Only Mode
 
 Use local-only mode when one machine owns its own memory and you do not need to
@@ -361,6 +397,10 @@ Register a local stdio MCP server:
 codex mcp add contextforge \
   -- node /path/to/contextforge/src/mcp.js
 ```
+
+To opt a dedicated operator client into maintenance tools, append
+`--profile operator`. Keep ordinary coding-agent registrations on the default
+`agent-core` surface.
 
 In local-only mode, do not set `CONTEXTFORGE_REMOTE_URL`. Each machine writes
 to its own SQLite database, so memories do not follow you across machines.
