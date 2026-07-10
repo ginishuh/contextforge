@@ -356,9 +356,14 @@ remote API 호출에는 `CONTEXTFORGE_REMOTE_TOKEN`이 필요하다.
 수정할 수 있다. API key는 write-only로 저장되며 응답에 노출되지 않는다.
 admin UI cookie는 기본적으로 `CONTEXTFORGE_ADMIN_COOKIE_SECURE=auto`로 동작한다.
 직접 HTTP 접속에서는 로컬 운영 세션이 동작하도록 non-`Secure` cookie를 쓰고,
-신뢰된 reverse proxy가 HTTPS 요청으로 표시한 경우에는 `Secure` cookie를 쓴다.
-Node가 직접 TLS를 종료하는 배포라면 `CONTEXTFORGE_ADMIN_COOKIE_SECURE=true`를
-설정하고, reverse proxy는 client가 보낸 `X-Forwarded-Proto`를 덮어써야 한다.
+기본값에서는 `X-Forwarded-For`와 `X-Forwarded-Proto`를 무시한다. Reverse proxy의
+IP/CIDR 목록을 `CONTEXTFORGE_TRUST_PROXY`에 명시해야 forwarded header를 사용한다.
+같은 머신의 proxy는 `loopback`, 여러 proxy network는 쉼표로 구분한 CIDR을 쓸 수
+있다. `true`는 모든 직접 peer를 신뢰하므로 ContextForge가 header를 덮어쓰는
+proxy를 통해서만 접근 가능한 경우에만 사용한다. Node가 직접 TLS를 종료하면
+`CONTEXTFORGE_ADMIN_COOKIE_SECURE=true`를 대신 설정한다. Reverse proxy는 client가
+보낸 forwarded header를 반드시 덮어써야 한다. Failed-login state는 기본
+`10000`개 key로 제한되며 `CONTEXTFORGE_ADMIN_LOGIN_MAX_KEYS`로 조정할 수 있다.
 
 ## 모델 분리
 
