@@ -1540,6 +1540,127 @@ export class ContextForgeStore {
     };
   }
 
+  listEmbeddingIndexRecords({ scopeType = null, scopeKey = null, limit = 5000, after = null } = {}) {
+    if (!this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'embedding_index'").get()) {
+      return [];
+    }
+    const filters = [];
+    const values = [];
+    if (scopeType) {
+      filters.push('scope_type = ?');
+      values.push(scopeType);
+    }
+    if (scopeKey) {
+      filters.push('scope_key = ?');
+      values.push(scopeKey);
+    }
+    if (after) {
+      filters.push('(updated_at > ? OR (updated_at = ? AND source_id > ?))');
+      values.push(after[0], after[0], after[1]);
+    }
+    values.push(Number(limit));
+    return this.db
+      .prepare(`
+        SELECT * FROM embedding_index
+        ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''}
+        ORDER BY updated_at ASC, source_id ASC
+        LIMIT ?
+      `)
+      .all(...values)
+      .map((row) => ({
+        sourceId: row.source_id,
+        sourceType: row.source_type,
+        scopeType: row.scope_type,
+        scopeKey: row.scope_key,
+        recordId: row.record_id,
+        model: row.model,
+        dimensions: row.dimensions,
+        contentHash: row.content_hash,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      }));
+  }
+
+  embeddingModelCounts({ scopeType = null, scopeKey = null } = {}) {
+    if (!this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'embedding_index'").get()) {
+      return [];
+    }
+    const filters = [];
+    const values = [];
+    if (scopeType) {
+      filters.push('scope_type = ?');
+      values.push(scopeType);
+    }
+    if (scopeKey) {
+      filters.push('scope_key = ?');
+      values.push(scopeKey);
+    }
+    return this.db
+      .prepare(`
+        SELECT model, dimensions, COUNT(*) AS count
+        FROM embedding_index
+        ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''}
+        GROUP BY model, dimensions
+        ORDER BY count DESC, model ASC, dimensions ASC
+      `)
+      .all(...values)
+      .map((row) => ({ model: row.model, dimensions: row.dimensions, count: row.count }));
+  }
+
+  listOrphanEmbeddingVectorIds({ limit = 5000, after = null } = {}) {
+    if (
+      !this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'embedding_vec'").get() ||
+      !this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'embedding_index'").get()
+    ) {
+      return [];
+    }
+    const values = [];
+    const afterClause = after ? 'AND embedding_vec.source_id > ?' : '';
+    if (after) values.push(after);
+    values.push(Number(limit));
+    return this.db
+      .prepare(`
+        SELECT embedding_vec.source_id
+        FROM embedding_vec
+        LEFT JOIN embedding_index ON embedding_index.source_id = embedding_vec.source_id
+        WHERE embedding_index.source_id IS NULL
+        ${afterClause}
+        ORDER BY embedding_vec.source_id ASC
+        LIMIT ?
+      `)
+      .all(...values)
+      .map((row) => row.source_id);
+  }
+
+  deleteEmbeddingMaintenanceBatch({ sourceIds = [], vectorOnlySourceIds = [], jobIds = [] } = {}) {
+    return this.withTransaction(() => {
+      const result = { vectors: 0, indexRows: 0, jobs: 0 };
+      const hasVectorTable = Boolean(
+        this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'embedding_vec'").get(),
+      );
+      const hasIndexTable = Boolean(
+        this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'embedding_index'").get(),
+      );
+      const deleteVector = hasVectorTable
+        ? this.db.prepare('DELETE FROM embedding_vec WHERE source_id = ?')
+        : null;
+      const deleteIndex = hasIndexTable
+        ? this.db.prepare('DELETE FROM embedding_index WHERE source_id = ?')
+        : null;
+      const deleteJob = this.db.prepare('DELETE FROM embedding_jobs WHERE id = ?');
+      for (const sourceId of deleteVector ? [...new Set([...sourceIds, ...vectorOnlySourceIds])] : []) {
+        result.vectors += deleteVector.run(sourceId).changes;
+      }
+      for (const sourceId of deleteIndex ? [...new Set(sourceIds)] : []) {
+        result.indexRows += deleteIndex.run(sourceId).changes;
+      }
+      for (const jobId of [...new Set(jobIds)]) {
+        result.jobs += deleteJob.run(jobId).changes;
+      }
+      return result;
+    });
+  }
+
   enqueueEmbeddingJobs(sources, { model, dimensions, force = false } = {}) {
     if (!model) throw new Error('model is required.');
     const parsedDimensions = validateDimensions(dimensions);
@@ -1644,6 +1765,33 @@ export class ContextForgeStore {
         ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
         ORDER BY updated_at ASC, id ASC
         ${limitClause}
+      `)
+      .all(...values)
+      .map(hydrateEmbeddingJob);
+  }
+
+  listTerminalEmbeddingJobs({ scopeType = null, scopeKey = null, limit = 5000, after = null } = {}) {
+    const conditions = ["status IN ('completed', 'failed')"];
+    const values = [];
+    if (scopeType) {
+      conditions.push('scope_type = ?');
+      values.push(scopeType);
+    }
+    if (scopeKey) {
+      conditions.push('scope_key = ?');
+      values.push(scopeKey);
+    }
+    if (after) {
+      conditions.push('(updated_at > ? OR (updated_at = ? AND id > ?))');
+      values.push(after[0], after[0], after[1]);
+    }
+    values.push(Number(limit));
+    return this.db
+      .prepare(`
+        SELECT * FROM embedding_jobs
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY updated_at ASC, id ASC
+        LIMIT ?
       `)
       .all(...values)
       .map(hydrateEmbeddingJob);

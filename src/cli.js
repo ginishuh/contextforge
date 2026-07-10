@@ -265,9 +265,14 @@ function toCoreOptions(options) {
     confidence: options.confidence == null ? undefined : Number(options.confidence),
     batchSize: options.batchSize == null ? undefined : Number(options.batchSize),
     force: options.force === true || options.force === 'true',
+    includeRetired: options.includeRetired === true || options.includeRetired === 'true',
+    confirmMassRetired: options.confirmMassRetired === true || options.confirmMassRetired === 'true',
+    includeInventory: options.includeInventory === true || options.includeInventory === 'true',
     includeEvents: options.includeEvents === true || options.includeEvents === 'true',
     retryFailed: options.retryFailed === true || options.retryFailed === 'true',
     staleAfterMs: options.staleAfterMs == null ? undefined : Number(options.staleAfterMs),
+    completedJobRetentionDays:
+      options.completedJobRetentionDays == null ? undefined : Number(options.completedJobRetentionDays),
   };
 }
 
@@ -342,6 +347,8 @@ async function main() {
     auditMemoryCandidates: (app, coreOptions) => app.auditMemoryCandidates(coreOptions),
     autoPromoteMemoryCandidates: (app, coreOptions) => app.autoPromoteMemoryCandidates(coreOptions),
     search: (app, coreOptions) => app.search(coreOptions),
+    embeddingInventory: (app, coreOptions) => app.embeddingInventory(coreOptions),
+    pruneEmbeddingArtifacts: (app, coreOptions) => app.pruneEmbeddingArtifacts(coreOptions),
     rebuildEmbeddings: (app, coreOptions) => app.rebuildEmbeddings(coreOptions),
     processEmbeddingJobs: (app, coreOptions) => app.processEmbeddingJobs(coreOptions),
     evalRetrieval: (_app, coreOptions) => runRetrievalEval(coreOptions),

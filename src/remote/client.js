@@ -56,6 +56,8 @@ const REMOTE_METHODS = [
   'getMemory',
   'listMemories',
   'search',
+  'embeddingInventory',
+  'pruneEmbeddingArtifacts',
   'rebuildEmbeddings',
   'processEmbeddingJobs',
   'listEmbeddingJobs',
@@ -103,6 +105,8 @@ const OPTIONALLY_SCOPED_REMOTE_METHODS = new Set([
   'cancelJob',
   'listDueDistillSessions',
   'processDueDistills',
+  'embeddingInventory',
+  'pruneEmbeddingArtifacts',
 ]);
 
 const LONG_RUNNING_PROVIDER_METHODS = new Set([

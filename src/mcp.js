@@ -63,6 +63,8 @@ export const ALL_MCP_TOOL_NAMES = Object.freeze([
   'list_due_consolidations',
   'process_consolidations',
   'search',
+  'embedding_inventory',
+  'prune_embedding_artifacts',
   'rebuild_embeddings',
   'process_embedding_jobs',
   'list_embedding_jobs',
@@ -997,6 +999,53 @@ export function createContextForgeMcpServer({
       },
     },
     async (args) => jsonResult(await app.search(args)),
+  );
+
+  registerTool(
+    'embedding_inventory',
+    {
+      title: 'Embedding Maintenance Inventory',
+      description: 'Inspect orphaned, inactive, stale-hash, retired-model, and old completed embedding artifacts without deleting them.',
+      inputSchema: {
+        ...scopedSchema,
+        scanLimit: z.number().int().positive().max(50000).optional(),
+        completedJobRetentionDays: z.number().int().positive().optional(),
+        cursor: z.string().optional(),
+      },
+      annotations: {
+        title: 'Embedding Maintenance Inventory',
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.embeddingInventory(args)),
+  );
+
+  registerTool(
+    'prune_embedding_artifacts',
+    {
+      title: 'Prune Embedding Artifacts',
+      description: 'Dry-run by default, then delete one bounded batch of eligible derived vector/index/job artifacts after backup and worker quiescence.',
+      inputSchema: {
+        ...scopedSchema,
+        scanLimit: z.number().int().positive().max(50000).optional(),
+        completedJobRetentionDays: z.number().int().positive().optional(),
+        cursor: z.string().optional(),
+        batchSize: z.number().int().positive().max(500).optional(),
+        dryRun: z.boolean().optional(),
+        force: z.boolean().optional(),
+        includeRetired: z.boolean().optional(),
+        confirmMassRetired: z.boolean().optional(),
+        includeInventory: z.boolean().optional(),
+      },
+      annotations: {
+        title: 'Prune Embedding Artifacts',
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+      },
+    },
+    async (args) => jsonResult(await app.pruneEmbeddingArtifacts(args)),
   );
 
   registerTool(

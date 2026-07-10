@@ -18,9 +18,9 @@ HTTP.
 | --- | ---: | ---: | ---: | ---: | ---: |
 | `agent-core` | 24 | 1,423 | 25,342 | 5,776 | 6,692 |
 | `review` | 37 | 1,423 | 37,749 | 7,822 | 9,793 |
-| `operator` | 54 | 1,423 | 53,568 | 10,912 | 13,748 |
+| `operator` | 56 | 1,423 | 55,389 | 11,159 | 14,203 |
 | `workspace-admin` | 11 | 1,423 | 8,888 | 2,061 | 2,578 |
-| `all` | 60 | 1,423 | 58,666 | 11,934 | 15,023 |
+| `all` | 62 | 1,423 | 60,487 | 12,181 | 15,478 |
 
 `estimatedInitialTokens` is `ceil((instructionsBytes + toolSchemaBytes) / 4)`.
 It is a conservative transport-level comparison, not a claim about a specific
@@ -30,7 +30,7 @@ Claude Code, and other hosts do not expose those final internal prompt token
 counts through the MCP protocol, so ContextForge reports the reproducible input
 bytes instead of inventing host-specific precision.
 
-The default `agent-core` surface is about 55% smaller than `all` by this token
+The default `agent-core` surface is about 57% smaller than `all` by this token
 estimate. Regression tests cap it at 1,600 instruction bytes, 26,000 tool-schema
 bytes, and 6,700 estimated tokens.
 

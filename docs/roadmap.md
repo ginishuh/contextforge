@@ -141,6 +141,8 @@ Tool surface:
 - `reject_memory_candidate`
 - `correct_memory`
 - `deactivate_memory`
+- `embedding_inventory`
+- `prune_embedding_artifacts`
 - `process_embedding_jobs`
 - `list_embedding_jobs`
 - `rebuild_embeddings`
@@ -209,6 +211,8 @@ Initial implementation:
 - sqlite-vec hybrid retrieval is available when embeddings are configured
 - embedding jobs decouple vector indexing from memory/checkpoint writes
 - `processEmbeddingJobs` retries failed work and resets stale `processing` jobs
+- `embeddingInventory` classifies derived-data lifecycle drift without writes
+- `pruneEmbeddingArtifacts` applies dry-run-first, bounded transactional GC
 - `dbInfo` and bootstrap storage metadata report vector readiness, stale
   sources, failed jobs, and degraded retrieval state
 - inactive memories remain excluded from search

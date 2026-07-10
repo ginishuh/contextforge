@@ -373,9 +373,9 @@ MCP는 기본적으로 모든 유지보수·관리 schema를 preload하지 않�
 | --- | ---: | --- |
 | `agent-core` | 24 | 일반 agent bootstrap, 검색, evidence, distill, closeout |
 | `review` | 37 | candidate와 durable memory 검토 |
-| `operator` | 54 | job, retention, embedding, usage, 서버 유지보수 |
+| `operator` | 56 | job, retention, embedding, usage, 서버 유지보수 |
 | `workspace-admin` | 11 | workspace topology와 scope migration |
-| `all` | 60 | 기존 전체 MCP surface 호환 |
+| `all` | 62 | 기존 도구 호환을 포함한 전체 MCP surface |
 
 `CONTEXTFORGE_MCP_PROFILE`로 프로필을 선택한다. 정확한 comma-separated
 allowlist가 필요하면 `CONTEXTFORGE_MCP_TOOLS`를 사용하며, 이 값은 프로필보다
@@ -719,6 +719,51 @@ dimensions: 1536
 embedding job은 checkpoint/memory write와 분리되어 있어서 실패해도 durable
 memory나 checkpoint가 사라지지 않는다. 실패하거나 멈춘 job은
 `processEmbeddingJobs`로 재시도할 수 있다.
+
+파생 embedding 데이터는 먼저 read-only inventory로 점검한다.
+
+```bash
+node src/cli.js embeddingInventory --scope repo --scopeKey github.com/example/repo
+```
+
+없는 source, inactive memory, rejected/stale/snoozed candidate, content hash
+불일치, 폐기된 model/dimension, 오래된 completed job을 분류한다. current
+source/model을 가진 failed job은 재시도 이력으로 보존하고 orphan/retired failed
+job만 GC 후보로 삼는다. index가 사라진
+vector-only row는 scope 근거도 함께 사라지므로 scoped inventory/GC에서는
+건드리지 않고 global inventory에서만 대상으로 삼는다. inventory scan은
+`scanLimit`으로 제한하고 보수적인 table별 truncation flag를 반환하지만,
+processing job 안전 검사는 항상 전체 status count를 사용한다. `nextCursor`가
+있으면 `--cursor`로 넘겨 index, terminal job, vector-only keyset scan을 이어간다.
+plan이 비어도 `nextCursor`가 null일 때만 전체 순회가 끝난 것이다. GC 응답은
+non-dry 실행에서 `needsRescan=true`를 먼저 처리해야 한다. 이때는 같은 입력
+cursor(첫 page면 cursor 없음)로 반복하고, `needsRescan=false`가 된 뒤에만
+`nextCursor`로 전진한다.
+MCP/remote payload를 제한하려고 nested inventory를 기본 summary-only로 반환하며,
+진단에 전체 scan page가 필요할 때만 `--includeInventory true`를 사용한다.
+
+GC는 기본이 dry-run이며 한 번에 `batchSize`개만 transaction으로 삭제한다.
+
+```bash
+node src/cli.js pruneEmbeddingArtifacts --batchSize 100
+node src/cli.js pruneEmbeddingArtifacts --batchSize 100 --dryRun false
+node src/cli.js pruneEmbeddingArtifacts --batchSize 100 --cursor '<nextCursor>'
+```
+
+적용 전 canonical SQLite를 backup하고 embedding worker를 멈춰야 한다. 실행 중인
+`processing` job이 있으면 non-dry-run은 차단되며, 명시적 `--force true`만 이를
+우회한다. 현재 active memory와 pending/promoted candidate embedding은 보존한다.
+물리 파일 크기 회수는 별도로 SQLite `incremental_vacuum`을 실행한다. remote
+storage mode에서는 이 명령이 canonical server에서 실행되므로, operator 실행 전
+현재 checkout이 DB를 소유한다고 가정하지 말고 `dbInfo.connection`을 확인한다.
+retired model/dimension row는 embedding provider가 활성일 때만 분류하며,
+`--includeRetired true`를 추가로 명시하지 않으면 삭제 계획에서 제외한다. active
+provider와 다른 row가 전체 index의 절반 이상이면 non-dry retired cleanup은
+`--confirmMassRetired true`까지 명시해야 실행된다. content hash mismatch를 삭제한
+경우 응답의 `reindexSuggestedSourceIds`를 확인하고 embedding
+job을 처리하거나 의도적인 scoped rebuild를 실행한다.
+차단 응답은 `blockedRetry=true`, `needsRescan=true`를 반환하고 입력 cursor를
+유지한다. 차단 원인을 해소한 뒤 같은 cursor를 재시도하고 나서 전진한다.
 
 ## 안전 원칙
 

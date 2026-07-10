@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Added read-only embedding lifecycle inventory and dry-run-first bounded GC
+  across core, CLI, remote API, and the MCP `operator` profile. Inventory
+  classifies orphan sources, inactive memories, reviewed-out candidates,
+  content-hash drift, retired model/dimension rows, vector-only rows, and old
+  completed jobs. Destructive GC is transaction-batched, refuses active workers
+  unless forced, preserves current active memories, pending/promoted candidates,
+  and retryable failed-job history, and requires global mode for vector-only rows
+  whose scope can no longer be proven. Retired model/dimension cleanup requires
+  both an active embedding provider and explicit `includeRetired=true`, plus a
+  separate confirmation when most indexed rows would be retired.
+  Filter-bound keyset cursors let bounded inventory/GC calls advance across
+  large stores instead of repeatedly scanning the same oldest rows; destructive
+  batches rescan a capped page before advancing, and blocked calls preserve the
+  input cursor, so eligible rows are not skipped.
 - Added filter-bound opaque keyset cursors to public memory, raw-event,
   checkpoint, embedding-job, candidate, event, distill-run, and usage lists.
   Public arrays remain compatible but now default to 100 rows with a hard 500
@@ -18,8 +32,8 @@
   stdio/HTTP parity, startup validation, and a surface-report command that
   measures instructions, schemas, descriptions, and estimated prompt tokens.
   The compact server instructions now defer detailed workflows to the packaged
-  `contextforge-memory` skill; `all` preserves the former 60-tool surface during
-  migration.
+  `contextforge-memory` skill; `all` preserves the former surface and includes
+  newly added operator tools during migration.
 - Added SQLite-backed durable distill and candidate-audit jobs with idempotent
   submission, queued/running/succeeded/failed/cancelled states, bounded worker
   claims, renewable leases, crash recovery, retry limits, queued cancellation,
