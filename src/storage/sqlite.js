@@ -20,6 +20,16 @@ export class UnsupportedSchemaVersionError extends Error {
   }
 }
 
+export class OperationJobLeaseLostError extends Error {
+  constructor(jobId) {
+    super(`Operation job lease is no longer owned by this worker: ${jobId}`);
+    this.name = 'OperationJobLeaseLostError';
+    this.code = 'CONTEXTFORGE_JOB_LEASE_LOST';
+    this.retryable = true;
+    this.jobId = jobId;
+  }
+}
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -1103,7 +1113,7 @@ export class ContextForgeStore {
         ON distill_runs(job_id);
       CREATE INDEX IF NOT EXISTS idx_llm_usage_events_job
         ON llm_usage_events(job_id);
-      CREATE INDEX IF NOT EXISTS idx_checkpoints_operation_job
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_checkpoints_operation_job
         ON checkpoints(json_extract(metadata_json, '$.operationJobId'))
         WHERE json_extract(metadata_json, '$.operationJobId') IS NOT NULL;
     `);
@@ -2628,6 +2638,27 @@ export class ContextForgeStore {
       .map(hydrateRawEvent);
   }
 
+  getRawEventFingerprint({ scopeType, scopeKey, sessionId }) {
+    const row = this.db
+      .prepare(`
+        SELECT
+          COUNT(*) AS raw_event_count,
+          (
+            SELECT id FROM raw_events
+            WHERE scope_type = ? AND scope_key = ? AND session_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+          ) AS last_raw_event_id
+        FROM raw_events
+        WHERE scope_type = ? AND scope_key = ? AND session_id = ?
+      `)
+      .get(scopeType, scopeKey, sessionId, scopeType, scopeKey, sessionId);
+    return {
+      rawEventCount: Number(row?.raw_event_count || 0),
+      lastRawEventId: row?.last_raw_event_id || null,
+    };
+  }
+
   listRecentRawEvents({ scopeType, scopeKey, sessionId, limit = 5 }) {
     const parsedLimit = Number(limit);
     if (!Number.isInteger(parsedLimit) || parsedLimit <= 0) {
@@ -3805,12 +3836,38 @@ export class ContextForgeStore {
     );
   }
 
-  failOperationJob({ jobId, workerId, error, retryable = false, metadata = {} }) {
+  assertOperationJobLease({ jobId, workerId, attempt, now = new Date() }) {
+    const row = this.db
+      .prepare(`
+        SELECT * FROM operation_jobs
+        WHERE id = ?
+          AND status = 'running'
+          AND lease_owner = ?
+          AND attempts = ?
+          AND lease_expires_at > ?
+      `)
+      .get(jobId, workerId, Number(attempt), now.toISOString());
+    if (!row) throw new OperationJobLeaseLostError(jobId);
+    return hydrateOperationJob(row);
+  }
+
+  insertCheckpointForOperationJob(input, { jobId, workerId, attempt }) {
+    if (input?.metadata?.operationJobId !== jobId) {
+      throw new Error('Checkpoint operationJobId must match the claimed job id.');
+    }
+    return this.withTransaction(() => {
+      this.assertOperationJobLease({ jobId, workerId, attempt });
+      return this.insertCheckpoint(input);
+    });
+  }
+
+  failOperationJob({ jobId, workerId, error, retryable = false, result = {}, metadata = {} }) {
     const timestamp = nowIso();
     const row = this.db
       .prepare(`
         UPDATE operation_jobs
         SET status = CASE WHEN ? = 1 AND attempts < max_attempts THEN 'queued' ELSE 'failed' END,
+            result_json = ?,
             lease_owner = NULL,
             lease_expires_at = NULL,
             error_name = ?,
@@ -3825,6 +3882,7 @@ export class ContextForgeStore {
       `)
       .get(
         retryable ? 1 : 0,
+        json(result, {}),
         error?.name || 'Error',
         error?.message || String(error),
         error?.code || null,

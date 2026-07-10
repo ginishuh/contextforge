@@ -7640,6 +7640,72 @@ test('operation job workers renew leases while provider work is still running', 
   assert.equal(completed.succeeded, 1);
 });
 
+test('lost operation job leases fence stale checkpoint side effects', async () => {
+  const dataDir = await makeTempDir();
+  let invocations = 0;
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'fenced_job_provider',
+    },
+    cwd: process.cwd(),
+    distillProviders: {
+      fenced_job_provider: async () => {
+        invocations += 1;
+        return {
+          summaryShort: 'Fenced checkpoint.',
+          summaryText: 'Only the current lease owner may commit this checkpoint.',
+          decisions: [],
+          todos: [],
+          openQuestions: [],
+          memoryCandidates: [],
+        };
+      },
+    },
+  });
+  const source = { scope: 'repo', scopeKey: 'fenced-job-repo', sessionId: 'fenced-job-session' };
+  app.appendRaw({ ...source, role: 'assistant', content: 'Fence stale worker side effects.' });
+  const submitted = app.submitDistillJob(source);
+  const store = new ContextForgeStore({ dataDir });
+  const startedAt = new Date();
+  const [staleClaim] = store.claimOperationJobs({
+    workerId: 'stale-worker',
+    leaseMs: 50,
+    now: startedAt,
+  });
+  const [replacementClaim] = store.claimOperationJobs({
+    workerId: 'replacement-worker',
+    leaseMs: 60000,
+    now: new Date(startedAt.getTime() + 100),
+  });
+  store.close();
+  assert.equal(staleClaim.attempts, 1);
+  assert.equal(replacementClaim.attempts, 2);
+
+  await assert.rejects(
+    () =>
+      app.distillCheckpoint({
+        ...source,
+        jobId: submitted.jobId,
+        _jobLeaseOwner: 'stale-worker',
+        _jobLeaseAttempt: 1,
+      }),
+    (error) => error.code === 'CONTEXTFORGE_JOB_LEASE_LOST',
+  );
+  assert.equal(app.listCheckpoints(source).length, 0);
+  assert.equal(app.getWorkingSummary(source), null);
+
+  const checkpoint = await app.distillCheckpoint({
+    ...source,
+    jobId: submitted.jobId,
+    _jobLeaseOwner: 'replacement-worker',
+    _jobLeaseAttempt: 2,
+  });
+  assert.equal(checkpoint.summaryShort, 'Fenced checkpoint.');
+  assert.equal(app.listCheckpoints(source).length, 1);
+  assert.equal(invocations, 2);
+});
+
 test('durable audit jobs persist job provenance without promoting memory', async () => {
   const dataDir = await makeTempDir();
   let auditInvocations = 0;
@@ -7651,6 +7717,9 @@ test('durable audit jobs persist job provenance without promoting memory', async
     cwd: process.cwd(),
     autoPromoteAuditor: async () => {
       auditInvocations += 1;
+      if (auditInvocations === 1) {
+        throw new ProviderTimeoutError('audit_job_provider', 10);
+      }
       return {
         approved: true,
         decision: 'approve',
@@ -7689,13 +7758,26 @@ test('durable audit jobs persist job provenance without promoting memory', async
   const checkpoint = await app.distillCheckpoint(source);
   const submitted = app.submitAuditJob({
     ...source,
+    trigger: 'manual_closeout',
+    maxAttempts: 2,
+  });
+  const checkpointSubmission = app.submitAuditJob({
+    scope: source.scope,
+    scopeKey: source.scopeKey,
     checkpointId: checkpoint.id,
     trigger: 'manual_closeout',
+    maxAttempts: 2,
   });
+  assert.equal(checkpointSubmission.jobId, submitted.jobId);
   assert.equal(auditInvocations, 0);
-  const processed = await app.processJobs({ workerId: 'audit-worker', operation: 'audit_memory_candidates' });
+  const firstAttempt = await app.processJobs({ workerId: 'audit-worker-1', operation: 'audit_memory_candidates' });
+  assert.equal(firstAttempt.failed, 1);
+  assert.equal(firstAttempt.requeued, 1);
+  assert.equal(firstAttempt.jobs[0].status, 'queued');
+  assert.equal(firstAttempt.jobs[0].result.audit.needsRetry, true);
+  const processed = await app.processJobs({ workerId: 'audit-worker-2', operation: 'audit_memory_candidates' });
   assert.equal(processed.succeeded, 1);
-  assert.equal(auditInvocations, 1);
+  assert.equal(auditInvocations, 2);
   const [candidate] = app.listMemoryCandidates({ ...source, checkpointId: checkpoint.id, status: 'pending' });
   assert.equal(candidate.reviewMetadata.auditMetadata.operationJobId, submitted.jobId);
   assert.equal(app.getMemory({ ...source, key: 'durable-audit-runbook' }), null);
