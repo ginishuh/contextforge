@@ -21,6 +21,11 @@ const consultReasonSchema = z.enum([
 ]);
 const metadataSchema = z.record(z.string(), z.unknown());
 const optionalTags = z.array(z.string()).optional();
+const pageSchema = {
+  limit: z.number().int().positive().max(500).optional(),
+  cursor: z.string().optional(),
+  page: z.boolean().optional(),
+};
 const workspaceRuleJsonSchema = z.record(z.string(), z.array(z.string()));
 const closeoutTriggerSchema = z.enum([
   'agent_merged_pr',
@@ -967,7 +972,7 @@ export function createContextForgeMcpServer({
     {
       title: 'Search Memory',
       description:
-        'Search bounded indexed scoped memory. Results can be reviewed memory, checkpoint, or unreviewed memory_candidate. includeDiagnostics returns an envelope even for zero hits. The per-index window is min(max(limit*4,50),candidateLimit), hard-capped at 500; results cap at 100. legacyFullScan enables linear substring diagnosis only. Use repoPath/cwd or scopeKey for repo identity and workspaceKey for bounded workspace federation.',
+        'Search bounded indexed memory/checkpoint/memory_candidate results. includeDiagnostics preserves zero-hit metrics. Window=min(max(limit*4,50),candidateLimit), capped at 500; results at 100. legacyFullScan is diagnostic only. Use scope or workspaceKey for bounded workspace federation.',
       inputSchema: {
         ...scopedSchema,
         query: z.string(),
@@ -1046,7 +1051,7 @@ export function createContextForgeMcpServer({
       inputSchema: {
         ...scopedSchema,
         status: z.enum(['pending', 'processing', 'completed', 'failed']).optional(),
-        limit: z.number().int().positive().optional(),
+        ...pageSchema,
       },
       annotations: {
         title: 'List Embedding Jobs',
@@ -1169,6 +1174,7 @@ export function createContextForgeMcpServer({
         ...scopedSchema,
         sessionId: z.string().optional(),
         level: z.number().int().nonnegative().optional(),
+        ...pageSchema,
       },
       annotations: {
         title: 'List Checkpoints',
@@ -1295,7 +1301,7 @@ export function createContextForgeMcpServer({
         jobId: z.string().optional(),
         operation: z.string().optional(),
         provider: z.string().optional(),
-        limit: z.number().int().positive().optional(),
+        ...pageSchema,
         order: z.enum(['asc', 'desc']).optional(),
       },
       annotations: {
@@ -1343,6 +1349,7 @@ export function createContextForgeMcpServer({
       inputSchema: {
         ...scopedSchema,
         key: z.string(),
+        ...pageSchema,
       },
       annotations: {
         title: 'List Memory Events',
@@ -1367,7 +1374,7 @@ export function createContextForgeMcpServer({
         candidateType: z.string().optional(),
         promotionRecommendation: z.string().optional(),
         sort: z.enum(['created', 'recommendation']).optional(),
-        limit: z.number().int().positive().optional(),
+        ...pageSchema,
       },
       annotations: {
         title: 'List Memory Candidates',
@@ -1387,7 +1394,7 @@ export function createContextForgeMcpServer({
       inputSchema: {
         ...scopedSchema,
         status: z.enum(['active', 'weakened', 'superseded', 'rejected']).optional(),
-        limit: z.number().int().positive().optional(),
+        ...pageSchema,
       },
       annotations: {
         title: 'List Preference Occurrences',
@@ -1410,7 +1417,7 @@ export function createContextForgeMcpServer({
         action: z
           .enum(['correct_memory', 'deactivate_memory', 'merge_duplicate_memories', 'add_corrective_note'])
           .optional(),
-        limit: z.number().int().positive().optional(),
+        ...pageSchema,
       },
       annotations: {
         title: 'List Memory Update Candidates',

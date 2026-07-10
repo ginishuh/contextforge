@@ -116,6 +116,8 @@ function toCoreOptions(options) {
     candidateLimit: options.candidateLimit == null ? undefined : Number(options.candidateLimit),
     legacyFullScan: cliBooleanOption(options.legacyFullScan, 'legacyFullScan'),
     includeDiagnostics: cliBooleanOption(options.includeDiagnostics, 'includeDiagnostics'),
+    cursor: options.cursor,
+    page: cliBooleanOption(options.page, 'page'),
     clusterId: options.clusterId,
     consultReason: options.consultReason,
     limit: options.limit == null ? 10 : Number(options.limit),
@@ -325,10 +327,14 @@ async function main() {
     rejectMemoryCandidate: (app, coreOptions) => app.rejectMemoryCandidate(coreOptions),
     correctMemory: (app, coreOptions) => app.correctMemory(coreOptions),
     deactivateMemory: (app, coreOptions) => app.deactivateMemory(coreOptions),
-    listMemoryEvents: (app, coreOptions) => app.listMemoryEvents(coreOptions),
-    listMemoryCandidates: (app, coreOptions) => app.listMemoryCandidates(coreOptions),
-    listPreferenceOccurrences: (app, coreOptions) => app.listPreferenceOccurrences(coreOptions),
-    listMemoryUpdateCandidates: (app, coreOptions) => app.listMemoryUpdateCandidates(coreOptions),
+    listMemoryEvents: (app, coreOptions, rawOptions) =>
+      app.listMemoryEvents(preserveCoreLimitDefault(coreOptions, rawOptions)),
+    listMemoryCandidates: (app, coreOptions, rawOptions) =>
+      app.listMemoryCandidates(preserveCoreLimitDefault(coreOptions, rawOptions)),
+    listPreferenceOccurrences: (app, coreOptions, rawOptions) =>
+      app.listPreferenceOccurrences(preserveCoreLimitDefault(coreOptions, rawOptions)),
+    listMemoryUpdateCandidates: (app, coreOptions, rawOptions) =>
+      app.listMemoryUpdateCandidates(preserveCoreLimitDefault(coreOptions, rawOptions)),
     auditMemoryDuplicates: (app, coreOptions) => app.auditMemoryDuplicates(coreOptions),
     applyMemoryUpdateCandidate: (app, coreOptions) => app.applyMemoryUpdateCandidate(coreOptions),
     rejectMemoryUpdateCandidate: (app, coreOptions) => app.rejectMemoryUpdateCandidate(coreOptions),
@@ -339,20 +345,26 @@ async function main() {
     rebuildEmbeddings: (app, coreOptions) => app.rebuildEmbeddings(coreOptions),
     processEmbeddingJobs: (app, coreOptions) => app.processEmbeddingJobs(coreOptions),
     evalRetrieval: (_app, coreOptions) => runRetrievalEval(coreOptions),
-    listEmbeddingJobs: (app, coreOptions) => app.listEmbeddingJobs(coreOptions),
+    listEmbeddingJobs: (app, coreOptions, rawOptions) =>
+      app.listEmbeddingJobs(preserveCoreLimitDefault(coreOptions, rawOptions)),
     listScopeKeys: (app, coreOptions) => app.listScopeKeys(coreOptions),
     getMemory: (app, coreOptions) => app.getMemory(coreOptions),
-    listMemories: (app, coreOptions) => app.listMemories(coreOptions),
+    listMemories: (app, coreOptions, rawOptions) =>
+      app.listMemories(preserveCoreLimitDefault(coreOptions, rawOptions)),
     appendRaw: (app, coreOptions) => app.appendRaw(coreOptions),
-    listRawEvents: (app, coreOptions) => app.listRawEvents(coreOptions),
-    listCheckpoints: (app, coreOptions) => app.listCheckpoints(coreOptions),
+    listRawEvents: (app, coreOptions, rawOptions) =>
+      app.listRawEvents(preserveCoreLimitDefault(coreOptions, rawOptions)),
+    listCheckpoints: (app, coreOptions, rawOptions) =>
+      app.listCheckpoints(preserveCoreLimitDefault(coreOptions, rawOptions)),
     getWorkingSummary: (app, coreOptions) => app.getWorkingSummary(coreOptions),
     getSessionWorkingContext: (app, coreOptions) => app.getSessionWorkingContext(coreOptions),
     upsertSessionWorkingContext: (app, coreOptions) => app.upsertSessionWorkingContext(coreOptions),
     pruneRawEvents: (app, coreOptions) => app.pruneRawEvents(coreOptions),
     distillCheckpoint: (app, coreOptions) => app.distillCheckpoint(coreOptions),
-    listDistillRuns: (app, coreOptions) => app.listDistillRuns(coreOptions),
-    listLlmUsageEvents: (app, coreOptions) => app.listLlmUsageEvents(coreOptions),
+    listDistillRuns: (app, coreOptions, rawOptions) =>
+      app.listDistillRuns(preserveCoreLimitDefault(coreOptions, rawOptions)),
+    listLlmUsageEvents: (app, coreOptions, rawOptions) =>
+      app.listLlmUsageEvents(preserveCoreLimitDefault(coreOptions, rawOptions)),
     llmUsageRollup: (app, coreOptions) => app.llmUsageRollup(coreOptions),
     distillUsage: (app, coreOptions) => app.distillUsage(coreOptions),
     ingestCodexRollout: (app, coreOptions) => ingestCodexRolloutFile(app, coreOptions),
@@ -439,7 +451,40 @@ async function main() {
   if (!handler) {
     throw new Error(`Unknown command: ${command}`);
   }
-  const result = await handler(app, coreOptions, options);
+  let result;
+  if (cliBooleanOption(options.allPages, 'allPages')) {
+    const pageableCommands = new Set([
+      'listMemories',
+      'listRawEvents',
+      'listCheckpoints',
+      'listEmbeddingJobs',
+      'listMemoryCandidates',
+      'listMemoryEvents',
+      'listPreferenceOccurrences',
+      'listMemoryUpdateCandidates',
+      'listDistillRuns',
+      'listLlmUsageEvents',
+    ]);
+    if (!pageableCommands.has(command)) {
+      throw new Error(`--allPages is not supported for ${command}.`);
+    }
+    const items = [];
+    let cursor = options.cursor || null;
+    let pages = 0;
+    do {
+      const page = await handler(app, { ...coreOptions, page: true, cursor }, { ...options, page: true, cursor });
+      if (!page || !Array.isArray(page.items) || !page.page) {
+        throw new Error(`${command} did not return a paginated response.`);
+      }
+      items.push(...page.items);
+      cursor = page.page.nextCursor;
+      pages += 1;
+      if (pages > 10000) throw new Error(`${command} exceeded the --allPages safety limit.`);
+    } while (cursor);
+    result = { kind: `${command}_all_pages`, items, pages, returned: items.length };
+  } else {
+    result = await handler(app, coreOptions, options);
+  }
   printJson(result);
   if (result?.kind === 'retrieval_eval' && Number(result.failed || 0) > 0) {
     process.exitCode = 1;

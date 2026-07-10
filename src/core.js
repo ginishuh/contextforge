@@ -10,6 +10,7 @@ import { createEmbeddingProvider } from './embeddings/index.js';
 import { normalizeAgentAdapterIds } from './ingest/agents.js';
 import { createRemoteContextForge } from './remote/client.js';
 import { searchMemories } from './retrieval/search.js';
+import { compatiblePageResponse, pageResult, resolvePageRequest } from './pagination.js';
 import {
   assertProviderTimeoutFitsClient,
   providerFailureRetryable,
@@ -225,6 +226,18 @@ function positiveInteger(value, name) {
     throw new Error(`${name} must be a positive integer.`);
   }
   return parsed;
+}
+
+function pagedList({ kind, filters, options, load, positionForItem }) {
+  const request = resolvePageRequest({
+    kind,
+    filters,
+    limit: options.limit,
+    cursor: options.cursor,
+    page: options.page,
+  });
+  const items = load({ limit: request.limit + 1, after: request.position });
+  return compatiblePageResponse(pageResult(items, request, positionForItem), request);
 }
 
 const CONSULT_REASONS = new Set([
@@ -5152,48 +5165,65 @@ export function createContextForge(options = {}) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.key, 'key');
       return useStore((store) =>
-        store.listMemoryEvents({
-          ...scope,
-          key: options.key,
+        pagedList({
+          kind: 'memory_events',
+          filters: { ...scope, key: options.key },
+          options,
+          load: ({ limit, after }) => store.listMemoryEvents({ ...scope, key: options.key, limit, after }),
+          positionForItem: (item) => [item.createdAt, item.id],
         }),
       );
     },
 
     listMemoryCandidates(options) {
       const scope = normalizeScopeOptions(options, config);
+      if ((options.page || options.cursor) && options.sort === 'recommendation') {
+        throw new Error('Cursor pagination does not support recommendation-sorted memory candidates.');
+      }
+      const filters = {
+        ...scope,
+        sessionId: options.sessionId || null,
+        checkpointId: options.checkpointId || null,
+        status: options.status || null,
+        candidateType: options.candidateType || null,
+        promotionRecommendation: options.promotionRecommendation || null,
+        sort: options.sort || null,
+      };
       return useStore((store) =>
-        store.listMemoryCandidates({
-          ...scope,
-          sessionId: options.sessionId || null,
-          checkpointId: options.checkpointId || null,
-          status: options.status || null,
-          candidateType: options.candidateType || null,
-          promotionRecommendation: options.promotionRecommendation || null,
-          sort: options.sort || null,
-          limit: options.limit == null ? null : Number(options.limit),
+        pagedList({
+          kind: 'memory_candidates',
+          filters,
+          options,
+          load: ({ limit, after }) => store.listMemoryCandidates({ ...filters, limit, after }),
+          positionForItem: (item) => [item.createdAt, item.id],
         }),
       );
     },
 
     listPreferenceOccurrences(options) {
       const scope = normalizeScopeOptions(options, config);
+      const filters = { ...scope, status: options.status || null };
       return useStore((store) =>
-        store.listPreferenceOccurrences({
-          ...scope,
-          status: options.status || null,
-          limit: options.limit == null ? null : Number(options.limit),
+        pagedList({
+          kind: 'preference_occurrences',
+          filters,
+          options,
+          load: ({ limit, after }) => store.listPreferenceOccurrences({ ...filters, limit, after }),
+          positionForItem: (item) => [item.occurrenceCount, item.updatedAt, item.id],
         }),
       );
     },
 
     listMemoryUpdateCandidates(options) {
       const scope = normalizeScopeOptions(options, config);
+      const filters = { ...scope, status: options.status || null, action: options.action || null };
       return useStore((store) =>
-        store.listMemoryUpdateCandidates({
-          ...scope,
-          status: options.status || null,
-          action: options.action || null,
-          limit: options.limit == null ? null : Number(options.limit),
+        pagedList({
+          kind: 'memory_update_candidates',
+          filters,
+          options,
+          load: ({ limit, after }) => store.listMemoryUpdateCandidates({ ...filters, limit, after }),
+          positionForItem: (item) => [item.createdAt, item.id],
         }),
       );
     },
@@ -6752,12 +6782,14 @@ export function createContextForge(options = {}) {
 
     listMemories(options = {}) {
       const scope = normalizeScopeOptions(options, config);
+      const filters = { ...scope, status: options.status || 'active', query: options.query || null };
       return useStore((store) =>
-        store.listMemoriesForAdmin({
-          ...scope,
-          status: options.status || 'active',
-          query: options.query || null,
-          limit: options.limit == null ? 100 : Number(options.limit),
+        pagedList({
+          kind: 'memories',
+          filters,
+          options,
+          load: ({ limit, after }) => store.listMemoriesForAdmin({ ...filters, limit, after }),
+          positionForItem: (item) => [item.importance, item.updatedAt, item.key],
         }),
       );
     },
@@ -6940,12 +6972,18 @@ export function createContextForge(options = {}) {
     listEmbeddingJobs(options = {}) {
       const scope = normalizeScopeOptions(options, config);
       const shouldNarrowScope = Boolean(options.scope || options.scopeKey || options.cwd || options.repoPath);
+      const filters = {
+        scopeType: shouldNarrowScope ? scope.scopeType : null,
+        scopeKey: shouldNarrowScope ? scope.scopeKey : null,
+        status: options.status || null,
+      };
       return useStore((store) =>
-        store.listEmbeddingJobs({
-          scopeType: shouldNarrowScope ? scope.scopeType : null,
-          scopeKey: shouldNarrowScope ? scope.scopeKey : null,
-          status: options.status || null,
-          limit: options.limit == null ? null : Number(options.limit),
+        pagedList({
+          kind: 'embedding_jobs',
+          filters,
+          options,
+          load: ({ limit, after }) => store.listEmbeddingJobs({ ...filters, limit, after }),
+          positionForItem: (item) => [item.updatedAt, item.id],
         }),
       );
     },
@@ -7002,7 +7040,16 @@ export function createContextForge(options = {}) {
     listRawEvents(options) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.sessionId, 'sessionId');
-      return useStore((store) => store.listRawEvents({ ...scope, sessionId: options.sessionId }));
+      const filters = { ...scope, sessionId: options.sessionId };
+      return useStore((store) =>
+        pagedList({
+          kind: 'raw_events',
+          filters,
+          options,
+          load: ({ limit, after }) => store.listRawEvents({ ...filters, limit, after }),
+          positionForItem: (item) => [item.createdAt, item.id],
+        }),
+      );
     },
 
     listDueConsolidations(options = {}) {
@@ -7326,11 +7373,18 @@ export function createContextForge(options = {}) {
 
     listCheckpoints(options) {
       const scope = normalizeScopeOptions(options, config);
+      const filters = {
+        ...scope,
+        sessionId: options.sessionId || null,
+        level: options.level == null ? null : Number(options.level),
+      };
       return useStore((store) =>
-        store.listCheckpoints({
-          ...scope,
-          sessionId: options.sessionId || null,
-          level: options.level == null ? null : Number(options.level),
+        pagedList({
+          kind: 'checkpoints',
+          filters,
+          options,
+          load: ({ limit, after }) => store.listCheckpoints({ ...filters, limit, after }),
+          positionForItem: (item) => [item.createdAt, item.id],
         }),
       );
     },
@@ -8104,14 +8158,20 @@ export function createContextForge(options = {}) {
 
     listDistillRuns(options) {
       const scope = normalizeScopeOptions(options, config);
+      const filters = {
+        ...scope,
+        sessionId: options.sessionId || null,
+        status: options.status || null,
+        provider: options.provider || null,
+        order: options.order || 'asc',
+      };
       return useStore((store) =>
-        store.listDistillRuns({
-          ...scope,
-          sessionId: options.sessionId || null,
-          status: options.status || null,
-          provider: options.provider || null,
-          limit: options.limit == null ? null : Number(options.limit),
-          order: options.order || 'asc',
+        pagedList({
+          kind: 'distill_runs',
+          filters,
+          options,
+          load: ({ limit, after }) => store.listDistillRuns({ ...filters, limit, after }),
+          positionForItem: (item) => [item.createdAt, item.id],
         }),
       );
     },
@@ -8131,18 +8191,24 @@ export function createContextForge(options = {}) {
 
     listLlmUsageEvents(options) {
       const scope = normalizeScopeOptions(options, config);
+      const filters = {
+        ...scope,
+        sessionId: options.sessionId || null,
+        distillRunId: options.distillRunId || null,
+        checkpointId: options.checkpointId || null,
+        candidateId: options.candidateId || null,
+        jobId: options.jobId || null,
+        operation: options.operation || null,
+        provider: options.provider || null,
+        order: options.order || 'desc',
+      };
       return useStore((store) =>
-        store.listLlmUsageEvents({
-          ...scope,
-          sessionId: options.sessionId || null,
-          distillRunId: options.distillRunId || null,
-          checkpointId: options.checkpointId || null,
-          candidateId: options.candidateId || null,
-          jobId: options.jobId || null,
-          operation: options.operation || null,
-          provider: options.provider || null,
-          limit: options.limit == null ? 100 : Number(options.limit),
-          order: options.order || 'desc',
+        pagedList({
+          kind: 'llm_usage_events',
+          filters,
+          options,
+          load: ({ limit, after }) => store.listLlmUsageEvents({ ...filters, limit, after }),
+          positionForItem: (item) => [item.startedAt, item.id],
         }),
       );
     },

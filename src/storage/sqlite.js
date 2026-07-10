@@ -1614,7 +1614,7 @@ export class ContextForgeStore {
     return hydrateEmbeddingJob(row);
   }
 
-  listEmbeddingJobs({ scopeType = null, scopeKey = null, status = null, limit = null } = {}) {
+  listEmbeddingJobs({ scopeType = null, scopeKey = null, status = null, limit = null, after = null } = {}) {
     const conditions = [];
     const values = [];
     if (scopeType) {
@@ -1628,6 +1628,10 @@ export class ContextForgeStore {
     if (status) {
       conditions.push('status = ?');
       values.push(status);
+    }
+    if (after) {
+      conditions.push('(updated_at > ? OR (updated_at = ? AND id > ?))');
+      values.push(after[0], after[0], after[1]);
     }
     const parsedLimit = limit == null ? null : Number(limit);
     const limitClause = Number.isInteger(parsedLimit) && parsedLimit > 0 ? 'LIMIT ?' : '';
@@ -2507,7 +2511,7 @@ export class ContextForgeStore {
       .map(hydrateMemory);
   }
 
-  listMemoriesForAdmin({ scopeType, scopeKey, status = 'active', query = null, limit = 100 } = {}) {
+  listMemoriesForAdmin({ scopeType, scopeKey, status = 'active', query = null, limit = 100, after = null } = {}) {
     const filters = ['scope_type = ?', 'scope_key = ?'];
     const values = [scopeType, scopeKey];
     if (status && status !== 'all') {
@@ -2518,6 +2522,14 @@ export class ContextForgeStore {
       filters.push('(memory_key LIKE ? OR category LIKE ? OR content LIKE ? OR tags_json LIKE ?)');
       const pattern = `%${query}%`;
       values.push(pattern, pattern, pattern, pattern);
+    }
+    if (after) {
+      filters.push(`(
+        importance < ? OR
+        (importance = ? AND updated_at < ?) OR
+        (importance = ? AND updated_at = ? AND memory_key > ?)
+      )`);
+      values.push(Number(after[0]), Number(after[0]), after[1], Number(after[0]), after[1], after[2]);
     }
     values.push(Number(limit));
     return this.db
@@ -2575,19 +2587,29 @@ export class ContextForgeStore {
     return memory;
   }
 
-  listMemoryEvents({ scopeType, scopeKey, key }) {
+  listMemoryEvents({ scopeType, scopeKey, key, limit = null, after = null }) {
     const memory = this.getMemory({ scopeType, scopeKey, key });
     if (!memory) {
       throw new Error(`Memory not found: ${key}`);
     }
 
+    const filters = ['memory_id = ?'];
+    const values = [memory.id];
+    if (after) {
+      filters.push('(created_at > ? OR (created_at = ? AND id > ?))');
+      values.push(after[0], after[0], after[1]);
+    }
+    const parsedLimit = limit == null ? null : Number(limit);
+    const limitClause = Number.isInteger(parsedLimit) && parsedLimit > 0 ? 'LIMIT ?' : '';
+    if (limitClause) values.push(parsedLimit);
     return this.db
       .prepare(`
         SELECT * FROM memory_events
-        WHERE memory_id = ?
+        WHERE ${filters.join(' AND ')}
         ORDER BY created_at ASC, id ASC
+        ${limitClause}
       `)
-      .all(memory.id)
+      .all(...values)
       .map(hydrateMemoryEvent);
   }
 
@@ -2627,14 +2649,24 @@ export class ContextForgeStore {
     return hydrateRawEvent(row);
   }
 
-  listRawEvents({ scopeType, scopeKey, sessionId }) {
+  listRawEvents({ scopeType, scopeKey, sessionId, limit = null, after = null }) {
+    const filters = ['scope_type = ?', 'scope_key = ?', 'session_id = ?'];
+    const values = [scopeType, scopeKey, sessionId];
+    if (after) {
+      filters.push('(created_at > ? OR (created_at = ? AND id > ?))');
+      values.push(after[0], after[0], after[1]);
+    }
+    const parsedLimit = limit == null ? null : Number(limit);
+    const limitClause = Number.isInteger(parsedLimit) && parsedLimit > 0 ? 'LIMIT ?' : '';
+    if (limitClause) values.push(parsedLimit);
     return this.db
       .prepare(`
         SELECT * FROM raw_events
-        WHERE scope_type = ? AND scope_key = ? AND session_id = ?
+        WHERE ${filters.join(' AND ')}
         ORDER BY created_at ASC, id ASC
+        ${limitClause}
       `)
-      .all(scopeType, scopeKey, sessionId)
+      .all(...values)
       .map(hydrateRawEvent);
   }
 
@@ -2694,7 +2726,7 @@ export class ContextForgeStore {
     return hydrateCheckpoint(row);
   }
 
-  listCheckpoints({ scopeType, scopeKey, sessionId = null, level = null }) {
+  listCheckpoints({ scopeType, scopeKey, sessionId = null, level = null, limit = null, after = null }) {
     const filters = ['scope_type = ?', 'scope_key = ?'];
     const values = [scopeType, scopeKey];
     if (sessionId) {
@@ -2705,11 +2737,19 @@ export class ContextForgeStore {
       filters.push('level = ?');
       values.push(Number(level));
     }
+    if (after) {
+      filters.push('(created_at < ? OR (created_at = ? AND id < ?))');
+      values.push(after[0], after[0], after[1]);
+    }
+    const parsedLimit = limit == null ? null : Number(limit);
+    const limitClause = Number.isInteger(parsedLimit) && parsedLimit > 0 ? 'LIMIT ?' : '';
+    if (limitClause) values.push(parsedLimit);
     const rows = this.db
       .prepare(`
         SELECT * FROM checkpoints
         WHERE ${filters.join(' AND ')}
         ORDER BY created_at DESC, id DESC
+        ${limitClause}
       `)
       .all(...values);
 
@@ -2977,6 +3017,7 @@ export class ContextForgeStore {
     promotionRecommendation = null,
     sort = null,
     limit = null,
+    after = null,
   }) {
     const conditions = ['memory_candidate_index.scope_type = ?', 'memory_candidate_index.scope_key = ?'];
     const values = [scopeType, scopeKey];
@@ -2999,6 +3040,13 @@ export class ContextForgeStore {
     if (promotionRecommendation) {
       conditions.push('memory_candidate_index.promotion_recommendation = ?');
       values.push(promotionRecommendation);
+    }
+    if (after) {
+      conditions.push(`(
+        memory_candidate_index.created_at < ? OR
+        (memory_candidate_index.created_at = ? AND memory_candidate_index.id < ?)
+      )`);
+      values.push(after[0], after[0], after[1]);
     }
     const parsedLimit = limit == null ? null : Number(limit);
     const limitClause = Number.isInteger(parsedLimit) && parsedLimit > 0 ? 'LIMIT ?' : '';
@@ -3140,12 +3188,20 @@ export class ContextForgeStore {
     return hydratePreferenceOccurrence(row);
   }
 
-  listPreferenceOccurrences({ scopeType, scopeKey, status = null, limit = null }) {
+  listPreferenceOccurrences({ scopeType, scopeKey, status = null, limit = null, after = null }) {
     const conditions = ['scope_type = ?', 'scope_key = ?'];
     const values = [scopeType, scopeKey];
     if (status) {
       conditions.push('status = ?');
       values.push(status);
+    }
+    if (after) {
+      conditions.push(`(
+        occurrence_count < ? OR
+        (occurrence_count = ? AND updated_at < ?) OR
+        (occurrence_count = ? AND updated_at = ? AND id < ?)
+      )`);
+      values.push(Number(after[0]), Number(after[0]), after[1], Number(after[0]), after[1], after[2]);
     }
     const parsedLimit = limit == null ? null : Number(limit);
     const limitClause = Number.isInteger(parsedLimit) && parsedLimit > 0 ? 'LIMIT ?' : '';
@@ -3327,7 +3383,7 @@ export class ContextForgeStore {
     return hydrateMemoryUpdateCandidate(row);
   }
 
-  listMemoryUpdateCandidates({ scopeType, scopeKey, status = null, action = null, limit = null }) {
+  listMemoryUpdateCandidates({ scopeType, scopeKey, status = null, action = null, limit = null, after = null }) {
     const conditions = ['scope_type = ?', 'scope_key = ?'];
     const values = [scopeType, scopeKey];
     if (status) {
@@ -3337,6 +3393,10 @@ export class ContextForgeStore {
     if (action) {
       conditions.push('action = ?');
       values.push(action);
+    }
+    if (after) {
+      conditions.push('(created_at < ? OR (created_at = ? AND id < ?))');
+      values.push(after[0], after[0], after[1]);
     }
     const parsedLimit = limit == null ? null : Number(limit);
     const limitClause = Number.isInteger(parsedLimit) && parsedLimit > 0 ? 'LIMIT ?' : '';
@@ -4136,6 +4196,7 @@ export class ContextForgeStore {
     provider = null,
     limit = null,
     order = 'asc',
+    after = null,
   }) {
     const filters = ['scope_type = ?', 'scope_key = ?'];
     const values = [scopeType, scopeKey];
@@ -4167,10 +4228,15 @@ export class ContextForgeStore {
       filters.push('provider = ?');
       values.push(provider);
     }
+    const orderDirection = order === 'desc' ? 'DESC' : 'ASC';
+    if (after) {
+      const comparator = orderDirection === 'DESC' ? '<' : '>';
+      filters.push(`(started_at ${comparator} ? OR (started_at = ? AND id ${comparator} ?))`);
+      values.push(after[0], after[0], after[1]);
+    }
     const parsedLimit = limit == null ? null : Number(limit);
     const limitClause = Number.isInteger(parsedLimit) && parsedLimit > 0 ? 'LIMIT ?' : '';
     if (limitClause) values.push(parsedLimit);
-    const orderDirection = order === 'desc' ? 'DESC' : 'ASC';
     return this.db
       .prepare(`
         SELECT * FROM llm_usage_events
@@ -4182,7 +4248,16 @@ export class ContextForgeStore {
       .map(hydrateLlmUsageEvent);
   }
 
-  listDistillRuns({ scopeType, scopeKey, sessionId = null, status = null, provider = null, limit = null, order = 'asc' }) {
+  listDistillRuns({
+    scopeType,
+    scopeKey,
+    sessionId = null,
+    status = null,
+    provider = null,
+    limit = null,
+    order = 'asc',
+    after = null,
+  }) {
     const filters = ['scope_type = ?', 'scope_key = ?'];
     const values = [scopeType, scopeKey];
     if (sessionId) {
@@ -4197,10 +4272,15 @@ export class ContextForgeStore {
       filters.push('provider = ?');
       values.push(provider);
     }
+    const orderDirection = order === 'desc' ? 'DESC' : 'ASC';
+    if (after) {
+      const comparator = orderDirection === 'DESC' ? '<' : '>';
+      filters.push(`(created_at ${comparator} ? OR (created_at = ? AND id ${comparator} ?))`);
+      values.push(after[0], after[0], after[1]);
+    }
     const parsedLimit = limit == null ? null : Number(limit);
     const limitClause = Number.isInteger(parsedLimit) && parsedLimit > 0 ? 'LIMIT ?' : '';
     if (limitClause) values.push(parsedLimit);
-    const orderDirection = order === 'desc' ? 'DESC' : 'ASC';
     return this.db
       .prepare(`
         SELECT * FROM distill_runs

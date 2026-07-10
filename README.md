@@ -259,6 +259,8 @@ npm test
 For bounded indexed-search behavior, diagnostics, and the 100-to-100,000-memory
 synthetic benchmark, see
 [Retrieval Performance](docs/retrieval-performance.md).
+For bounded list defaults, opaque cursor envelopes, compatibility behavior, and
+the explicit CLI all-pages flow, see [List Pagination](docs/list-pagination.md).
 
 Normal tests run in fail-closed test mode: real Codex/Python provider runners
 and default external provider fetches are rejected unless a fake is injected.
