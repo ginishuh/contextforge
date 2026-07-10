@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Raised the hosted-runner total test budget to 180 seconds while preserving
+  the per-test slow threshold, avoiding false CI failures on slower Node 24
+  runners without hiding localized test regressions.
 - Refreshed transitive production dependencies to patched `hono` and `qs`
   releases and added a CI gate that rejects moderate-or-higher production
   dependency advisories.
