@@ -154,6 +154,7 @@ export async function processIdleCandidateAudits({ app, options = {} }) {
     requeued: 0,
     deduplicated: 0,
     blocked: 0,
+    drained: 0,
     staleEpochs: 0,
     failed: 0,
     sessions: due.sessions,
@@ -175,8 +176,8 @@ export async function processIdleCandidateAudits({ app, options = {} }) {
       });
       if (!submission.deduplicated) result.enqueued += 1;
       else if (submission.requeued) result.requeued += 1;
-      else result.deduplicated += 1;
-      if (submission.status !== 'queued') result.blocked += 1;
+      else if (submission.status === 'queued') result.deduplicated += 1;
+      else result.blocked += 1;
       result.results.push({
         scopeType: session.scopeType,
         scopeKey: session.scopeKey,
@@ -194,12 +195,13 @@ export async function processIdleCandidateAudits({ app, options = {} }) {
       const staleEpoch = error?.code === 'CONTEXTFORGE_AUDIT_SOURCE_WATERMARK_CHANGED';
       const drained = error?.code === 'CONTEXTFORGE_NO_ELIGIBLE_CANDIDATES';
       if (staleEpoch) result.staleEpochs += 1;
-      else if (!drained) result.failed += 1;
+      else if (drained) result.drained += 1;
+      else result.failed += 1;
       result.results.push({
         scopeType: session.scopeType,
         scopeKey: session.scopeKey,
         sessionId: session.sessionId,
-        status: staleEpoch ? 'stale_epoch' : drained ? 'already_claimed' : 'failed',
+        status: staleEpoch ? 'stale_epoch' : drained ? 'drained' : 'failed',
         error: errorSummary(error),
       });
     }
