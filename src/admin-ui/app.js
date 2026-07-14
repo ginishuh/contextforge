@@ -202,11 +202,18 @@ async function refreshRuntime() {
     Object.entries(effective.distillPolicy).map(([key, value]) => [DISTILL_POLICY_LABELS[key] || key, value]),
   );
   const worker = readiness.checks.operationWorker;
+  const requiredWorkers = Object.entries(worker.operations || {})
+    .filter(([, operationWorker]) => operationWorker.required)
+    .map(([operation, operationWorker]) => {
+      const age = operationWorker.lastActivityAgeMs == null ? '관측 없음' : `${operationWorker.lastActivityAgeMs}ms 전`;
+      return `${operation}: lease ${operationWorker.activeLeases}, ${age}, ${operationWorker.ok ? '정상' : 'stale'}`;
+    });
   dl($('#readinessSummary'), [
     ['상태', readiness.ready ? '준비됨' : '점검 필요'],
     ['대기 작업', readiness.checks.operationQueue.queued],
     ['활성 worker lease', worker.activeLeases],
     ['마지막 worker 활동', worker.lastActivityAt || '기록 없음'],
+    ['작업 종류별 worker', requiredWorkers.length > 0 ? requiredWorkers.join('\n') : '대기 작업 없음'],
     ['worker 판정', worker.ok ? '정상' : `${worker.reason || '비정상'}: ${(worker.staleOperations || []).join(', ')}`],
   ]);
   const quality = metrics?.memoryLifecycle;

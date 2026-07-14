@@ -3202,6 +3202,7 @@ export function createContextForge(options = {}) {
     return withStore(config, fn);
   };
   let lastRawPruneAt = 0;
+  const retrievalUsageTelemetry = { counterWriteFailures: 0, lastCounterWriteFailureAt: null };
   const providerConcurrencyLimit = config.providerExecution.concurrencyLimit;
 
   function operationKey(operation, scope, source) {
@@ -3673,9 +3674,14 @@ export function createContextForge(options = {}) {
       sharedScopeKey: options.sharedScopeKey || config.defaultSharedScopeKey,
       queryEmbedding,
     });
-    store.recordMemoryRetrievals(
-      results.filter((result) => result.type === 'memory' && result.memory?.id).map((result) => result.memory.id),
-    );
+    try {
+      store.recordMemoryRetrievals(
+        results.filter((result) => result.type === 'memory' && result.memory?.id).map((result) => result.memory.id),
+      );
+    } catch {
+      retrievalUsageTelemetry.counterWriteFailures += 1;
+      retrievalUsageTelemetry.lastCounterWriteFailureAt = new Date().toISOString();
+    }
     return results;
   }
 
@@ -4023,17 +4029,24 @@ export function createContextForge(options = {}) {
       }));
     },
     operationalMetrics() {
-      return useStore((store) => ({
-        kind: 'contextforge_operational_metrics',
-        ...store.operationalSnapshot(),
-        memoryLifecycle: store.memoryLifecycleQualitySnapshot({
+      return useStore((store) => {
+        const memoryLifecycle = store.memoryLifecycleQualitySnapshot({
           transientCategories: Array.from(AUTO_TRANSIENT_CATEGORIES),
-        }),
-        providerExecution: {
-          concurrencyLimit: providerConcurrencyLimit,
-          active: providerExecutionSnapshot(),
-        },
-      }));
+        });
+        memoryLifecycle.retrievalUsage = {
+          ...memoryLifecycle.retrievalUsage,
+          ...retrievalUsageTelemetry,
+        };
+        return {
+          kind: 'contextforge_operational_metrics',
+          ...store.operationalSnapshot(),
+          memoryLifecycle,
+          providerExecution: {
+            concurrencyLimit: providerConcurrencyLimit,
+            active: providerExecutionSnapshot(),
+          },
+        };
+      });
     },
 
     migrateScope(options = {}) {

@@ -4033,7 +4033,6 @@ export class ContextForgeStore {
           SET status = ?,
               lease_owner = NULL,
               lease_expires_at = NULL,
-              worker_observed_at = ?,
               error_name = 'JobLeaseExpiredError',
               error_message = 'Operation job lease expired before completion.',
               error_code = 'CONTEXTFORGE_JOB_LEASE_EXPIRED',
@@ -4043,7 +4042,7 @@ export class ContextForgeStore {
           WHERE id = ? AND status = 'running'
           RETURNING *
         `)
-        .get(exhausted ? 'failed' : 'queued', now, exhausted ? 0 : 1, now, exhausted ? now : null, row.id);
+        .get(exhausted ? 'failed' : 'queued', exhausted ? 0 : 1, now, exhausted ? now : null, row.id);
       if (updated) {
         if (this.listOperationJobCandidates({ jobId: updated.id }).length > 0) {
           this.settleOperationJobCandidates({

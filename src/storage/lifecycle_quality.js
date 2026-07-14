@@ -47,25 +47,35 @@ function countMap(rows, key) {
   return Object.fromEntries(rows.map((row) => [row[key], Number(row.count || 0)]));
 }
 
-function promotionQuality(store, transientCategories) {
+function promotionQuality(store, transientCategories, { cutoff7d, cutoff30d }) {
   const categories = [...new Set(transientCategories.map(String).filter(Boolean))];
   const transientCondition = categories.length
     ? `category IN (${categories.map(() => '?').join(', ')})`
     : '0';
   return store.db.prepare(`${PROMOTION_QUALITY_CTE}
     SELECT COUNT(*) AS linked_promotions,
+           COALESCE(SUM(CASE WHEN julianday(promoted_at) <= julianday(?) THEN 1 ELSE 0 END), 0)
+             AS eligible_promotions_7d,
+           COALESCE(SUM(CASE WHEN julianday(promoted_at) <= julianday(?) THEN 1 ELSE 0 END), 0)
+             AS eligible_promotions_30d,
            COALESCE(SUM(corrected_7d), 0) AS corrected_7d,
            COALESCE(SUM(corrected_30d), 0) AS corrected_30d,
            COALESCE(SUM(deactivated_7d), 0) AS deactivated_7d,
            COALESCE(SUM(deactivated_30d), 0) AS deactivated_30d,
            COALESCE(SUM(corrected_or_deactivated_7d), 0) AS corrected_or_deactivated_7d,
            COALESCE(SUM(corrected_or_deactivated_30d), 0) AS corrected_or_deactivated_30d,
+           COALESCE(SUM(CASE WHEN julianday(promoted_at) <= julianday(?)
+                              THEN corrected_or_deactivated_7d ELSE 0 END), 0)
+             AS eligible_corrected_or_deactivated_7d,
+           COALESCE(SUM(CASE WHEN julianday(promoted_at) <= julianday(?)
+                              THEN corrected_or_deactivated_30d ELSE 0 END), 0)
+             AS eligible_corrected_or_deactivated_30d,
            COALESCE(SUM(CASE WHEN ${transientCondition} THEN 1 ELSE 0 END), 0) AS transient_promotions
     FROM promotion_quality
-  `).get(...categories);
+  `).get(cutoff7d, cutoff30d, cutoff7d, cutoff30d, ...categories);
 }
 
-function auditVariants(store) {
+function auditVariants(store, cutoff30d) {
   return store.db.prepare(`${PROMOTION_QUALITY_CTE}, latest_audits AS (
     SELECT candidate.id AS candidate_id, attempt.*
     FROM memory_candidate_index candidate
@@ -77,14 +87,17 @@ function auditVariants(store) {
            SUM(CASE WHEN latest_audits.decision = 'needs_review' THEN 1 ELSE 0 END) AS needs_review,
            SUM(CASE WHEN latest_audits.decision = 'reject' THEN 1 ELSE 0 END) AS rejected,
            SUM(CASE WHEN promotion_quality.candidate_id IS NOT NULL THEN 1 ELSE 0 END) AS promoted,
-           SUM(CASE WHEN promotion_quality.corrected_30d = 1 OR promotion_quality.deactivated_30d = 1
+           SUM(CASE WHEN julianday(promotion_quality.promoted_at) <= julianday(?) THEN 1 ELSE 0 END)
+             AS eligible_promotions_30d,
+           SUM(CASE WHEN julianday(promotion_quality.promoted_at) <= julianday(?)
+                     AND (promotion_quality.corrected_30d = 1 OR promotion_quality.deactivated_30d = 1)
                     THEN 1 ELSE 0 END) AS corrected_or_deactivated_30d
     FROM latest_audits
     LEFT JOIN promotion_quality ON promotion_quality.candidate_id = latest_audits.candidate_id
     GROUP BY latest_audits.provider, latest_audits.model, latest_audits.prompt_version
     ORDER BY attempts DESC, latest_audits.provider ASC, latest_audits.model ASC, latest_audits.prompt_version ASC
     LIMIT 101
-  `).all();
+  `).all(cutoff30d, cutoff30d);
 }
 
 export function buildMemoryLifecycleQualitySnapshot(
@@ -92,6 +105,8 @@ export function buildMemoryLifecycleQualitySnapshot(
   { now = new Date(), transientCategories = [] } = {},
 ) {
   const recentCutoff = new Date(now.getTime() - DAY_MS).toISOString();
+  const cutoff7d = new Date(now.getTime() - (7 * DAY_MS)).toISOString();
+  const cutoff30d = new Date(now.getTime() - (30 * DAY_MS)).toISOString();
   const byStatus = countMap(
     store.db.prepare('SELECT status, COUNT(*) AS count FROM memory_candidate_index GROUP BY status').all(),
     'status',
@@ -128,8 +143,12 @@ export function buildMemoryLifecycleQualitySnapshot(
         THEN (julianday(attempt.completed_at) - julianday(candidate.created_at)) * 86400000 END)
         AS closeout_to_audit_ms,
       AVG(CASE WHEN promotion.created_at IS NOT NULL AND attempt.completed_at IS NOT NULL
-        THEN MAX(0, (julianday(promotion.created_at) - julianday(attempt.completed_at)) * 86400000) END)
-        AS audit_to_promotion_ms
+                    AND julianday(promotion.created_at) >= julianday(attempt.completed_at)
+        THEN (julianday(promotion.created_at) - julianday(attempt.completed_at)) * 86400000 END)
+        AS audit_to_promotion_ms,
+      SUM(CASE WHEN promotion.created_at IS NOT NULL AND attempt.completed_at IS NOT NULL
+                    AND julianday(promotion.created_at) < julianday(attempt.completed_at)
+        THEN 1 ELSE 0 END) AS audit_to_promotion_clock_skew
     FROM memory_candidate_index candidate
     LEFT JOIN memory_candidate_audit_attempts attempt ON attempt.id = candidate.latest_audit_attempt_id
     LEFT JOIN memory_events promotion
@@ -137,7 +156,7 @@ export function buildMemoryLifecycleQualitySnapshot(
      AND promotion.event_type = 'promote'
      AND json_extract(promotion.metadata_json, '$.sourceCandidateId') = candidate.id
   `).get();
-  const promotion = promotionQuality(store, transientCategories);
+  const promotion = promotionQuality(store, transientCategories, { cutoff7d, cutoff30d });
   const linkedPromotions = Number(promotion.linked_promotions || 0);
   const activeMemoryCount = Number(
     store.db.prepare("SELECT COUNT(*) AS count FROM memories WHERE status = 'active'").get().count || 0,
@@ -155,7 +174,7 @@ export function buildMemoryLifecycleQualitySnapshot(
     JOIN memory_retrieval_stats ON memory_retrieval_stats.memory_id = memories.id
     WHERE memories.status = 'active' AND memory_retrieval_stats.retrieval_count > 0
   `).get().count || 0);
-  const variants = auditVariants(store);
+  const variants = auditVariants(store, cutoff30d);
   const totalCandidates = Object.values(byStatus).reduce((sum, count) => sum + count, 0);
   return {
     kind: 'memory_lifecycle_quality',
@@ -179,26 +198,30 @@ export function buildMemoryLifecycleQualitySnapshot(
         promoted: Number(last24h.candidates_promoted || 0),
         rejected: Number(last24h.candidates_rejected || 0),
         staled: Number(last24h.candidates_staled || 0),
+        conversionRate: ratio(last24h.candidates_promoted, last24h.candidates_created),
       },
       conversionRate: ratio(byStatus.promoted, totalCandidates),
     },
     latency: {
       closeoutToAuditAverageMs: latency.closeout_to_audit_ms == null ? null : Number(latency.closeout_to_audit_ms),
       auditToPromotionAverageMs: latency.audit_to_promotion_ms == null ? null : Number(latency.audit_to_promotion_ms),
+      auditToPromotionClockSkewCount: Number(latency.audit_to_promotion_clock_skew || 0),
     },
     routingClassifications,
     promotionQuality: {
       linkedPromotions,
+      eligiblePromotions7d: Number(promotion.eligible_promotions_7d || 0),
+      eligiblePromotions30d: Number(promotion.eligible_promotions_30d || 0),
       correctedWithin7d: Number(promotion.corrected_7d || 0),
       correctedWithin30d: Number(promotion.corrected_30d || 0),
       deactivatedWithin7d: Number(promotion.deactivated_7d || 0),
       deactivatedWithin30d: Number(promotion.deactivated_30d || 0),
       transientPromotions: Number(promotion.transient_promotions || 0),
       correctedOrDeactivatedWithin7dRate: ratio(
-        promotion.corrected_or_deactivated_7d, linkedPromotions,
+        promotion.eligible_corrected_or_deactivated_7d, promotion.eligible_promotions_7d,
       ),
       correctedOrDeactivatedWithin30dRate: ratio(
-        promotion.corrected_or_deactivated_30d, linkedPromotions,
+        promotion.eligible_corrected_or_deactivated_30d, promotion.eligible_promotions_30d,
       ),
       transientPromotionRate: ratio(promotion.transient_promotions, linkedPromotions),
       activeMemoryCount,
@@ -219,10 +242,11 @@ export function buildMemoryLifecycleQualitySnapshot(
       needsReview: Number(row.needs_review || 0),
       rejected: Number(row.rejected || 0),
       promoted: Number(row.promoted || 0),
+      eligiblePromotions30d: Number(row.eligible_promotions_30d || 0),
       correctedOrDeactivatedWithin30d: Number(row.corrected_or_deactivated_30d || 0),
       approvalRate: ratio(row.approved, row.attempts),
       rejectionRate: ratio(row.rejected, row.attempts),
-      correctionRate: ratio(row.corrected_or_deactivated_30d, row.promoted),
+      correctionRate: ratio(row.corrected_or_deactivated_30d, row.eligible_promotions_30d),
     })),
     auditVariantsTruncated: variants.length > 100,
   };

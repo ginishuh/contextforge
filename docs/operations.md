@@ -35,7 +35,9 @@ queued, readiness allows `CONTEXTFORGE_READINESS_WORKER_STALE_AFTER_MS` for a
 supervised worker or timer to claim it. After that boundary, no active lease and
 no recent worker-observed timestamp makes `/readyz` return 503 with
 `checks.operationWorker.reason=operation_worker_stale`. Claim, lease renewal,
-completion, retry, and expired-lease recovery update the worker timestamp.
+completion, and retry update the worker timestamp. Expired-lease recovery does
+not count as worker activity because a different operation worker may trigger
+that recovery scan.
 
 Provider credentials are never returned or actively exercised by readiness.
 Credential/provider smoke checks remain explicit operator actions so a health
@@ -64,8 +66,12 @@ admin session as the remote API. It exposes bounded aggregates for:
 Search and bootstrap retrieval update `memory_retrieval_stats` with only a
 memory id, counter, first-use time, and last-use time. Query text and raw result
 content are not stored. A query-only store skips this optional counter write so
-retrieval remains available. Audit-quality label cardinality is capped at 100
-provider/model/prompt combinations in one metrics snapshot.
+retrieval remains available. Other counter-write failures are isolated from the
+retrieval result and exposed through a process-lifetime failure counter. Audit
+quality uses the actual provider, model, and prompt-version strings as
+Prometheus labels, with cardinality capped at 100 combinations in one metrics
+snapshot. Negative audit-to-promotion intervals are excluded from the latency
+average and reported as clock-skew anomalies.
 
 Every HTTP response includes `X-Request-Id`. A supplied `X-Request-Id` is
 preserved (bounded to 128 characters); otherwise the server generates one.

@@ -234,5 +234,7 @@ reviewed refinement applied as a `correct_memory` action is not mislabeled as a
 bad new-memory promotion. The snapshot reports corrections and deactivations
 within 7 and 30 days, active same-scope exact-content duplicates, transient
 category promotions, and bounded provider/model/prompt decision and correction
-rates. Retrieval-use coverage comes from aggregate per-memory counters; raw
-queries are never retained.
+rates. The 7/30-day rate denominators include only promotions whose complete
+observation window has elapsed, so recent promotions do not dilute the result.
+Retrieval-use coverage comes from aggregate per-memory counters; raw queries are
+never retained.
