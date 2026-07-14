@@ -283,7 +283,15 @@ scripts/install-candidate-lifecycle-worker-service.sh \
 CLI의 `candidateLifecycleWorker` one-shot 기본값은 dry-run이다. installer는
 실제 수렴을 위해 `--dryRun false`를 명시하며, 관찰 전용 canary에는
 `--dry-run true`를 사용한다. audit job claim은 registry의 같은 scope로
-fencing되어 다른 scope의 queued job을 가져오지 않는다.
+fencing되어 다른 scope의 queued job을 가져오지 않는다. Packaged
+service는 scope당 idle session `1개`, 해당 session의 candidate `2개`, audit
+job `1개`를 한 iteration에 처리하고 remote timeout을 `300000ms`로
+설정한다. Limit을 늘리면 최악의 sequential provider wall-clock보다
+remote timeout을 길게 잡아야 한다. Installer가 생성한 `0600` authority env
+file은 token env 뒤에 로드되어 remote storage mode와 URL을 강제하고,
+URL은 process command line에 노출하지 않는다. 세부 운영 contract와
+timeout 조정 기준은 [Memory candidate lifecycle](memory-candidate-lifecycle.md)과
+[Operations](operations.md)를 따른다.
 `--adapters`를 생략하면 각 adapter의 root directory 또는 DB 존재 여부를 보고
 설치된 것만 자동 활성화한다. 없는 런타임은 non-existent tree를 계속 걷지 않고
 `inactiveAdapters`에 남긴다. `--adapters cursor_cli`처럼 명시한 adapter가 없으면
