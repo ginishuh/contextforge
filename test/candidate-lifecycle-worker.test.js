@@ -278,3 +278,18 @@ test('legacy watcher installers render private last-wins authority files', async
     await assertPrivateAuthorityFile({ home, ...spec, remoteUrl });
   }
 });
+
+test('watcher installer rejects authority environment file injection', async () => {
+  const home = await makeTempDir();
+  const registry = path.join(home, 'repos.json');
+  await fs.writeFile(registry, JSON.stringify({ repos: [{ scopeKey: 'github.com/example/contextforge' }] }));
+  for (const remoteUrl of ["https://memory.example.com/'bad", 'https://memory.example.com/\nbad']) {
+    await assert.rejects(
+      execFileAsync('bash', [
+        'scripts/install-candidate-lifecycle-worker-service.sh',
+        '--repo-registry', registry, '--remote-url', remoteUrl,
+      ], { cwd: process.cwd(), env: { ...process.env, HOME: home } }),
+      (error) => error.code === 2 && /line break or single quote/.test(error.stderr),
+    );
+  }
+});
