@@ -10,7 +10,10 @@
   bounded `candidateIds` backlog source, and regression tests guard both the
   tool schema and packaged-skill lifecycle contract. Packaged Codex UI metadata
   now ships with an explicit `$contextforge-memory` prompt and candidate-review
-  description so runtime installations do not drift from the skill body.
+  description so runtime installations do not drift from the skill body. The
+  skill now uses progressive disclosure for workspace migration, candidate
+  lifecycle operations, and embedding maintenance, with regression budgets of
+  340 lines and 18 KB for the always-loaded `SKILL.md` body.
 - Added operation-worker freshness to `/readyz` with a bounded startup grace
   period and an explicit `operation_worker_stale` reason. Operational metrics
   now include candidate throughput/latency, audit decision and routing

@@ -68,87 +68,19 @@ Always set scope intentionally:
 - `shared`: cross-repo/user-wide conventions. Include only when it may matter.
 - `local`: machine-specific context; opt in only when appropriate.
 
-Workspace profiles are retrieval topology, not storage authority. Storage modes
-answer where memory is authoritative; workspace profiles answer which existing
-scopes are consulted together. They are independent.
+Workspace profiles are retrieval topology; storage modes are authority. Workspace
+selection is explicit per call, so pass `workspaceKey` only when cross-repo
+retrieval is intended. There is no inferred or process-global default.
 
-Workspace selection is explicit per call. ContextForge does not infer a
-workspace from the current repo scope or workspace membership, and creating a
-profile does not activate federation by itself. There is no process-global
-default workspace. The caller must pass the intended `workspaceKey` to relevant
-MCP calls such as `resolve_workspace`, `bootstrap_context`, and `search`. Core
-callers use `resolveWorkspace`; the corresponding CLI command is
-`workspaceResolve`. `bootstrapContext`, `search`, and `agentStart` also accept
-the option on their core/CLI surfaces. For repeated use, record it in repo-local
-agent instructions or an adapter/wrapper configuration. Without `workspaceKey`,
-retrieval keeps its ordinary single-repo behavior.
+Before relying on results, inspect `connection.summary`,
+`connection.accessMode`, and top-level `storageMode` from `bootstrap_context` or
+`db_info`. `remote-client` access is server-backed canonical memory for the
+configured scope. `direct-local` with `local` or `project-local` storage is
+checkout- or machine-local unless repo instructions say otherwise.
 
-For multi-repo products, call `resolve_workspace` when a workspace profile is
-configured and the task may involve cross-repo contracts, frontend consumers,
-E2E, release gates, or shared API/domain decisions. Read the scope plan before
-using cross-repo context. Treat `includedBecause`, matched rules, and warnings
-as part of the retrieval explanation. During startup/resume, callers may pass
-`workspaceKey` to `bootstrap_context` to receive a separate `workspace` block
-with bounded supplemental member-scope results. Top-level `includeShared=true`
-adds shared memory to the primary bootstrap view only; workspace shared results
-require a workspace routing rule with `includeShared`.
-
-In remote mode, workspace profile reads/writes/resolve calls must hit the
-remote canonical server. There is no silent local/project-local fallback.
-Workspace profiles should store canonical scope identity only, not local
-`repoPath`, tokens, raw transcripts, or machine-private paths.
-
-CLI users may use `agentStart` and `agentCloseout` as agent-neutral lifecycle
-wrappers. `agentStart` is a bootstrap convenience and may pass `workspaceKey`.
-`agentCloseout` requires `sessionId` or `checkpointId`, preserves
-adapter-prefixed ids, defaults to `dryRun=true`, and does not scan broad scope
-backlog by default.
-
-Treat `includeByDefault` as scope-plan inclusion only. It does not justify
-unbounded retrieval from that scope; workspace retrieval must still obey
-per-scope and total result limits. Workspace profile deactivation is soft
-delete: the profile becomes inactive and can be reactivated by upserting the
-same key.
-
-For renamed or transferred repositories, treat the new repository identity as
-the canonical `scopeKey`. ContextForge may be configured with
-`CONTEXTFORGE_SCOPE_ALIASES` so future reads and writes using an old repo key
-canonicalize to the new key. Before assuming data is missing, check `db_info`
-for loaded `scopeAliases`.
-
-When scope aliases are enabled, old-scope rows that have not been migrated may
-be hidden from normal scoped reads because read/write calls canonicalize to the
-new key. Use `migrate_scope` for explicit migration rather than trying to read
-both old and new scopes as a union.
-
-`migrate_scope` rules:
-
-- Run it as a dry-run first. `dryRun` defaults to `true`.
-- Pass `fromScope`/`fromScopeKey` as the raw stored old scope. The `from` scope
-  is not alias-canonicalized, so it can find rows written before the alias was
-  configured.
-- Pass `toScope`/`toScopeKey` as the intended canonical target. The `to` scope
-  is alias-canonicalized.
-- Inspect `conflicts`, `blocked`, and `blockedReason` before running with
-  `dryRun: false`.
-- `hasRows: false` or `empty: true` means there is nothing to migrate.
-- `totalRows` counts logical rows to move. `derivedRows.memory_fts` and
-  `rebuilt.memory_fts` describe the derived FTS index, not additional durable
-  memory rows.
-
-Before relying on results, check connection metadata and storage authority from `bootstrap_context` or `db_info`:
-
-- `connection.summary`: quickest human-readable access/process summary.
-- `connection.accessMode`: how this caller reached ContextForge: `direct-local`, `server-process`, or `remote-client`.
-- `connection.accessPath`: concrete path such as `direct-local`, `http-api`, or `http-mcp`.
-- `connection.serverRole`: server process role behind a remote call, when present.
-- `connection.mode: "remote-client"`: this agent reaches ContextForge through HTTP or a remote wrapper.
-- `connection.mode: "http-server"`: the tool is running inside the ContextForge HTTP server process.
-- `connection.mode: "direct-local"`: the tool is running as a local ContextForge process.
-- top-level `storageMode`: storage used by the responding ContextForge process.
-- `connection.server`: server process details behind a remote call, when present.
-- `remote-client` access means server-backed canonical memory for the configured scope.
-- `direct-local` with `local` or `project-local` storage is local context unless the repo `AGENTS.md` says otherwise.
+Read [Workspaces, Scope Migration, And Storage Authority](references/workspaces-and-scope-migration.md)
+when configuring workspace federation, repository aliases or migrations,
+agent-neutral CLI wrappers, or detailed connection diagnostics.
 
 ## Session-First Consult Policy
 
@@ -312,71 +244,13 @@ and bootstrap would otherwise expose only a thin latest slice.
   does not read raw evidence, does not create durable memory by itself, and
   should create at most a few review candidates for reinforced durable facts.
 
-## Scope-Wide Candidate Review
+## Candidate Backlog Operations
 
-Ordinary closeout is session/checkpoint scoped. Use a scope-wide backlog only
-when the task explicitly calls for backlog review; never broaden an empty
-closeout proposal into an implicit scope scan.
-
-1. In MCP, use `list_memory_candidates` without `sessionId` or `checkpointId`
-   for a bounded scope page. The specialized `memoryCandidateBacklog` aggregate
-   is available through the Admin UI and HTTP/core surfaces; it is
-   provider-free and adds same-filter lifecycle counts and freshness timestamps.
-2. Use `plan_memory_candidate_backlog_audit` before paid backlog work. It is
-   provider-free, scans at most 500 pending candidates, separates deterministic
-   exclusions and exact matches, and selects at most ten candidates for the next
-   executable provider batch. Pricing is reported only from caller-supplied
-   rates.
-3. To run the selected provider audit durably, call `submit_audit_job` with one
-   explicit canonical scope, a closeout `trigger`, and at most ten
-   `candidateIds`. An operator must run `process_jobs`; submission alone does
-   not execute the provider.
-4. Audit attempts are append-only provenance bound to candidate revision,
-   source mode/watermark, provider policy, and lease attempt. Editing candidate
-   key/content/category/tags invalidates the approved revision rather than
-   silently preserving approval.
-5. After approval, call `route_audited_memory_candidates` in its default
-   `dryRun=true` mode first. `new` can proceed to reviewed promotion; `duplicate`
-   must not create another durable row; `refinement`, `supersedes`, and
-   `conflict` become review-only memory update candidates. Routing does not
-   promote or edit durable memory.
-6. Use `snooze_memory_candidate` only with a finite future deadline, actor, and
-   reason. The default maximum is 90 days, and queued/running audits cannot be
-   snoozed. Use `wake_memory_candidate` for an early reopen; do not extend a
-   snooze by rewriting its active deadline.
-7. Treat `stale` as a reversible review disposition, not deletion. Use
-   `reopen_stale_memory_candidate` when review resumes. Candidate, checkpoint,
-   raw evidence, audit decisions, and lifecycle provenance remain available.
-
-## Unattended Candidate Lifecycle
-
-The `review` profile exposes provider-free inventory calls
-`list_due_candidate_audits`, `list_due_candidate_wakeups`, and
-`list_due_candidate_stale_transitions`. Their mutating `process_*` counterparts
-are operator-profile work and require one explicit canonical scope. Run them in
-dry-run first when operating manually.
-
-- Idle audit eligibility uses quiet time since the last raw event, not candidate
-  or checkpoint creation time. The default grace is ten minutes. Enqueue
-  revalidates a frozen raw/checkpoint watermark, so late evidence becomes a new
-  audit epoch instead of changing an existing job source.
-- Wake-up processing uses the stored finite snooze deadline and compare-and-swap
-  guards. Stale processing excludes queued/running audits and defaults to 14
-  days for deterministic triage/reject queues, 90 days for approved candidates
-  awaiting promotion, and 30 days for the other review queues.
-- For continuous convergence, run the CLI-only `candidateLifecycleWorker`
-  against an explicit scope or repo registry, or install
-  `scripts/install-candidate-lifecycle-worker-service.sh`. The one-shot CLI
-  defaults to dry-run; the packaged service opts into mutation, uses per-scope
-  limits of one due session, two candidates, and one audit job, and sets a
-  300-second remote timeout for the bounded provider wall-clock.
-- The packaged service loads a generated `0600` authority environment file
-  after the token file to force remote storage mode and the configured URL while
-  keeping the URL out of the command line. If limits increase, scale the remote
-  timeout for the worst-case provider-call count and concurrency.
-- Keep registry scope ownership and token authorization explicit. Watch
-  `/readyz` operation-worker freshness and operational metrics; one worker's
-  scope fence must not be mistaken for ownership of jobs outside its registry.
+Ordinary closeout is session/checkpoint scoped. Never broaden an empty closeout
+proposal into an implicit scope scan. Read
+[Candidate Backlog And Lifecycle Operations](references/candidate-lifecycle.md)
+only when explicitly reviewing a scope-wide backlog, routing audited candidates,
+using snooze/wake/stale actions, or operating lifecycle workers.
 
 ## Closeout Promotion
 
@@ -444,38 +318,6 @@ For user corrections such as "that's wrong" or "memory should say X":
 
 ## Embeddings And Maintenance
 
-Embeddings are the supported quality path for retrieval. If `db_info` or `bootstrap_context` reports pending, failed, or stale vector sources:
-
-1. Call `list_embedding_jobs`.
-2. Call `process_embedding_jobs`, using `retryFailed: true` when appropriate.
-3. Use `rebuild_embeddings` only for intentional backfill or dimension changes.
-
-For derived-data cleanup:
-
-1. Call `embedding_inventory` first and explain every eligible reason.
-2. Keep `prune_embedding_artifacts` in its default dry-run mode until the
-   canonical SQLite store is backed up and embedding workers are stopped.
-3. Apply bounded batches with `dryRun: false`; do not use `force` merely for
-   convenience when jobs are still processing.
-4. Use global inventory/GC for vector-only rows. A scoped run deliberately
-   skips them because their missing index means their scope cannot be proven.
-5. Verify that current active memories and pending/promoted candidates remain
-   indexed, then rebuild only sources that are legitimately stale.
-6. Preserve current failed jobs for retry. Retired model/dimension deletion
-   requires an active provider plus explicit `includeRetired: true`; review
-   `reindexSuggestedSourceIds` after hash-mismatch cleanup. When
-   `retiredRisk.code` is `mass_retired`, require a separately reviewed
-   `confirmMassRetired: true` before applying.
-7. Follow `nextCursor` until it is null. A bounded page with an empty plan is
-   not proof that a later index/job/vector page has no eligible rows. For
-   non-dry GC, repeat the same input cursor while `needsRescan` is true and only
-   advance after the current page fits within the applied batch.
-8. Treat `blockedRetry: true` the same way: resolve the worker or confirmation
-   block, then retry the preserved input cursor before advancing.
-
-Use `prune_raw_events` only according to retention policy; durable memory and checkpoints are preserved separately.
-
-After a scope migration, remember that `memory_fts` is rebuilt from `memories`
-and embedding vectors remain keyed by immutable source ids. If retrieval looks
-stale after a migration, inspect `db_info` and embedding job state before
-rebuilding embeddings.
+Read [Embeddings And Maintenance](references/embeddings-and-maintenance.md) when
+retrieval reports pending, failed, or stale vector sources; when rebuilding or
+garbage-collecting derived data; or when applying raw-event retention.

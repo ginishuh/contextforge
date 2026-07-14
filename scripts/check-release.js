@@ -191,6 +191,9 @@ function inspectPackage() {
     'docs/operations.md',
     'docs/skills/contextforge-memory/SKILL.md',
     'docs/skills/contextforge-memory/agents/openai.yaml',
+    'docs/skills/contextforge-memory/references/candidate-lifecycle.md',
+    'docs/skills/contextforge-memory/references/embeddings-and-maintenance.md',
+    'docs/skills/contextforge-memory/references/workspaces-and-scope-migration.md',
     ...publishedScripts,
   ];
   const forbiddenPatterns = [

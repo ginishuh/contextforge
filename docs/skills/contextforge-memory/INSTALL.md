@@ -13,9 +13,9 @@ The ContextForge repo packages the skill from:
 docs/skills/contextforge-memory/
 ```
 
-Runtime installation copies `SKILL.md` and the UI metadata in
-`agents/openai.yaml`. `INSTALL.md` is public installation documentation, not a
-runtime skill file.
+Runtime installation copies `SKILL.md`, the detailed guidance in `references/`,
+and the UI metadata in `agents/openai.yaml`. `INSTALL.md` is public installation
+documentation, not a runtime skill file.
 
 When the skill changes, update the installed skill through the runtime's normal
 skill installation or update mechanism.
@@ -62,7 +62,8 @@ After installing or updating the skill:
 3. Ask the agent to use `$contextforge-memory` or invoke the skill by name.
 4. Confirm the skill guidance covers bootstrap, storage authority, session IDs,
    distillation, checkpoint candidates, scope backlog review, candidate
-   lifecycle workers, closeout promotion, corrections, and embeddings.
+   lifecycle workers, closeout promotion, corrections, and embeddings. Confirm
+   the three linked files under `references/` are present and readable.
 
 If `contextforge-memory` is not available in a session, the runtime skill
 installation is incomplete. Install or update the skill before doing

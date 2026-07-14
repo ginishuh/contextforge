@@ -51,10 +51,33 @@ test('release hygiene validates docs, versions, and the npm package boundary', a
   }
 });
 
-test('packaged memory skill covers the candidate backlog lifecycle', async () => {
+test('packaged memory skill uses bounded progressive disclosure without losing lifecycle contracts', async () => {
   const skill = await fs.readFile('docs/skills/contextforge-memory/SKILL.md', 'utf8');
+  const candidateLifecycle = await fs.readFile(
+    'docs/skills/contextforge-memory/references/candidate-lifecycle.md',
+    'utf8',
+  );
+  const embeddings = await fs.readFile(
+    'docs/skills/contextforge-memory/references/embeddings-and-maintenance.md',
+    'utf8',
+  );
+  const workspaces = await fs.readFile(
+    'docs/skills/contextforge-memory/references/workspaces-and-scope-migration.md',
+    'utf8',
+  );
   const metadata = await fs.readFile('docs/skills/contextforge-memory/agents/openai.yaml', 'utf8');
   const shortDescription = 'Scoped memory, distillation, and candidate review';
+
+  assert.ok(skill.split('\n').length <= 340, 'SKILL.md exceeds the 340-line prompt budget');
+  assert.ok(Buffer.byteLength(skill) <= 18_000, 'SKILL.md exceeds the 18 KB prompt budget');
+  for (const reference of [
+    'references/workspaces-and-scope-migration.md',
+    'references/candidate-lifecycle.md',
+    'references/embeddings-and-maintenance.md',
+  ]) {
+    assert.ok(skill.includes(reference), `missing progressive-disclosure link: ${reference}`);
+  }
+
   for (const contract of [
     'list_memory_candidates',
     'memoryCandidateBacklog',
@@ -71,7 +94,16 @@ test('packaged memory skill covers the candidate backlog lifecycle', async () =>
     '300-second remote timeout',
     '`0600` authority environment file',
   ]) {
-    assert.ok(skill.includes(contract), `missing candidate lifecycle skill contract: ${contract}`);
+    assert.ok(
+      candidateLifecycle.includes(contract),
+      `missing candidate lifecycle reference contract: ${contract}`,
+    );
+  }
+  for (const contract of ['migrate_scope', 'CONTEXTFORGE_SCOPE_ALIASES', 'connection.accessMode']) {
+    assert.ok(workspaces.includes(contract), `missing workspace reference contract: ${contract}`);
+  }
+  for (const contract of ['list_embedding_jobs', 'prune_embedding_artifacts', 'confirmMassRetired']) {
+    assert.ok(embeddings.includes(contract), `missing embedding reference contract: ${contract}`);
   }
   assert.equal(metadata, [
     'interface:',
