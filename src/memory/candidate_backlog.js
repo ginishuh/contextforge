@@ -22,12 +22,14 @@ export function buildMemoryCandidateBacklog({ store, scope, options = {} }) {
     load: ({ limit, after }) => store.listMemoryCandidates({ ...filters, limit, after }),
     positionForItem: (item) => [item.createdAt, item.id],
   });
+  const includeSummary = options.includeSummary == null ? !options.cursor : options.includeSummary === true;
   return {
     kind: 'memory_candidate_backlog',
     asOf: new Date().toISOString(),
     scope,
     filters,
-    summary: store.memoryLifecycleSummary({ ...scope, sinceIso: since }),
+    summary: includeSummary ? store.memoryLifecycleSummary({ ...filters, sinceIso: since }) : null,
+    summaryIncluded: includeSummary,
     page,
   };
 }

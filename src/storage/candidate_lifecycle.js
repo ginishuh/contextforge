@@ -56,7 +56,11 @@ export function backfillMemoryCandidateAuditStateOnce(store) {
     .prepare("SELECT value FROM schema_meta WHERE key = 'memory_candidate_audit_state_backfill_completed_at'")
     .get();
   if (completed?.value) return;
-  const rows = store.db.prepare("SELECT * FROM memory_candidate_index WHERE audit_state = 'unaudited'").all();
+  const loadBatch = store.db.prepare(`
+    SELECT * FROM memory_candidate_index
+    WHERE audit_state = 'unaudited' AND id > ?
+    ORDER BY id ASC LIMIT 250
+  `);
   const insertAttempt = store.db.prepare(`
     INSERT OR IGNORE INTO memory_candidate_audit_attempts (
       id, candidate_id, operation_job_id, lease_attempt, scope_type, scope_key,
@@ -72,49 +76,57 @@ export function backfillMemoryCandidateAuditStateOnce(store) {
     SET audit_state = ?, audit_decision = ?, audit_content_hash = ?, latest_audit_attempt_id = ?
     WHERE id = ? AND audit_state = 'unaudited'
   `);
-  store.withTransaction(() => {
-    for (const row of rows) {
-      const reviewMetadata = parseJson(row.review_metadata_json, {});
-      const audit = reviewMetadata.audit || reviewMetadata.autoPromotionAudit || null;
-      if (!audit) {
-        if (Object.keys(reviewMetadata).length > 0 || row.reviewed_at) {
-          updateCandidate.run('legacy_unknown', null, null, null, row.id);
+  let afterId = '';
+  while (true) {
+    const rows = loadBatch.all(afterId);
+    if (rows.length === 0) break;
+    store.withTransaction(() => {
+      for (const row of rows) {
+        const reviewMetadata = parseJson(row.review_metadata_json, {});
+        const audit = reviewMetadata.audit || reviewMetadata.autoPromotionAudit || null;
+        if (!audit) {
+          if (Object.keys(reviewMetadata).length > 0 || row.reviewed_at) {
+            updateCandidate.run('legacy_unknown', null, null, null, row.id);
+          }
+          continue;
         }
-        continue;
+        const decision = ['approve', 'needs_review', 'reject'].includes(audit.decision) ? audit.decision : null;
+        const auditFailed = Array.isArray(audit.riskCodes) && audit.riskCodes.includes('audit_failed');
+        const state = auditFailed ? (audit.retryable === true ? 'failed_retryable' : 'failed_terminal') : 'audited';
+        const sourceModeRaw = reviewMetadata.auditMetadata?.sourceMode;
+        const sourceMode = sourceModeRaw === 'backlog_batch'
+          ? 'backlog_batch'
+          : sourceModeRaw === 'session_pending_batch' || sourceModeRaw === 'session'
+            ? 'session'
+            : 'checkpoint';
+        const attemptId = `legacy:${row.id}`;
+        const hash = memoryCandidateRevisionHash({
+          key: row.candidate_key,
+          content: row.candidate_content,
+          category: row.category,
+          tags: parseJson(row.tags_json, []),
+        });
+        const metadata = audit.metadata || {};
+        const completedAt = reviewMetadata.auditedAt || row.reviewed_at || row.created_at;
+        insertAttempt.run(
+          attemptId, row.id, row.scope_type, row.scope_key, sourceMode, row.session_id, row.checkpoint_id, hash,
+          metadata.provider || 'legacy_unknown', metadata.model || null, metadata.reasoningEffort || null,
+          metadata.promptVersion || null, metadata.outputSchemaVersion || metadata.schemaVersion || null,
+          state, decision, audit.reason || row.review_reason || null, json(audit.riskCodes, []),
+          json(metadata.usage, {}), auditFailed ? json({ retryable: audit.retryable === true }, {}) : null,
+          json({ legacyBackfill: true, originalAuditMetadata: reviewMetadata.auditMetadata || null }, {}),
+          completedAt, completedAt, completedAt,
+        );
+        updateCandidate.run(state, decision, hash, attemptId, row.id);
       }
-      const decision = ['approve', 'needs_review', 'reject'].includes(audit.decision) ? audit.decision : null;
-      const auditFailed = Array.isArray(audit.riskCodes) && audit.riskCodes.includes('audit_failed');
-      const state = auditFailed ? (audit.retryable === true ? 'failed_retryable' : 'failed_terminal') : 'audited';
-      const sourceModeRaw = reviewMetadata.auditMetadata?.sourceMode;
-      const sourceMode = sourceModeRaw === 'session_pending_batch' || sourceModeRaw === 'session'
-        ? 'session'
-        : 'checkpoint';
-      const attemptId = `legacy:${row.id}`;
-      const hash = memoryCandidateRevisionHash({
-        key: row.candidate_key,
-        content: row.candidate_content,
-        category: row.category,
-        tags: parseJson(row.tags_json, []),
-      });
-      const metadata = audit.metadata || {};
-      const completedAt = reviewMetadata.auditedAt || row.reviewed_at || row.created_at;
-      insertAttempt.run(
-        attemptId, row.id, row.scope_type, row.scope_key, sourceMode, row.session_id, row.checkpoint_id, hash,
-        metadata.provider || 'legacy_unknown', metadata.model || null, metadata.reasoningEffort || null,
-        metadata.promptVersion || null, metadata.outputSchemaVersion || metadata.schemaVersion || null,
-        state, decision, audit.reason || row.review_reason || null, json(audit.riskCodes, []),
-        json(metadata.usage, {}), auditFailed ? json({ retryable: audit.retryable === true }, {}) : null,
-        json({ legacyBackfill: true, originalAuditMetadata: reviewMetadata.auditMetadata || null }, {}),
-        completedAt, completedAt, completedAt,
-      );
-      updateCandidate.run(state, decision, hash, attemptId, row.id);
-    }
-    store.db.prepare(`
-      INSERT INTO schema_meta (key, value)
-      VALUES ('memory_candidate_audit_state_backfill_completed_at', ?)
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value
-    `).run(nowIso());
-  });
+    });
+    afterId = rows.at(-1).id;
+  }
+  store.db.prepare(`
+    INSERT INTO schema_meta (key, value)
+    VALUES ('memory_candidate_audit_state_backfill_completed_at', ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `).run(nowIso());
 }
 
 export function markMemoryCandidateAudited(store, {
@@ -132,8 +144,14 @@ export function markMemoryCandidateAudited(store, {
   const auditState = auditFailed ? (audit?.retryable === true ? 'failed_retryable' : 'failed_terminal') : 'audited';
   const auditDecision = ['approve', 'needs_review', 'reject'].includes(audit?.decision) ? audit.decision : null;
   const contentHash = memoryCandidateRevisionHash(existing.candidate);
-  const sourceModeRaw = metadata.sourceMode || (metadata.checkpointId ? 'checkpoint' : 'session');
-  const sourceMode = sourceModeRaw === 'backlog_batch' ? 'backlog_batch' : sourceModeRaw === 'checkpoint' ? 'checkpoint' : 'session';
+  const sourceModeRaw = metadata.sourceMode || null;
+  const sourceMode = sourceModeRaw === 'backlog_batch'
+    ? 'backlog_batch'
+    : sourceModeRaw === 'session' || sourceModeRaw === 'session_pending_batch'
+      ? 'session'
+      : sourceModeRaw === 'checkpoint' || metadata.checkpointId
+        ? 'checkpoint'
+        : 'session';
   const attemptId = metadata.auditAttemptId || randomUUID();
   const reviewMetadata = {
     ...(existing.reviewMetadata || {}),
@@ -218,17 +236,48 @@ export function markMemoryCandidateReviewed(store, {
   return store.getMemoryCandidate({ scopeType, scopeKey, candidateId });
 }
 
-export function memoryLifecycleSummary(store, { scopeType, scopeKey, sinceIso }) {
+function candidateSummaryFilters({
+  scopeType, scopeKey, sessionId = null, checkpointId = null, status = null,
+  candidateType = null, promotionRecommendation = null, auditState = null,
+  auditDecision = null, category = null, sourceAgent = null,
+}) {
+  const conditions = ['memory_candidate_index.scope_type = ?', 'memory_candidate_index.scope_key = ?'];
+  const values = [scopeType, scopeKey];
+  const filters = [
+    ['sessionId', sessionId, 'memory_candidate_index.session_id = ?'],
+    ['checkpointId', checkpointId, 'memory_candidate_index.checkpoint_id = ?'],
+    ['status', status, 'memory_candidate_index.status = ?'],
+    ['candidateType', candidateType, 'memory_candidate_index.candidate_type = ?'],
+    ['promotionRecommendation', promotionRecommendation, 'memory_candidate_index.promotion_recommendation = ?'],
+    ['auditState', auditState, 'memory_candidate_index.audit_state = ?'],
+    ['auditDecision', auditDecision, 'memory_candidate_index.audit_decision = ?'],
+    ['category', category, 'memory_candidate_index.category = ?'],
+    ['sourceAgent', sourceAgent, "json_extract(memory_candidate_index.candidate_json, '$.sourceProvenance.sourceAgent') = ?"],
+  ];
+  const applied = {};
+  for (const [name, value, condition] of filters) {
+    if (!value) continue;
+    conditions.push(condition);
+    values.push(value);
+    applied[name] = value;
+  }
+  return { conditions, values, applied };
+}
+
+export function memoryLifecycleSummary(store, options) {
+  const { scopeType, scopeKey, sinceIso } = options;
+  const filtered = candidateSummaryFilters(options);
+  const where = filtered.conditions.join(' AND ');
   const rows = store.db.prepare(`
     SELECT status, audit_state, audit_decision, promotion_recommendation, COUNT(*) AS count,
            MAX(created_at) AS latest_created_at, MAX(reviewed_at) AS latest_reviewed_at
-    FROM memory_candidate_index WHERE scope_type = ? AND scope_key = ?
+    FROM memory_candidate_index WHERE ${where}
     GROUP BY status, audit_state, audit_decision, promotion_recommendation
-  `).all(scopeType, scopeKey);
+  `).all(...filtered.values);
   const recentCandidates = store.db.prepare(`
     SELECT COUNT(*) AS count FROM memory_candidate_index
-    WHERE scope_type = ? AND scope_key = ? AND created_at >= ?
-  `).get(scopeType, scopeKey, sinceIso).count;
+    WHERE ${where} AND memory_candidate_index.created_at >= ?
+  `).get(...filtered.values, sinceIso).count;
   const recentPromoted = store.db.prepare(`
     SELECT COUNT(*) AS count FROM memories WHERE scope_type = ? AND scope_key = ? AND created_at >= ?
   `).get(scopeType, scopeKey, sinceIso).count;
@@ -237,17 +286,22 @@ export function memoryLifecycleSummary(store, { scopeType, scopeKey, sinceIso })
   `).get(scopeType, scopeKey)?.value || null;
   const oldestPending = store.db.prepare(`
     SELECT MIN(created_at) AS value FROM memory_candidate_index
-    WHERE scope_type = ? AND scope_key = ? AND status = 'pending'
-  `).get(scopeType, scopeKey)?.value || null;
+    WHERE ${where} AND memory_candidate_index.status = 'pending'
+  `).get(...filtered.values)?.value || null;
   const latestAudit = store.db.prepare(`
-    SELECT MAX(completed_at) AS value FROM memory_candidate_audit_attempts WHERE scope_type = ? AND scope_key = ?
-  `).get(scopeType, scopeKey)?.value || null;
+    SELECT MAX(memory_candidate_audit_attempts.completed_at) AS value
+    FROM memory_candidate_audit_attempts
+    JOIN memory_candidate_index ON memory_candidate_index.id = memory_candidate_audit_attempts.candidate_id
+    WHERE ${where}
+  `).get(...filtered.values)?.value || null;
   const summary = {
     latestCandidateAt: null, latestCandidateReviewedAt: null, latestPromotedAt: latestMemory,
     latestAuditedAt: latestAudit, oldestPendingAt: oldestPending, pendingCandidateCount: 0,
     pendingReviewCount: 0, candidatesLast7d: Number(recentCandidates || 0),
-    promotedLast7d: Number(recentPromoted || 0), byStatus: {}, byRecommendation: {},
-    byAuditState: {}, byAuditDecision: {},
+    promotedLast7d: Number(recentPromoted || 0), filteredCandidateCount: 0,
+    approvedAwaitingPromotionCount: 0, pendingNeedsReviewCount: 0,
+    pendingRejectRecommendedCount: 0, filters: filtered.applied,
+    byStatus: {}, byRecommendation: {}, byAuditState: {}, byAuditDecision: {},
   };
   for (const row of rows) {
     const status = row.status || 'unknown';
@@ -255,6 +309,7 @@ export function memoryLifecycleSummary(store, { scopeType, scopeKey, sinceIso })
     const auditState = row.audit_state || 'unaudited';
     const auditDecision = row.audit_decision || 'none';
     const count = Number(row.count || 0);
+    summary.filteredCandidateCount += count;
     summary.byStatus[status] = (summary.byStatus[status] || 0) + count;
     summary.byRecommendation[recommendation] = (summary.byRecommendation[recommendation] || 0) + count;
     summary.byAuditState[auditState] = (summary.byAuditState[auditState] || 0) + count;
@@ -262,6 +317,9 @@ export function memoryLifecycleSummary(store, { scopeType, scopeKey, sinceIso })
     if (status === 'pending') {
       summary.pendingCandidateCount += count;
       if (recommendation === 'review') summary.pendingReviewCount += count;
+      if (auditState === 'audited' && auditDecision === 'approve') summary.approvedAwaitingPromotionCount += count;
+      if (auditState === 'audited' && auditDecision === 'needs_review') summary.pendingNeedsReviewCount += count;
+      if (auditState === 'audited' && auditDecision === 'reject') summary.pendingRejectRecommendedCount += count;
     }
     if (!summary.latestCandidateAt || row.latest_created_at > summary.latestCandidateAt) {
       summary.latestCandidateAt = row.latest_created_at || summary.latestCandidateAt;
@@ -308,12 +366,17 @@ function hydrateJobCandidate(row) {
   };
 }
 
-export function registerOperationJobCandidates(store, { jobId, candidateIds, force = false }) {
+export function registerOperationJobCandidates(store, {
+  jobId, candidateIds, force = false, leaseOwner = null, leaseAttempt = null,
+}) {
   const ids = Array.from(new Set((candidateIds || []).map(String)));
   if (ids.length === 0) return [];
   if (ids.length > 500) throw new Error('candidateIds supports at most 500 items.');
   const timestamp = nowIso();
   store.withTransaction(() => {
+    if (leaseOwner && leaseAttempt != null) {
+      store.assertOperationJobLease({ jobId, workerId: leaseOwner, attempt: leaseAttempt });
+    }
     const insert = store.db.prepare(`
       INSERT INTO operation_job_candidates (job_id, candidate_id, position, status, metadata_json, created_at, updated_at)
       VALUES (?, ?, ?, 'queued', '{}', ?, ?) ON CONFLICT(job_id, candidate_id) DO NOTHING
@@ -355,17 +418,24 @@ export function settleOperationJobCandidates(store, { jobId, status, reason }) {
   });
 }
 
-export function startOperationJobCandidate(store, { jobId, candidateId, attempt }) {
+export function startOperationJobCandidate(store, {
+  jobId, candidateId, attempt, leaseOwner = null, leaseAttempt = null,
+}) {
   const timestamp = nowIso();
-  const result = store.db.prepare(`
-    UPDATE operation_job_candidates SET status = 'running', attempt = ?, updated_at = ?, completed_at = NULL
-    WHERE job_id = ? AND candidate_id = ? AND status IN ('queued', 'failed_retryable', 'running')
-  `).run(Number(attempt || 0), timestamp, jobId, candidateId);
-  if (result.changes > 0) {
-    store.db.prepare("UPDATE memory_candidate_index SET audit_state = 'running' WHERE id = ? AND status = 'pending'")
-      .run(candidateId);
-  }
-  return result.changes > 0;
+  return store.withTransaction(() => {
+    if (leaseOwner && leaseAttempt != null) {
+      store.assertOperationJobLease({ jobId, workerId: leaseOwner, attempt: leaseAttempt });
+    }
+    const result = store.db.prepare(`
+      UPDATE operation_job_candidates SET status = 'running', attempt = ?, updated_at = ?, completed_at = NULL
+      WHERE job_id = ? AND candidate_id = ? AND status IN ('queued', 'failed_retryable', 'running')
+    `).run(Number(attempt || 0), timestamp, jobId, candidateId);
+    if (result.changes > 0) {
+      store.db.prepare("UPDATE memory_candidate_index SET audit_state = 'running' WHERE id = ? AND status = 'pending'")
+        .run(candidateId);
+    }
+    return result.changes > 0;
+  });
 }
 
 export function markOperationJobCandidateSkipped(store, {

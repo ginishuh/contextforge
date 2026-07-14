@@ -9000,7 +9000,9 @@ test('durable distill jobs do not swallow lease loss during embedded closeout au
   assert.equal(processed.jobs[0].attempts, 1);
   let [candidate] = app.listMemoryCandidates({ ...source, status: 'pending' });
   assert.equal(candidate.reviewedAt, null);
-
+  assert.equal(candidate.auditState, 'failed_retryable');
+  const [retryableJobCandidate] = app.getJob({ jobId: submittedJobId }).candidates;
+  assert.equal(retryableJobCandidate.status, 'failed_retryable');
   const replacement = await app.processJobs({ workerId: 'stable-closeout-worker', leaseMs: 1000 });
   assert.equal(replacement.succeeded, 1);
   assert.equal(replacement.jobs[0].status, 'succeeded');
@@ -9008,6 +9010,9 @@ test('durable distill jobs do not swallow lease loss during embedded closeout au
   assert.equal(replacement.jobs[0].result.checkpointId != null, true);
   [candidate] = app.listMemoryCandidates({ ...source, status: 'pending' });
   assert.ok(candidate.reviewedAt);
+  assert.equal(candidate.auditState, 'audited');
+  const [completedJobCandidate] = app.getJob({ jobId: submittedJobId }).candidates;
+  assert.deepEqual({ status: completedJobCandidate.status, attempt: completedJobCandidate.attempt }, { status: 'succeeded', attempt: 2 });
   assert.equal(auditInvocations, 2);
   const [recoveredRun] = app.listDistillRuns(source);
   assert.equal(recoveredRun.status, 'succeeded');
@@ -9066,7 +9071,7 @@ test('durable distill jobs retry embedded closeout audit provider failures', asy
   app.appendRaw({ ...source, role: 'assistant', content: 'Create an older checkpoint candidate.' });
   await app.distillCheckpoint(source);
   app.appendRaw({ ...source, role: 'assistant', content: 'Create the job checkpoint before auditing the older candidate.' });
-  app.submitDistillJob({ ...source, auditTrigger: 'manual_closeout', maxAttempts: 2 });
+  const submitted = app.submitDistillJob({ ...source, auditTrigger: 'manual_closeout', maxAttempts: 2 });
 
   const first = await app.processJobs({ workerId: 'embedded-retry-worker-1', leaseMs: 1000 });
   assert.equal(first.failed, 1);
@@ -9075,6 +9080,9 @@ test('durable distill jobs retry embedded closeout audit provider failures', asy
   assert.equal(first.jobs[0].result.candidateAudit.needsRetry, true);
   assert.equal(first.jobs[0].result.candidateAudit.retryableFailureCount, 5);
   assert.equal(app.listCheckpoints(source).length, 2);
+  const retryableCandidates = app.getJob({ jobId: submitted.jobId }).candidates;
+  assert.equal(retryableCandidates.length, 5);
+  assert.ok(retryableCandidates.every((candidate) => candidate.status === 'failed_retryable'));
 
   const second = await app.processJobs({ workerId: 'embedded-retry-worker-2', leaseMs: 1000 });
   assert.equal(second.succeeded, 1);
@@ -9087,6 +9095,8 @@ test('durable distill jobs retry embedded closeout audit provider failures', asy
   const candidates = app.listMemoryCandidates({ ...source, status: 'pending' });
   assert.equal(candidates.length, 5);
   assert.ok(candidates.every((candidate) => candidate.reviewMetadata.audit.decision === 'approve'));
+  const completedCandidates = app.getJob({ jobId: submitted.jobId }).candidates;
+  assert.ok(completedCandidates.every((candidate) => candidate.status === 'succeeded' && candidate.attempt === 2));
   assert.equal(auditInvocations, 10);
   assert.equal(distillInvocations, 2);
 });
@@ -11525,7 +11535,9 @@ test('distillCheckpoint automatically audits session candidate batches', async (
   });
   assert.equal(candidates.length, 2);
   assert.ok(candidates.every((candidate) => candidate.reviewMetadata.audit?.metadata?.model === 'gpt-5.5'));
-  assert.ok(candidates.every((candidate) => candidate.reviewMetadata.auditMetadata?.sourceMode === 'threshold_batch'));
+  assert.ok(candidates.every((candidate) => candidate.reviewMetadata.auditMetadata?.sourceMode === 'checkpoint'));
+  const attempts = app.listMemoryCandidateAuditAttempts({ scope: 'repo', scopeKey: 'batch-audit-repo', candidateId: candidates[0].id });
+  assert.ok(attempts.every((attempt) => attempt.sourceMode === 'checkpoint'));
   const usageEvents = app.listLlmUsageEvents({
     scope: 'repo',
     scopeKey: 'batch-audit-repo',

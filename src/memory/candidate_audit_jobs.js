@@ -130,6 +130,19 @@ export function submitMemoryCandidateAuditJob({ store, scope, options, auditor }
     candidateIds: registeredCandidateIds,
     force: truthy(options.force),
   });
+  const submittedCandidateIds = registeredCandidateIds;
+  const submittedIds = new Set(submittedCandidateIds);
+  const skippedCandidates = scanned
+    .filter((candidate) => !submittedIds.has(candidate.id))
+    .map((candidate) => ({
+      candidateId: candidate.id,
+      auditState: candidate.auditState,
+      reason: queued.deduplicated
+        ? 'deduplicated_job_selection'
+        : truthy(options.force) || ['unaudited', 'failed_retryable', 'legacy_unknown'].includes(candidate.auditState)
+          ? 'batch_limit'
+          : 'audit_state_ineligible',
+    }));
   return {
     kind: 'operation_job_submission',
     operation: 'audit_memory_candidates',
@@ -137,6 +150,11 @@ export function submitMemoryCandidateAuditJob({ store, scope, options, auditor }
     status: queued.job.status,
     deduplicated: queued.deduplicated,
     requeued: queued.requeued,
+    selection: {
+      requestedCandidateIds: requestedIds,
+      submittedCandidateIds,
+      skippedCandidates,
+    },
     job: { ...queued.job, candidates: jobCandidates },
   };
 }

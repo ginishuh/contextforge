@@ -4938,12 +4938,10 @@ export function createContextForge(options = {}) {
           scopeKey: scope?.scopeKey || null,
         });
         if (!job) throw new Error(`Operation job not found: ${options.jobId}`);
-        return job.operation === 'audit_memory_candidates'
-          ? { ...job, candidates: store.listOperationJobCandidates({ jobId: job.id }) }
-          : job;
+        const candidates = store.listOperationJobCandidates({ jobId: job.id });
+        return candidates.length > 0 ? { ...job, candidates } : job;
       });
     },
-
     listJobs(options = {}) {
       const shouldNarrowScope = Boolean(options.scope || options.scopeType || options.scopeKey || options.cwd || options.repoPath);
       const scope = shouldNarrowScope ? normalizeScopeOptions(options, config) : null;
@@ -6206,12 +6204,10 @@ export function createContextForge(options = {}) {
         for (const item of selected) {
           const auditStartedAt = new Date().toISOString();
           try {
-            assertJobLease();
             if (options.jobId) {
               store.startOperationJobCandidate({
-                jobId: options.jobId,
-                candidateId: item.candidate.id,
-                attempt: options._jobLeaseAttempt,
+                jobId: options.jobId, candidateId: item.candidate.id, attempt: options._jobLeaseAttempt,
+                leaseOwner: options._jobLeaseOwner, leaseAttempt: options._jobLeaseAttempt,
               });
             }
             const audit = await auditAutoPromotionCandidate({
@@ -6439,7 +6435,7 @@ export function createContextForge(options = {}) {
         if (checkpointId) {
           sourceMode = 'checkpoint';
         } else if (options.sessionId) {
-          sourceMode = 'session_pending_batch';
+          sourceMode = 'session';
         } else {
           const latestCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId, level: 0 });
           checkpointId = latestCheckpoint?.id || null;
@@ -8372,9 +8368,11 @@ export function createContextForge(options = {}) {
               .filter((item) => item.score > 0)
               .sort((a, b) => b.score - a.score)
               .slice(0, batchLimit);
+            if (options.jobId && selected.length > 0) {
+              store.registerOperationJobCandidates({ jobId: options.jobId, candidateIds: selected.map((item) => item.candidate.id), leaseOwner: options._jobLeaseOwner, leaseAttempt: options._jobLeaseAttempt });
+            }
             const auditBatchId = randomUUID();
-            let auditedCount = 0;
-            let promotedCount = 0;
+            let auditedCount = 0, promotedCount = 0;
             let failedCount = 0;
             let retryableFailureCount = 0;
             if (selected.length > 0) {
@@ -8395,9 +8393,12 @@ export function createContextForge(options = {}) {
               }
             };
             for (const item of selected) {
+              const auditStartedAt = new Date().toISOString();
               let audit;
               try {
-                assertJobLease();
+                if (options.jobId) {
+                  store.startOperationJobCandidate({ jobId: options.jobId, candidateId: item.candidate.id, attempt: options._jobLeaseAttempt, leaseOwner: options._jobLeaseOwner, leaseAttempt: options._jobLeaseAttempt });
+                }
                 audit = await auditAutoPromotionCandidate({
                   auditor,
                   store,
@@ -8441,10 +8442,11 @@ export function createContextForge(options = {}) {
                   metadata: {
                     auditBatchId,
                     trigger: auditTrigger || 'batch_threshold',
-                    sourceMode: forceAudit ? 'closeout_batch' : 'threshold_batch',
+                    sourceMode: 'checkpoint',
                     sessionId: options.sessionId,
                     checkpointId: checkpoint.id,
                     operationJobId: options.jobId || null,
+                    leaseAttempt: options._jobLeaseAttempt ?? null, startedAt: auditStartedAt,
                     minBatchCandidates,
                     batchLimit,
                     autoPromoteEnabled: config.autoPromote.enabled,

@@ -5,6 +5,8 @@ const state = {
   memories: [],
   candidates: [],
   candidateCursor: null,
+  candidateSummary: null,
+  candidateAsOf: null,
   runs: [],
 };
 
@@ -574,17 +576,24 @@ async function loadAuditedCandidates({ cursor = null } = {}) {
     source: item.source,
   }));
   state.candidateCursor = result.page?.page?.nextCursor || null;
-  const summary = result.summary || {};
-  $('#candidateSummary').textContent = [
-    `기준 ${result.asOf || ''}`,
-    `pending ${summary.pendingCandidateCount || 0}`,
-    `미감사 ${summary.byAuditState?.unaudited || 0}`,
-    `감사 대기/실행 ${Number(summary.byAuditState?.queued || 0) + Number(summary.byAuditState?.running || 0)}`,
-    `승인 후 대기 ${summary.byAuditDecision?.approve || 0}`,
-    `사람 검토 ${summary.byAuditDecision?.needs_review || 0}`,
-    `거절 권고 ${summary.byAuditDecision?.reject || 0}`,
-    `oldest ${summary.oldestPendingAt || '-'}`,
-  ].join(' · ');
+  if (result.summary) {
+    state.candidateSummary = result.summary;
+    state.candidateAsOf = result.asOf;
+  }
+  const summary = state.candidateSummary;
+  if (summary) {
+    $('#candidateSummary').textContent = [
+      `기준 ${state.candidateAsOf || ''}`,
+      `필터 결과 ${summary.filteredCandidateCount || 0}`,
+      `pending ${summary.pendingCandidateCount || 0}`,
+      `미감사 ${summary.byAuditState?.unaudited || 0}`,
+      `감사 대기/실행 ${Number(summary.byAuditState?.queued || 0) + Number(summary.byAuditState?.running || 0)}`,
+      `승인 후 대기 ${summary.approvedAwaitingPromotionCount || 0}`,
+      `사람 검토 ${summary.pendingNeedsReviewCount || 0}`,
+      `거절 권고 ${summary.pendingRejectRecommendedCount || 0}`,
+      `oldest ${summary.oldestPendingAt || '-'}`,
+    ].join(' · ');
+  }
   $('#nextCandidatePage').hidden = !state.candidateCursor;
   $('#candidates').innerHTML = state.candidates.map(candidateItem).join('') || '<p class="muted">현재 필터에 해당하는 후보가 없습니다.</p>';
   document.querySelectorAll('[data-candidate]').forEach((button) => {
@@ -723,7 +732,10 @@ $('#auditSelectedCandidates').addEventListener('click', async (event) => {
     trigger: 'manual_closeout',
     limit: candidateIds.length,
   });
-  alert(`감사 작업 ${result.jobId} · ${result.status}`);
+  const submittedCount = result.selection?.submittedCandidateIds?.length ?? result.job?.payload?.candidateIds?.length ?? 0;
+  const skippedCount = result.selection?.skippedCandidates?.length ?? Math.max(0, candidateIds.length - submittedCount);
+  const skippedReasons = [...new Set((result.selection?.skippedCandidates || []).map((item) => item.reason))].join(', ');
+  alert(`감사 작업 ${result.jobId} · ${result.status} · 제출 ${submittedCount}개${skippedCount ? ` · 제외 ${skippedCount}개${skippedReasons ? ` (${skippedReasons})` : ''}` : ''}`);
   await loadAuditedCandidates();
 });
 

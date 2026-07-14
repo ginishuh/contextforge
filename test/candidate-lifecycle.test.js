@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { createContextForge } from '../src/core.js';
+import { ContextForgeStore } from '../src/storage/sqlite.js';
 
 async function makeTempDir() {
   return fs.mkdtemp(path.join(os.tmpdir(), 'contextforge-candidate-lifecycle-test-'));
@@ -85,6 +86,8 @@ test('candidate backlog is read-only, paged, and submits an explicit bounded bac
     cursor: firstPage.page.page.nextCursor,
   });
   assert.equal(secondPage.page.items.length, 1);
+  assert.equal(secondPage.summaryIncluded, false);
+  assert.equal(secondPage.summary, null);
   assert.notEqual(secondPage.page.items[0].id, firstPage.page.items[0].id);
   assert.equal(auditInvocations, 0);
 
@@ -117,7 +120,30 @@ test('candidate backlog is read-only, paged, and submits an explicit bounded bac
   });
   assert.equal(audited.page.items.length, 2);
   assert.equal(audited.summary.byAuditDecision.approve, 2);
+  assert.equal(audited.summary.approvedAwaitingPromotionCount, 2);
+  assert.equal(audited.summary.filteredCandidateCount, 2);
   assert.ok(audited.page.items.every((candidate) => candidate.auditContentHash));
+  assert.ok(
+    app.listMemoryCandidateAuditAttempts({
+      scope: source.scope,
+      scopeKey: source.scopeKey,
+      candidateId: audited.page.items[0].id,
+    }).every((attempt) => attempt.sourceMode === 'backlog_batch'),
+  );
+
+  app.promoteMemoryCandidate({
+    scope: source.scope,
+    scopeKey: source.scopeKey,
+    candidateId: audited.page.items[0].id,
+  });
+  const pendingAfterPromotion = app.memoryCandidateBacklog({
+    scope: source.scope,
+    scopeKey: source.scopeKey,
+    status: 'pending',
+  });
+  assert.equal(pendingAfterPromotion.summary.filteredCandidateCount, 1);
+  assert.equal(pendingAfterPromotion.summary.byAuditDecision.approve, 1);
+  assert.equal(pendingAfterPromotion.summary.approvedAwaitingPromotionCount, 1);
 
   app.appendRaw({ ...source, role: 'assistant', content: 'Third candidate for configuration drift fencing.' });
   const driftCheckpoint = await app.distillCheckpoint(source);
@@ -126,11 +152,26 @@ test('candidate backlog is read-only, paged, and submits an explicit bounded bac
     checkpointId: driftCheckpoint.id,
     status: 'pending',
   });
+  const partialSubmission = app.submitAuditJob({
+    scope: source.scope,
+    scopeKey: source.scopeKey,
+    candidateIds: [audited.page.items[1].id, driftCandidate.id],
+    trigger: 'manual_closeout',
+    limit: 2,
+  });
+  assert.deepEqual(partialSubmission.selection.submittedCandidateIds, [driftCandidate.id]);
+  assert.deepEqual(partialSubmission.selection.skippedCandidates, [{
+    candidateId: audited.page.items[1].id,
+    auditState: 'audited',
+    reason: 'audit_state_ineligible',
+  }]);
+  app.cancelJob({ jobId: partialSubmission.jobId, reason: 'Reset the partial-selection test job.' });
   const driftSubmission = app.submitAuditJob({
     scope: source.scope,
     scopeKey: source.scopeKey,
     candidateIds: [driftCandidate.id],
     trigger: 'manual_closeout',
+    idempotencyKey: 'configuration-drift-after-partial-selection',
   });
   auditor.metadata.model = 'changed-after-submit';
   const driftResult = await app.processJobs({
@@ -148,6 +189,63 @@ test('candidate backlog is read-only, paged, and submits an explicit bounded bac
     status: 'pending',
   });
   assert.equal(failedCandidate.auditState, 'failed_terminal');
+});
+
+test('legacy candidate audit backfill processes more than one bounded batch', async () => {
+  const dataDir = await makeTempDir();
+  const legacyStore = new ContextForgeStore({ dataDir });
+  const reviewedAt = new Date().toISOString();
+  const reviewMetadata = JSON.stringify({
+    audit: {
+      approved: true,
+      decision: 'approve',
+      reason: 'Legacy audit approval.',
+      riskCodes: [],
+      metadata: { provider: 'legacy_provider', model: 'legacy-model' },
+    },
+    auditMetadata: { sourceMode: 'session_pending_batch' },
+    auditedAt: reviewedAt,
+  });
+  const checkpoint = legacyStore.insertCheckpoint({
+    scopeType: 'repo',
+    scopeKey: 'legacy-backfill-repo',
+    sessionId: 'legacy-backfill-session',
+    summaryShort: 'Legacy audit backfill checkpoint.',
+    summaryText: 'Synthetic legacy candidates cross the bounded backfill batch boundary.',
+    provider: 'legacy_provider',
+  });
+  const insert = legacyStore.db.prepare(`
+    INSERT INTO memory_candidate_index (
+      id, checkpoint_id, session_id, scope_type, scope_key, candidate_index,
+      candidate_key, candidate_content, category, candidate_json,
+      reviewed_at, review_metadata_json, created_at
+    ) VALUES (?, ?, ?, 'repo', 'legacy-backfill-repo', ?, ?, ?, 'runbook', ?, ?, ?, ?)
+  `);
+  legacyStore.withTransaction(() => {
+    for (let index = 0; index < 251; index += 1) {
+      const key = `legacy-backfill-${String(index).padStart(3, '0')}`;
+      const content = `Legacy audited candidate ${index}.`;
+      insert.run(
+        key, checkpoint.id, 'legacy-backfill-session', index, key, content,
+        JSON.stringify({ key, content, category: 'runbook', tags: [] }),
+        reviewedAt, reviewMetadata, reviewedAt,
+      );
+    }
+  });
+  legacyStore.db.prepare("DELETE FROM schema_meta WHERE key = 'memory_candidate_audit_state_backfill_completed_at'").run();
+  legacyStore.close();
+
+  const migrated = new ContextForgeStore({ dataDir });
+  assert.equal(
+    migrated.db.prepare("SELECT COUNT(*) AS count FROM memory_candidate_index WHERE audit_state = 'audited'").get().count,
+    251,
+  );
+  assert.equal(migrated.db.prepare('SELECT COUNT(*) AS count FROM memory_candidate_audit_attempts').get().count, 251);
+  assert.equal(
+    migrated.db.prepare("SELECT COUNT(*) AS count FROM memory_candidate_audit_attempts WHERE source_mode = 'session'").get().count,
+    251,
+  );
+  migrated.close();
 });
 
 test('promotion invalidates audit approval when the reviewed candidate revision changes', async () => {

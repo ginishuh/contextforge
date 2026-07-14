@@ -4094,11 +4094,11 @@ export class ContextForgeStore {
         `)
         .get(exhausted ? 'failed' : 'queued', exhausted ? 0 : 1, now, exhausted ? now : null, row.id);
       if (updated) {
-        if (updated.operation === 'audit_memory_candidates') {
+        if (this.listOperationJobCandidates({ jobId: updated.id }).length > 0) {
           this.settleOperationJobCandidates({
             jobId: updated.id,
             status: updated.status,
-            reason: 'Operation job lease expired before candidate audit completion.',
+            reason: 'Operation job lease expired before candidate processing completed.',
           });
         }
         recovered.push(hydrateOperationJob(updated));
@@ -4277,7 +4277,7 @@ export class ContextForgeStore {
         timestamp,
       );
     if (!row) throw new Error(`Running operation job lease not found: ${jobId}`);
-    if (row.operation === 'audit_memory_candidates') {
+    if (this.listOperationJobCandidates({ jobId: row.id }).length > 0) {
       this.settleOperationJobCandidates({
         jobId: row.id,
         status: row.status,
@@ -4312,7 +4312,7 @@ export class ContextForgeStore {
         RETURNING *
       `)
       .get(reason || 'Operation job was cancelled before execution.', timestamp, timestamp, jobId);
-    if (row?.operation === 'audit_memory_candidates') {
+    if (row && this.listOperationJobCandidates({ jobId: row.id }).length > 0) {
       this.settleOperationJobCandidates({
         jobId: row.id,
         status: 'cancelled',
