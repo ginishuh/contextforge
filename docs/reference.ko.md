@@ -268,6 +268,22 @@ scripts/install-agent-router-service.sh \
   승격하기 전에 어느 agent가 만든 후보인지 확인할 수 있다.
 
 `ingestAgentRoutedSessions --watch`는 기본 단일 router watcher로 쓸 수 있다.
+
+후보 lifecycle을 무인 운영할 때는 별도 supervised worker를 설치한다. 이
+worker는 registry의 각 canonical repo scope에서 snooze wake-up, idle audit
+enqueue, stale SLA 전이, audit job 처리를 bounded batch로 수행한다.
+
+```bash
+scripts/install-candidate-lifecycle-worker-service.sh \
+  --name all-repos \
+  --repo-registry /srv/contextforge/repos.json \
+  --remote-url https://memory.example.com
+```
+
+CLI의 `candidateLifecycleWorker` one-shot 기본값은 dry-run이다. installer는
+실제 수렴을 위해 `--dryRun false`를 명시하며, 관찰 전용 canary에는
+`--dry-run true`를 사용한다. audit job claim은 registry의 같은 scope로
+fencing되어 다른 scope의 queued job을 가져오지 않는다.
 `--adapters`를 생략하면 각 adapter의 root directory 또는 DB 존재 여부를 보고
 설치된 것만 자동 활성화한다. 없는 런타임은 non-existent tree를 계속 걷지 않고
 `inactiveAdapters`에 남긴다. `--adapters cursor_cli`처럼 명시한 adapter가 없으면

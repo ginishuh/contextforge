@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { REMOTE_METHOD_CAPABILITIES, TOKEN_CAPABILITIES } from '../../src/auth/token_authorization.js';
+import {
+  createTokenAuthorizer,
+  REMOTE_METHOD_CAPABILITIES,
+  TOKEN_CAPABILITIES,
+} from '../../src/auth/token_authorization.js';
 import {
   ALL_MCP_TOOL_NAMES,
   createContextForgeMcpServer,
@@ -45,6 +49,28 @@ test('operation registry is the canonical remote and authorization contract', ()
     OPERATION_REGISTRY.filter((operation) => operation.remoteDispatch === 'optional').map(
       (operation) => operation.name,
     ),
+  );
+  assert.equal(operationByName('processJobs').scopeMode, 'optional');
+});
+
+test('scoped operator authorization fences processJobs to an explicit allowed scope', () => {
+  const env = {
+    SCOPED_OPERATOR_TOKEN: 'scoped-operator-secret-1234',
+    CONTEXTFORGE_API_TOKENS_JSON: JSON.stringify([{
+      id: 'scoped-operator', tokenEnv: 'SCOPED_OPERATOR_TOKEN',
+      capabilities: ['operator'], scopes: ['repo:allowed-repo'],
+    }]),
+  };
+  const authorizer = createTokenAuthorizer(env);
+  const identity = authorizer.authenticate('Bearer scoped-operator-secret-1234');
+  const allowed = authorizer.authorize(identity, 'processJobs', {
+    scope: 'repo', scopeKey: 'allowed-repo',
+  });
+  assert.deepEqual(allowed.scopes, [{ scopeType: 'repo', scopeKey: 'allowed-repo' }]);
+  assert.throws(() => authorizer.authorize(identity, 'processJobs'), /requires an explicit scope/);
+  assert.throws(
+    () => authorizer.authorize(identity, 'processJobs', { scope: 'repo', scopeKey: 'blocked-repo' }),
+    /not allowed to access/,
   );
 });
 

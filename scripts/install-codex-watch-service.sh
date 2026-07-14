@@ -103,10 +103,10 @@ After=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=${repo_root}
+EnvironmentFile=-${token_env_file}
 Environment=CONTEXTFORGE_STORAGE_MODE=remote
 Environment=CONTEXTFORGE_REMOTE_URL=${remote_url}
 Environment=CONTEXTFORGE_WATCH_STATE_DIR=%h/.local/state/contextforge/watch
-EnvironmentFile=-${token_env_file}
 ExecStart=${node_bin} ${repo_root}/src/cli.js ingestCodexSessions --sessionsDir ${sessions_dir} --scope repo --repoPath ${repo_path} --scopeKey ${resolved_scope_key} --sinceMinutes ${since_minutes} --distill ${distill} --watch --intervalMs ${interval_ms}
 Restart=always
 RestartSec=10

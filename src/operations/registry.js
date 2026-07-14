@@ -65,14 +65,14 @@ const SCOPE_MODE_GROUPS = Object.freeze({
     'dbInfo', 'readiness', 'operationalMetrics', 'getRuntimeSettings', 'updateRuntimeSettings',
     'checkDistillProvider', 'checkCodexExec',
   ],
-  all: ['listScopeKeys', 'listRecentDistillRuns', 'processJobs', 'pruneRawEvents'],
+  all: ['listScopeKeys', 'listRecentDistillRuns', 'pruneRawEvents'],
   workspace: [
     'upsertWorkspaceProfile', 'getWorkspaceProfile', 'listWorkspaceProfiles', 'deleteWorkspaceProfile',
     'deactivateWorkspaceProfile', 'upsertWorkspaceMember', 'removeWorkspaceMember', 'upsertWorkspaceRoutingRule',
     'removeWorkspaceRoutingRule', 'resolveWorkspace',
   ],
   optional: [
-    'getJob', 'listJobs', 'cancelJob', 'listDueDistillSessions', 'processDueDistills',
+    'getJob', 'listJobs', 'processJobs', 'cancelJob', 'listDueDistillSessions', 'processDueDistills',
     'listDueCandidateAudits', 'processDueCandidateAudits', 'embeddingInventory',
     'pruneEmbeddingArtifacts',
   ],

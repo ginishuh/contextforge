@@ -5,11 +5,12 @@ import path from 'node:path';
 
 const root = process.cwd();
 const reportFile = path.resolve(process.env.CONTEXTFORGE_RELEASE_REPORT || 'artifacts/release/package-report.json');
-const budgets = Object.freeze({ packedBytes: 400_000, unpackedBytes: 1_750_000, entryCount: 90 });
+const budgets = Object.freeze({ packedBytes: 400_000, unpackedBytes: 1_750_000, entryCount: 100 });
 const publishedScripts = Object.freeze([
   'scripts/benchmark-retrieval.js',
   'scripts/check-release.js',
   'scripts/install-agent-router-service.sh',
+  'scripts/install-candidate-lifecycle-worker-service.sh',
   'scripts/install-claude-code-router-service.sh',
   'scripts/install-codex-router-service.sh',
   'scripts/install-codex-watch-service.sh',

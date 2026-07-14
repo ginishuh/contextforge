@@ -13,6 +13,7 @@
     "scripts/benchmark-retrieval.js",
     "scripts/check-release.js",
     "scripts/install-agent-router-service.sh",
+    "scripts/install-candidate-lifecycle-worker-service.sh",
     "scripts/install-claude-code-router-service.sh",
     "scripts/install-codex-router-service.sh",
     "scripts/install-codex-watch-service.sh",

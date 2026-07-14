@@ -4014,16 +4014,18 @@ export class ContextForgeStore {
       .map(hydrateOperationJob);
   }
 
-  recoverExpiredOperationJobs({ now = nowIso() } = {}) {
+  recoverExpiredOperationJobs({ now = nowIso(), scopeType = null, scopeKey = null } = {}) {
+    const filters = ["status = 'running'", 'lease_expires_at IS NOT NULL', 'lease_expires_at <= ?'];
+    const values = [now];
+    if (scopeType) { filters.push('scope_type = ?'); values.push(scopeType); }
+    if (scopeKey) { filters.push('scope_key = ?'); values.push(scopeKey); }
     const expired = this.db
       .prepare(`
         SELECT * FROM operation_jobs
-        WHERE status = 'running'
-          AND lease_expires_at IS NOT NULL
-          AND lease_expires_at <= ?
+        WHERE ${filters.join(' AND ')}
         ORDER BY lease_expires_at ASC, id ASC
       `)
-      .all(now);
+      .all(...values);
     const recovered = [];
     for (const row of expired) {
       const exhausted = Number(row.attempts) >= Number(row.max_attempts);
@@ -4057,9 +4059,12 @@ export class ContextForgeStore {
     return recovered;
   }
 
-  claimOperationJobs({ workerId, limit = 1, leaseMs = 300000, operations = null, now = new Date() }) {
+  claimOperationJobs({
+    workerId, limit = 1, leaseMs = 300000, operations = null,
+    scopeType = null, scopeKey = null, now = new Date(),
+  }) {
     const nowText = now.toISOString();
-    this.recoverExpiredOperationJobs({ now: nowText });
+    this.recoverExpiredOperationJobs({ now: nowText, scopeType, scopeKey });
     const operationList = Array.isArray(operations) ? operations.filter(Boolean) : [];
     const filters = ["status = 'queued'"];
     const values = [];
@@ -4067,6 +4072,8 @@ export class ContextForgeStore {
       filters.push(`operation IN (${operationList.map(() => '?').join(', ')})`);
       values.push(...operationList);
     }
+    if (scopeType) { filters.push('scope_type = ?'); values.push(scopeType); }
+    if (scopeKey) { filters.push('scope_key = ?'); values.push(scopeKey); }
     const parsedLimit = Math.min(25, Math.max(1, Number(limit) || 1));
     values.push(parsedLimit);
     const candidates = this.db

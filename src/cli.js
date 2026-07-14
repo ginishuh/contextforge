@@ -22,6 +22,7 @@ import {
 } from './ingest/agents.js';
 import { runRetrievalEval } from './eval/retrieval.js';
 import { runQualityEval } from './eval/quality.js';
+import { processCandidateLifecycle, watchCandidateLifecycle } from './memory/candidate_lifecycle_worker.js';
 import { startContextForgeServer } from './server.js';
 import { backupSqliteDatabase, restoreSqliteDatabase, verifySqliteBackup } from './storage/backup.js';
 import { CONTEXTFORGE_VERSION } from './version.js';
@@ -226,6 +227,11 @@ function toCoreOptions(options) {
     sinceMinutes: options.sinceMinutes == null ? undefined : Number(options.sinceMinutes),
     scanLimit: options.scanLimit == null ? undefined : Number(options.scanLimit),
     batchLimit: options.batchLimit == null ? undefined : Number(options.batchLimit),
+    auditLimit: options.auditLimit == null ? undefined : Number(options.auditLimit),
+    auditBatchLimit: options.auditBatchLimit == null ? undefined : Number(options.auditBatchLimit),
+    wakeLimit: options.wakeLimit == null ? undefined : Number(options.wakeLimit),
+    staleLimit: options.staleLimit == null ? undefined : Number(options.staleLimit),
+    jobLimit: options.jobLimit == null ? undefined : Number(options.jobLimit),
     watch: options.watch === true || options.watch === 'true',
     watchFullScan: options.watchFullScan === true || options.watchFullScan === 'true',
     watchVerbose: options.watchVerbose === true || options.watchVerbose === 'true',
@@ -385,6 +391,13 @@ async function main() {
       app.listDueCandidateStaleTransitions(preserveCoreLimitDefault(coreOptions, rawOptions)),
     processDueCandidateStaleTransitions: (app, coreOptions, rawOptions) =>
       app.processDueCandidateStaleTransitions(preserveCoreLimitDefault(coreOptions, rawOptions)),
+    candidateLifecycleWorker: (app, coreOptions) =>
+      coreOptions.watch
+        ? watchCandidateLifecycle(app, {
+            ...coreOptions,
+            onResult: (result) => console.log(JSON.stringify(result)),
+          })
+        : processCandidateLifecycle(app, coreOptions),
     reopenStaleMemoryCandidate: (app, coreOptions) => app.reopenStaleMemoryCandidate(coreOptions),
     listDueConsolidations: (app, coreOptions) => app.listDueConsolidations(coreOptions),
     processConsolidations: (app, coreOptions) => app.processConsolidations(coreOptions),
