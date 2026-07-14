@@ -2692,6 +2692,7 @@ function promoteCandidateToMemory(
     reviewMetadata = {},
     beforeWrite = null,
   },
+  enqueueEmbeddings = null,
 ) {
   return store.withTransaction(() => {
     const freshValidation = typeof beforeWrite === 'function' ? beforeWrite() || {} : {};
@@ -2733,11 +2734,12 @@ function promoteCandidateToMemory(
         },
       });
     }
+    if (enqueueEmbeddings) enqueueEmbeddings(store, [store.embeddingSourceForMemory(memory)]);
     return memory;
   });
 }
 
-function autoPromoteIndexedCandidate(store, scope, indexedCandidate, warnings, reason, audit = null) {
+function autoPromoteIndexedCandidate(store, scope, indexedCandidate, warnings, reason, audit = null, enqueueEmbeddings = null) {
   const candidate = indexedCandidate.candidate || {};
   return promoteCandidateToMemory(store, scope, {
     candidate,
@@ -2754,7 +2756,7 @@ function autoPromoteIndexedCandidate(store, scope, indexedCandidate, warnings, r
     warnings,
     eventMetadata: { autoPromoted: true, autoPromotionAudit: audit },
     reviewMetadata: { autoPromoted: true, autoPromotionAudit: audit },
-  });
+  }, enqueueEmbeddings);
 }
 
 async function auditAutoPromotionCandidate({
@@ -6655,8 +6657,7 @@ export function createContextForge(options = {}) {
             : auditApproved.map((item, index) => {
                 const reason =
                   'Auto-promoted by auto_promote_memory_candidates after strict closeout-scoped safety checks and audit approval.';
-                const memory = autoPromoteIndexedCandidate(store, scope, item.candidate, item.warnings, reason, item.audit);
-                enqueueEmbeddingSources(store, [store.embeddingSourceForMemory(memory)]);
+                const memory = autoPromoteIndexedCandidate(store, scope, item.candidate, item.warnings, reason, item.audit, enqueueEmbeddingSources);
                 return {
                   ...promotionProposal(item.candidate, item.warnings, index + 1),
                   memoryId: memory.id,
@@ -7093,8 +7094,7 @@ export function createContextForge(options = {}) {
               reviewMetadata: { promotionAssessment: freshAssessment, promotedRevisionHash: proposedRevisionHash },
             };
           },
-        });
-        enqueueEmbeddingSources(store, [store.embeddingSourceForMemory(memory)]);
+        }, enqueueEmbeddingSources);
         return memory;
       });
     },
@@ -8471,15 +8471,15 @@ export function createContextForge(options = {}) {
                     'Auto-promoted after automatic candidate audit approved this strict safe candidate.';
                   store.withTransaction(() => {
                     assertJobLease();
-                    const memory = autoPromoteIndexedCandidate(
+                    autoPromoteIndexedCandidate(
                       store,
                       scope,
                       auditedCandidate,
                       autoWarnings,
                       reason,
                       audit,
+                      enqueueEmbeddingSources,
                     );
-                    enqueueEmbeddingSources(store, [store.embeddingSourceForMemory(memory)]);
                   });
                   promotedCount += 1;
                 }

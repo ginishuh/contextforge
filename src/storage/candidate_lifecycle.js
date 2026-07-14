@@ -252,7 +252,7 @@ function candidateSummaryFilters({
     ['auditState', auditState, 'memory_candidate_index.audit_state = ?'],
     ['auditDecision', auditDecision, 'memory_candidate_index.audit_decision = ?'],
     ['category', category, 'memory_candidate_index.category = ?'],
-    ['sourceAgent', sourceAgent, "json_extract(memory_candidate_index.candidate_json, '$.sourceProvenance.sourceAgent') = ?"],
+    ['sourceAgent', sourceAgent, "json_extract(checkpoints.metadata_json, '$.sourceProvenance.sourceAgent') = ?"],
   ];
   const applied = {};
   for (const [name, value, condition] of filters) {
@@ -269,13 +269,19 @@ export function memoryLifecycleSummary(store, options) {
   const filtered = candidateSummaryFilters(options);
   const where = filtered.conditions.join(' AND ');
   const rows = store.db.prepare(`
-    SELECT status, audit_state, audit_decision, promotion_recommendation, COUNT(*) AS count,
-           MAX(created_at) AS latest_created_at, MAX(reviewed_at) AS latest_reviewed_at
-    FROM memory_candidate_index WHERE ${where}
-    GROUP BY status, audit_state, audit_decision, promotion_recommendation
+    SELECT memory_candidate_index.status, memory_candidate_index.audit_state,
+           memory_candidate_index.audit_decision, memory_candidate_index.promotion_recommendation,
+           COUNT(*) AS count, MAX(memory_candidate_index.created_at) AS latest_created_at,
+           MAX(memory_candidate_index.reviewed_at) AS latest_reviewed_at
+    FROM memory_candidate_index
+    JOIN checkpoints ON checkpoints.id = memory_candidate_index.checkpoint_id
+    WHERE ${where}
+    GROUP BY memory_candidate_index.status, memory_candidate_index.audit_state,
+             memory_candidate_index.audit_decision, memory_candidate_index.promotion_recommendation
   `).all(...filtered.values);
   const recentCandidates = store.db.prepare(`
     SELECT COUNT(*) AS count FROM memory_candidate_index
+    JOIN checkpoints ON checkpoints.id = memory_candidate_index.checkpoint_id
     WHERE ${where} AND memory_candidate_index.created_at >= ?
   `).get(...filtered.values, sinceIso).count;
   const recentPromoted = store.db.prepare(`
@@ -285,13 +291,15 @@ export function memoryLifecycleSummary(store, options) {
     SELECT MAX(created_at) AS value FROM memories WHERE scope_type = ? AND scope_key = ?
   `).get(scopeType, scopeKey)?.value || null;
   const oldestPending = store.db.prepare(`
-    SELECT MIN(created_at) AS value FROM memory_candidate_index
+    SELECT MIN(memory_candidate_index.created_at) AS value FROM memory_candidate_index
+    JOIN checkpoints ON checkpoints.id = memory_candidate_index.checkpoint_id
     WHERE ${where} AND memory_candidate_index.status = 'pending'
   `).get(...filtered.values)?.value || null;
   const latestAudit = store.db.prepare(`
     SELECT MAX(memory_candidate_audit_attempts.completed_at) AS value
     FROM memory_candidate_audit_attempts
     JOIN memory_candidate_index ON memory_candidate_index.id = memory_candidate_audit_attempts.candidate_id
+    JOIN checkpoints ON checkpoints.id = memory_candidate_index.checkpoint_id
     WHERE ${where}
   `).get(...filtered.values)?.value || null;
   const summary = {

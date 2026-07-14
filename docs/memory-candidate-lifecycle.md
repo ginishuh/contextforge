@@ -20,9 +20,17 @@ the `review` capability. It never calls an LLM provider. It returns:
 
 - one cursor-paged candidate list;
 - an `asOf` timestamp;
-- counts by disposition, audit state, audit decision, and recommendation;
+- `filteredCandidateCount` and counts by disposition, audit state, audit
+  decision, and recommendation using the same filters as the list;
+- explicit `approvedAwaitingPromotionCount`, `pendingNeedsReviewCount`, and
+  `pendingRejectRecommendedCount` fields;
 - latest candidate, audit, and promotion timestamps;
 - the oldest pending candidate timestamp.
+
+The first page includes the summary by default. Cursor continuation pages set
+`summaryIncluded=false` and return `summary=null` so pagination does not repeat
+the scope aggregation. A caller that needs it can pass `includeSummary=true`.
+The Admin UI keeps the first-page summary while paging.
 
 The Admin UI uses this operation directly. A repo reviewer can therefore see
 pending candidates without first locating a session or checkpoint.
@@ -74,6 +82,9 @@ Promotion repeats duplicate/conflict assessment inside the write transaction.
 The candidate disposition update uses compare-and-swap against `pending`, so a
 concurrent reviewer cannot commit a second promotion after another process has
 already changed the candidate.
+
+The durable memory write, candidate disposition, memory event, audit provenance
+link, and embedding job enqueue commit in the same transaction.
 
 Ordinary closeout remains session/checkpoint scoped. Scope-wide review is only
 available through an explicit `backlog_batch`; there is no implicit scope

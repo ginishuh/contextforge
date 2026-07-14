@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { createContextForge } from '../src/core.js';
+import { buildMemoryCandidateBacklog } from '../src/memory/candidate_backlog.js';
 import { ContextForgeStore } from '../src/storage/sqlite.js';
 
 async function makeTempDir() {
@@ -246,6 +247,40 @@ test('legacy candidate audit backfill processes more than one bounded batch', as
     251,
   );
   migrated.close();
+});
+
+test('candidate backlog sourceAgent list and summary use checkpoint provenance', async () => {
+  const dataDir = await makeTempDir();
+  const store = new ContextForgeStore({ dataDir });
+  for (const sourceAgent of ['codex', 'opencode']) {
+    store.insertCheckpoint({
+      scopeType: 'repo',
+      scopeKey: 'source-agent-filter-repo',
+      sessionId: `${sourceAgent}-session`,
+      summaryShort: `${sourceAgent} checkpoint.`,
+      summaryText: `Candidate produced by ${sourceAgent}.`,
+      provider: 'synthetic_provider',
+      metadata: {
+        sourceProvenance: { sourceAgent },
+        memoryCandidates: [{
+          key: `${sourceAgent}-runbook`,
+          content: `${sourceAgent} durable runbook.`,
+          category: 'runbook',
+          promotionRecommendation: 'review',
+        }],
+      },
+    });
+  }
+  const backlog = buildMemoryCandidateBacklog({
+    store,
+    scope: { scopeType: 'repo', scopeKey: 'source-agent-filter-repo' },
+    options: { sourceAgent: 'codex', status: 'pending' },
+  });
+  assert.equal(backlog.page.items.length, 1);
+  assert.equal(backlog.page.items[0].source.sourceAgent, 'codex');
+  assert.equal(backlog.summary.filteredCandidateCount, 1);
+  assert.deepEqual(backlog.summary.filters, { status: 'pending', sourceAgent: 'codex' });
+  store.close();
 });
 
 test('promotion invalidates audit approval when the reviewed candidate revision changes', async () => {
