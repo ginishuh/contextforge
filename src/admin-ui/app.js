@@ -527,6 +527,9 @@ function auditedActionLabel(value) {
     review: '사람 검토',
     ask_user: '사용자 확인',
     dry_run_only: '드라이런',
+    do_not_promote: '새 메모리 생성 금지',
+    review_update_candidate: '메모리 업데이트 검토',
+    route_before_promote: '승격 전 라우팅 필요',
   };
   return labels[String(value || '').toLowerCase()] || '감사 결과';
 }
@@ -578,11 +581,13 @@ async function loadAuditedCandidates({ cursor = null } = {}) {
       sourceAgent: item.source?.sourceAgent || null,
       sourceProvenance: item.source?.sourceProvenance || null,
     },
-    recommendedAction: item.reviewMetadata?.promotionRouting?.action === 'do_not_create_duplicate_memory'
+    recommendedAction: ['do_not_create_duplicate_memory', 'keep_as_checkpoint_context'].includes(item.reviewMetadata?.promotionRouting?.action)
       ? 'do_not_promote'
       : item.reviewMetadata?.promotionRouting?.action === 'review_memory_update_candidate'
         ? 'review_update_candidate'
-        : item.auditDecision === 'approve' ? 'promote' : 'review',
+        : item.reviewMetadata?.promotionRouting?.action === 'promote_as_new_memory'
+          ? 'promote'
+          : item.auditDecision === 'approve' ? 'route_before_promote' : 'review',
     source: item.source,
   }));
   state.candidateCursor = result.page?.page?.nextCursor || null;
@@ -629,7 +634,6 @@ async function loadAuditedCandidates({ cursor = null } = {}) {
         category: candidate.category || 'note',
         tags: candidate.tags || [],
         importance: candidate.importance ?? 0,
-        allowWarnings: true,
         ...(edited ? { allowAuditRevisionOverride: true, reason: revisionReason } : {}),
       });
       await loadAuditedCandidates();

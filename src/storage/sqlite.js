@@ -3636,8 +3636,7 @@ export class ContextForgeStore {
               source_checkpoint_id = COALESCE(?, source_checkpoint_id),
               source_candidate_id = COALESCE(?, source_candidate_id),
               correction = ?,
-              basis_json = ?,
-              created_at = ?
+              basis_json = ?
           WHERE id = ?
         `)
         .run(
@@ -3654,7 +3653,6 @@ export class ContextForgeStore {
           sourceCandidateId,
           correction,
           json(basis, []),
-          timestamp,
           existing.id,
         );
       return this.getMemoryUpdateCandidate({ scopeType, scopeKey, candidateId: existing.id });

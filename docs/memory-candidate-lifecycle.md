@@ -164,6 +164,13 @@ eligible for reviewed promotion, `duplicate` is labeled
 creates an idempotent `memory_update_candidate` for human review. This routing
 does not promote or edit durable memory.
 
+Exact duplicates normally leave the paid audit path during deterministic
+triage and become `triaged_no_audit`; the duplicate routing branch exists for
+legacy approvals, forced re-audits, and previously audited backlog rows. In all
+cases the Admin UI requires a stored `promote_as_new_memory` route before it
+enables direct promotion. Missing or failed routing never falls back to a
+warning override.
+
 `routeAuditedMemoryCandidates` applies the same provider-free contract to an
 existing approved backlog. It defaults to `dryRun=true`, accepts at most 100
 explicit ids or the oldest bounded approved batch, and refuses candidate

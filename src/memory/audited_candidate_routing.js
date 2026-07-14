@@ -59,12 +59,12 @@ export function buildAuditedPromotionProposal({
   const proposal = makeProposal(indexedCandidate, warnings, rank);
   const approved = auditEnabled && audit?.approved === true;
   const routing = promotionRouting || indexedCandidate.reviewMetadata?.promotionRouting || null;
-  const routedAction = routing?.action === 'do_not_create_duplicate_memory'
+  const routedAction = ['do_not_create_duplicate_memory', 'keep_as_checkpoint_context'].includes(routing?.action)
     ? 'do_not_promote'
     : routing?.action === 'review_memory_update_candidate' ? 'review_update_candidate' : null;
   return {
     ...proposal, audit, auditReason: audit?.reason || null,
-    recommendedAction: routedAction || (approved ? 'promote' : 'review'),
+    recommendedAction: routedAction || (routing?.action === 'promote_as_new_memory' ? 'promote' : approved ? 'route_before_promote' : 'review'),
     ...(routing ? { promotionRouting: routing } : {}),
     ...(promotionRoutingError ? { promotionRoutingError } : {}),
   };
@@ -235,6 +235,7 @@ export function routeAuditedMemoryCandidates({
           if (!fresh || fresh.status !== 'pending' || fresh.auditState !== 'audited' || fresh.auditDecision !== 'approve') {
             return null;
           }
+          if (!fresh.auditContentHash || fresh.auditContentHash !== revisionHash(fresh.candidate)) return null;
           return persistPromotionRouting({ ...input, indexedCandidate: fresh });
         });
     results.push(routing

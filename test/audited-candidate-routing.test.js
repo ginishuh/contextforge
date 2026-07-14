@@ -52,6 +52,21 @@ test('audited candidate routing is dry-run by default, idempotent, and closes ap
           key: 'routing.duplicate', content: 'Use alpha for the durable workflow.', category: 'runbook',
           candidateType: 'runbook', promotionRecommendation: 'promote', confidence: 0.95, stability: 0.95,
         },
+        {
+          key: 'routing.too-specific', content: 'Keep this only as checkpoint context.', category: 'runbook',
+          candidateType: 'runbook', suggestedAction: 'too_specific', promotionRecommendation: 'promote',
+          confidence: 0.95, stability: 0.95,
+        },
+        {
+          key: 'routing.runbook', content: 'Replace the prior workflow with the newer delta workflow.', category: 'runbook',
+          candidateType: 'runbook', suggestedAction: 'supersedes', promotionRecommendation: 'promote',
+          confidence: 0.95, stability: 0.95,
+        },
+        {
+          key: 'routing.runbook', content: 'This conflicts with the current workflow and needs review.', category: 'runbook',
+          candidateType: 'runbook', suggestedAction: 'conflict', promotionRecommendation: 'promote',
+          confidence: 0.95, stability: 0.95,
+        },
       ],
     },
   });
@@ -64,6 +79,9 @@ test('audited candidate routing is dry-run by default, idempotent, and closes ap
   assert.equal(dryRun.dryRun, true);
   assert.equal(dryRun.counts.refinement, 2);
   assert.equal(dryRun.counts.duplicate, 1);
+  assert.equal(dryRun.counts.too_specific, 1);
+  assert.equal(dryRun.counts.supersedes, 1);
+  assert.equal(dryRun.counts.conflict, 1);
   assert.equal(app.listMemoryUpdateCandidates({ scope: 'repo', scopeKey: scope.scopeKey }).length, 0);
 
   const applied = app.routeAuditedMemoryCandidates({
@@ -71,8 +89,10 @@ test('audited candidate routing is dry-run by default, idempotent, and closes ap
   });
   assert.equal(applied.policy.mutatesDurableMemory, false);
   assert.equal(applied.results.find((item) => item.routing.classification === 'duplicate').routing.updateCandidate, null);
+  assert.equal(applied.results.find((item) => item.routing.classification === 'too_specific').routing.action, 'keep_as_checkpoint_context');
   const updates = app.listMemoryUpdateCandidates({ scope: 'repo', scopeKey: scope.scopeKey, status: 'pending' });
-  assert.equal(updates.length, 2, 'separate source candidates for one target must not overwrite each other');
+  assert.equal(updates.length, 4, 'separate source candidates for one target must not overwrite each other');
+  const firstCreatedAt = updates[0].createdAt;
 
   const partial = app.routeAuditedMemoryCandidates({
     scope: 'repo', scopeKey: scope.scopeKey, candidateIds: ['missing-candidate', updates[0].sourceCandidateId],
@@ -85,7 +105,12 @@ test('audited candidate routing is dry-run by default, idempotent, and closes ap
     scope: 'repo', scopeKey: scope.scopeKey, candidateIds: [updates[0].sourceCandidateId], dryRun: false,
   });
   assert.equal(rerun.results[0].routing.updateCandidate.candidateId, updates[0].id);
-  assert.equal(app.listMemoryUpdateCandidates({ scope: 'repo', scopeKey: scope.scopeKey, status: 'pending' }).length, 2);
+  assert.equal(app.listMemoryUpdateCandidates({ scope: 'repo', scopeKey: scope.scopeKey, status: 'pending' }).length, 4);
+  assert.equal(
+    app.listMemoryUpdateCandidates({ scope: 'repo', scopeKey: scope.scopeKey, status: 'pending' })
+      .find((candidate) => candidate.id === updates[0].id).createdAt,
+    firstCreatedAt,
+  );
 
   app.correctMemory({
     scope: 'repo', scopeKey: scope.scopeKey, key: 'routing.runbook',
