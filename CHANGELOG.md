@@ -6,7 +6,9 @@
   review, durable audit routing, snooze/wake/stale handling, and supervised
   candidate lifecycle operations. The skill now distinguishes the bounded MCP
   review/operator surfaces from the specialized Admin UI and HTTP/core backlog
-  aggregate, and release tests guard the lifecycle workflow contract.
+  aggregate. The MCP audit submission schema now exposes the core's explicit
+  bounded `candidateIds` backlog source, and regression tests guard both the
+  tool schema and packaged-skill lifecycle contract.
 - Added operation-worker freshness to `/readyz` with a bounded startup grace
   period and an explicit `operation_worker_stale` reason. Operational metrics
   now include candidate throughput/latency, audit decision and routing

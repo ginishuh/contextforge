@@ -680,17 +680,17 @@ export function createContextForgeMcpServer({
     },
     async (args) => jsonResult(await app.submitDistillJob(args)),
   );
-
   registerTool(
     'submit_audit_job',
     {
       title: 'Submit Candidate Audit Job',
       description:
-        'Durably queue closeout-scoped candidate audits and return immediately. The current worker invokes the configured provider once per selected candidate; true provider batching is not implied.',
+        'Durably queue session/checkpoint closeout audits or one explicit bounded candidateIds backlog batch and return immediately. Provide exactly one source mode. The current worker invokes the configured provider once per selected candidate; true provider batching is not implied.',
       inputSchema: {
         ...scopedSchema,
         sessionId: z.string().optional(),
         checkpointId: z.string().optional(),
+        candidateIds: z.array(z.string().min(1)).min(1).max(10).optional(),
         trigger: closeoutTriggerSchema,
         limit: z.number().int().positive().optional(),
         scanLimit: z.number().int().positive().optional(),
