@@ -12,7 +12,7 @@ const REMOTE_OPERATION_ORDER = Object.freeze([
   'remember', 'promoteMemory', 'promoteMemoryCandidate', 'rejectMemoryCandidate', 'correctMemory',
   'snoozeMemoryCandidate', 'wakeMemoryCandidate',
   'deactivateMemory', 'listMemoryEvents', 'listMemoryCandidates', 'memoryCandidateBacklog',
-  'planMemoryCandidateBacklogAudit',
+  'planMemoryCandidateBacklogAudit', 'routeAuditedMemoryCandidates',
   'listMemoryCandidateAuditAttempts', 'listPreferenceOccurrences',
   'listMemoryUpdateCandidates', 'auditMemoryDuplicates', 'applyMemoryUpdateCandidate',
   'rejectMemoryUpdateCandidate', 'skipMemoryUpdateCandidate', 'suggestMemoryPromotions', 'auditMemoryCandidates',
@@ -38,6 +38,7 @@ const CAPABILITY_GROUPS = Object.freeze({
   ],
   review: [
     'agentCloseout', 'submitAuditJob', 'memoryCandidateBacklog', 'planMemoryCandidateBacklogAudit',
+    'routeAuditedMemoryCandidates',
     'listMemoryCandidateAuditAttempts',
     'listDueCandidateAudits', 'listDueCandidateWakeups',
     'listDueCandidateStaleTransitions',
@@ -134,6 +135,7 @@ const MCP_METHODS = Object.freeze({
   list_memory_events: 'listMemoryEvents',
   list_memory_candidates: 'listMemoryCandidates',
   plan_memory_candidate_backlog_audit: 'planMemoryCandidateBacklogAudit',
+  route_audited_memory_candidates: 'routeAuditedMemoryCandidates',
   list_preference_occurrences: 'listPreferenceOccurrences',
   list_memory_update_candidates: 'listMemoryUpdateCandidates',
   audit_memory_duplicates: 'auditMemoryDuplicates',
@@ -161,7 +163,7 @@ const MCP_MUTATING_METHODS = new Set([
   'processConsolidations', 'pruneEmbeddingArtifacts', 'rebuildEmbeddings', 'processEmbeddingJobs', 'remember',
   'appendRaw', 'pruneRawEvents', 'upsertSessionWorkingContext', 'distillCheckpoint', 'auditMemoryDuplicates',
   'applyMemoryUpdateCandidate', 'rejectMemoryUpdateCandidate', 'skipMemoryUpdateCandidate',
-  'suggestMemoryPromotions', 'autoPromoteMemoryCandidates', 'auditMemoryCandidates', 'reconcileMemory',
+  'suggestMemoryPromotions', 'autoPromoteMemoryCandidates', 'auditMemoryCandidates', 'routeAuditedMemoryCandidates', 'reconcileMemory',
   'promoteMemory', 'promoteMemoryCandidate', 'rejectMemoryCandidate', 'snoozeMemoryCandidate',
   'wakeMemoryCandidate', 'reopenStaleMemoryCandidate', 'correctMemory', 'deactivateMemory',
 ]);

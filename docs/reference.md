@@ -1905,6 +1905,27 @@ node src/cli.js deactivateMemory \
 When a candidate overlaps existing durable memory, prefer an update proposal
 over a new memory. `suggestMemoryPromotions --createUpdateCandidates true` can
 persist `memory_update_candidates` for refinement/supersede/conflict cases. To
+dry-run and then persist routing for an existing audited-approved backlog:
+
+```bash
+node src/cli.js routeAuditedMemoryCandidates \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --limit 25
+
+node src/cli.js routeAuditedMemoryCandidates \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --candidateIds candidate-a,candidate-b \
+  --dryRun false
+```
+
+The operation never promotes durable memory. Duplicate routes create no new
+memory; refinement/supersede/conflict routes create idempotent review-only
+update candidates. Applying, rejecting, or skipping a routed update also closes
+the linked source candidate as promoted, rejected, or stale respectively.
+
+To
 find existing duplicate durable memories without promoting anything, run:
 
 ```bash

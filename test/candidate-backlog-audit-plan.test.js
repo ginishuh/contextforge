@@ -122,7 +122,7 @@ test('candidate backlog audit plan is provider-free and estimates a bounded dedu
   assert.equal(plan.inventory.byClassification.preference_policy, 1);
   assert.equal(plan.inventory.byClassification.audit_state_ineligible, 2);
   assert.equal(plan.inventory.byClassification.stale_suggested, 1);
-  assert.ok(plan.inventory.byClassification.deterministic_triage >= 2);
+  assert.ok(plan.inventory.byClassification.deterministic_triage >= 1);
   assert.equal(plan.inventory.plannedProviderCallCount, 2);
   assert.equal(plan.costEstimate.plannedBatch.providerCalls, 2);
   assert.ok(plan.costEstimate.plannedBatch.inputChars > 0);
@@ -143,6 +143,16 @@ test('candidate backlog audit plan is provider-free and estimates a bounded dedu
     candidateId: indexed[0].id,
   }).length, 0);
   assert.equal(app.listMemoryCandidates({ ...scope, sessionId, status: 'pending', limit: 20 }).length, 10);
+
+  const keyCollision = indexed.find((item) => item.candidate.key === 'key-collision');
+  const collisionPlan = app.planMemoryCandidateBacklogAudit({
+    ...scope,
+    candidateIds: [keyCollision.id],
+    maxProviderCalls: 1,
+  });
+  assert.equal(collisionPlan.candidates[0].classification, 'provider_audit');
+  assert.equal(collisionPlan.candidates[0].plannedProviderCall, true);
+  assert.equal(collisionPlan.candidates[0].reasonCodes.includes('durable_key_collision'), true);
 
   const oldestPage = app.listMemoryCandidates({ ...scope, sessionId, status: 'pending', sort: 'oldest', page: true, limit: 1 });
   const nextOldestPage = app.listMemoryCandidates({

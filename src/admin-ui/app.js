@@ -4,6 +4,7 @@ const state = {
   scopeKeys: [],
   memories: [],
   candidates: [],
+  memoryUpdates: [],
   candidateCursor: null,
   candidateSummary: null,
   candidateAsOf: null,
@@ -526,6 +527,9 @@ function auditedActionLabel(value) {
     review: '사람 검토',
     ask_user: '사용자 확인',
     dry_run_only: '드라이런',
+    do_not_promote: '새 메모리 생성 금지',
+    review_update_candidate: '메모리 업데이트 검토',
+    route_before_promote: '승격 전 라우팅 필요',
   };
   return labels[String(value || '').toLowerCase()] || '감사 결과';
 }
@@ -564,6 +568,7 @@ async function loadAuditedCandidates({ cursor = null } = {}) {
     auditDecision: item.auditDecision,
     auditContentHash: item.auditContentHash,
     audit: item.reviewMetadata?.audit || null,
+    promotionRouting: item.reviewMetadata?.promotionRouting || null,
     auditReason: item.reviewReason,
     reviewedAt: item.reviewedAt,
     snoozedUntil: item.snoozedUntil,
@@ -576,7 +581,13 @@ async function loadAuditedCandidates({ cursor = null } = {}) {
       sourceAgent: item.source?.sourceAgent || null,
       sourceProvenance: item.source?.sourceProvenance || null,
     },
-    recommendedAction: item.auditDecision === 'approve' ? 'promote' : 'review',
+    recommendedAction: ['do_not_create_duplicate_memory', 'keep_as_checkpoint_context'].includes(item.reviewMetadata?.promotionRouting?.action)
+      ? 'do_not_promote'
+      : item.reviewMetadata?.promotionRouting?.action === 'review_memory_update_candidate'
+        ? 'review_update_candidate'
+        : item.reviewMetadata?.promotionRouting?.action === 'promote_as_new_memory'
+          ? 'promote'
+          : item.auditDecision === 'approve' ? 'route_before_promote' : 'review',
     source: item.source,
   }));
   state.candidateCursor = result.page?.page?.nextCursor || null;
@@ -623,7 +634,6 @@ async function loadAuditedCandidates({ cursor = null } = {}) {
         category: candidate.category || 'note',
         tags: candidate.tags || [],
         importance: candidate.importance ?? 0,
-        allowWarnings: true,
         ...(edited ? { allowAuditRevisionOverride: true, reason: revisionReason } : {}),
       });
       await loadAuditedCandidates();
@@ -695,10 +705,13 @@ function candidateItem(candidate, index) {
   const wakeable = candidate.disposition === 'snoozed';
   const staleReopenable = candidate.disposition === 'stale';
   const snoozeText = wakeable ? ` · 재검토 ${candidate.snoozedUntil || '미지정'}` : '';
+  const routingText = candidate.promotionRouting
+    ? ` · 라우팅 ${candidate.promotionRouting.classification}${candidate.promotionRouting.targetMemoryKey ? ` → ${candidate.promotionRouting.targetMemoryKey}` : ''}`
+    : '';
   return `<article class="item">
     <header><span class="item-title"><input type="checkbox" data-candidate-select="${index}" aria-label="후보 선택" ${mutable ? '' : 'disabled'} /><strong>${escapeHtml(candidate.key)}</strong></span><span class="muted">${escapeHtml(candidate.disposition)} · ${escapeHtml(candidate.auditState)} · ${escapeHtml(action)} · ${escapeHtml(decision)}</span></header>
     <p>${escapeHtml(candidate.content.slice(0, 220))}</p>
-    <p class="muted">${escapeHtml(provider)}${model ? `/${escapeHtml(model)}` : ''}${escapeHtml(sourceText)} · ${escapeHtml(candidate.category || 'note')} · ${escapeHtml(candidate.auditReason || candidate.whyDurable || '')}${escapeHtml(risks)}${escapeHtml(snoozeText)}</p>
+    <p class="muted">${escapeHtml(provider)}${model ? `/${escapeHtml(model)}` : ''}${escapeHtml(sourceText)} · ${escapeHtml(candidate.category || 'note')} · ${escapeHtml(candidate.auditReason || candidate.whyDurable || '')}${escapeHtml(risks)}${escapeHtml(snoozeText)}${escapeHtml(routingText)}</p>
     <div class="actions">
       <button data-candidate="${index}">상세</button>
       <button data-promote="${index}" ${mutable && candidate.recommendedAction === 'promote' ? '' : 'disabled'}>승격</button>
@@ -813,6 +826,59 @@ $('#auditSelectedCandidates').addEventListener('click', async (event) => {
   alert(`감사 작업 ${result.jobId} · ${result.status} · 제출 ${submittedCount}개${skippedCount ? ` · 제외 ${skippedCount}개${skippedReasons ? ` (${skippedReasons})` : ''}` : ''}`);
   await loadAuditedCandidates();
 });
+
+$('#routeSelectedCandidates').addEventListener('click', async (event) => {
+  event.preventDefault();
+  const indexes = checkedIndexes('[data-candidate-select]');
+  const candidateIds = indexes.map((index) => state.candidates[index]?.candidateId).filter(Boolean);
+  if (!candidateIds.length) return;
+  if (!confirm(`감사 승인 후보 ${candidateIds.length}개의 durable write 경로를 분류할까요? 이 작업은 새 영구 메모리를 만들지 않습니다.`)) return;
+  const result = await call('routeAuditedMemoryCandidates', {
+    scope: $('#memoryScope').value, scopeKey: $('#memoryScopeKey').value, candidateIds, dryRun: false,
+  });
+  $('#candidateAuditPlan').textContent = `라우팅 ${result.resultCount}개 · ${JSON.stringify(result.counts)}\n중복은 새 메모리를 만들지 않으며, 보강/대체/충돌은 아래 업데이트 검토 큐로 이동했습니다.`;
+  await loadAuditedCandidates();
+  await loadMemoryUpdates();
+});
+
+function memoryUpdateItem(candidate, index) {
+  return `<article class="item">
+    <header><strong>${escapeHtml(candidate.proposedKey || candidate.targetMemoryKey || candidate.id)}</strong><span class="muted">${escapeHtml(candidate.action)} · ${escapeHtml(candidate.status)}</span></header>
+    <p>${escapeHtml((candidate.proposedContent || candidate.correction || '').slice(0, 260))}</p>
+    <p class="muted">대상 ${escapeHtml(candidate.targetMemoryKey || '-')} · 원 후보 ${escapeHtml(candidate.sourceCandidateId || '-')} · ${escapeHtml(candidate.reason || '')}</p>
+    <div class="actions"><button data-update-detail="${index}">상세</button><button data-update-apply="${index}">적용</button><button class="danger" data-update-reject="${index}">거절</button><button data-update-skip="${index}">stale로 종료</button></div>
+  </article>`;
+}
+
+async function loadMemoryUpdates() {
+  const scope = $('#memoryScope').value;
+  const scopeKey = $('#memoryScopeKey').value;
+  const result = await call('listMemoryUpdateCandidates', { scope, scopeKey, status: 'pending', limit: 50, page: true });
+  state.memoryUpdates = result.page?.items || [];
+  $('#memoryUpdates').innerHTML = state.memoryUpdates.map(memoryUpdateItem).join('') || '<p class="muted">대기 중인 업데이트 후보가 없습니다.</p>';
+  document.querySelectorAll('[data-update-detail]').forEach((button) => button.addEventListener('click', () => showDetail('메모리 업데이트 후보', state.memoryUpdates[Number(button.dataset.updateDetail)])));
+  document.querySelectorAll('[data-update-apply]').forEach((button) => button.addEventListener('click', async () => {
+    const candidate = state.memoryUpdates[Number(button.dataset.updateApply)];
+    const reason = prompt('기존 영구 메모리에 이 업데이트를 적용하는 이유를 입력하세요.', candidate.reason || 'Reviewed memory update.');
+    if (!reason) return;
+    await call('applyMemoryUpdateCandidate', { scope, scopeKey, candidateId: candidate.id, reason });
+    await loadMemoryUpdates(); await loadAuditedCandidates(); $('#loadMemories').click();
+  }));
+  document.querySelectorAll('[data-update-reject]').forEach((button) => button.addEventListener('click', async () => {
+    const candidate = state.memoryUpdates[Number(button.dataset.updateReject)];
+    const reason = prompt('업데이트 후보를 거절하는 이유를 입력하세요.'); if (!reason) return;
+    await call('rejectMemoryUpdateCandidate', { scope, scopeKey, candidateId: candidate.id, reason });
+    await loadMemoryUpdates(); await loadAuditedCandidates();
+  }));
+  document.querySelectorAll('[data-update-skip]').forEach((button) => button.addEventListener('click', async () => {
+    const candidate = state.memoryUpdates[Number(button.dataset.updateSkip)];
+    const reason = prompt('업데이트를 적용하지 않고 원 후보를 stale로 종료하는 이유를 입력하세요.'); if (!reason) return;
+    await call('skipMemoryUpdateCandidate', { scope, scopeKey, candidateId: candidate.id, reason });
+    await loadMemoryUpdates(); await loadAuditedCandidates();
+  }));
+}
+
+$('#loadMemoryUpdates').addEventListener('click', async (event) => { event.preventDefault(); await loadMemoryUpdates(); });
 
 $('#rejectSelectedCandidates').addEventListener('click', async (event) => {
   event.preventDefault();
