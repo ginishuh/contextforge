@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
 import test from 'node:test';
 import { candidateActionAvailability } from '../src/admin-ui/candidate_actions.js';
 
@@ -108,4 +109,17 @@ test('snoozed and stale candidates expose only their reopen transition', () => {
   assert.equal(stale.promote.visible, false);
   assert.equal(stale.wake.visible, false);
   assert.equal(stale.reject.visible, false);
+});
+
+test('candidate review UI explains individual and bulk action effects', async () => {
+  const html = await fs.readFile(new URL('../src/admin-ui/index.html', import.meta.url), 'utf8');
+  for (const label of [
+    '상세', '승격', '검토 후 승격', '미루기', '다시 열기', 'stale 해제', '거절',
+    '감사 비용 dry-run', '선택 후보 감사 제출', '승인 후보 중복·업데이트 라우팅',
+  ]) {
+    assert.match(html, new RegExp(`<dt>${label}</dt>`));
+  }
+  assert.match(html, /감사, 라우팅, 승격은 별도 단계입니다/);
+  assert.match(html, /영구 메모리를 직접 만들거나 수정하지 않습니다/);
+  assert.match(html, /후보와 감사·근거 이력은 유지됩니다/);
 });

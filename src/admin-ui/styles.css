@@ -112,6 +112,18 @@ legend { color: var(--muted); }
   color: var(--muted);
   font-size: 0.85rem;
 }
+.action-help {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.action-help summary { cursor: pointer; font-weight: 600; }
+.action-help[open] summary { margin-bottom: 10px; }
+.action-help h3 { margin: 14px 0 8px; font-size: 14px; }
+.action-help dl { grid-template-columns: minmax(120px, 180px) 1fr; }
+.action-help code { font-size: 0.9em; }
 button {
   border: 1px solid var(--line);
   border-radius: 6px;

@@ -234,6 +234,30 @@
           <section class="panel">
             <h2>후보 검토</h2>
             <p class="muted">목록 조회는 provider를 호출하지 않습니다. 실제 provider/model은 각 후보의 감사 이력에서 표시합니다.</p>
+            <details class="action-help">
+              <summary>버튼 역할 보기</summary>
+              <p class="muted">감사, 라우팅, 승격은 별도 단계입니다. 감사 승인은 영구 메모리 저장을 뜻하지 않습니다.</p>
+              <h3>개별 후보</h3>
+              <dl>
+                <dt>상세</dt><dd>후보 원문, 감사 결정과 의견, 출처, 라우팅 정보를 확인합니다. 상태를 바꾸지 않습니다.</dd>
+                <dt>승격</dt><dd>감사 승인 후 새 메모리로 라우팅된 후보를 영구 메모리에 저장합니다.</dd>
+                <dt>검토 후 승격</dt><dd><code>needs_review</code> 후보를 사람이 최종 승인합니다. 승격 사유가 필요하며, 추가 경고가 있으면 확인 후 다시 승인해야 합니다.</dd>
+                <dt>미루기</dt><dd><code>pending</code> 후보를 지정한 시각까지 <code>snoozed</code>로 보류합니다. 삭제하지 않으며 감사 대기·실행 중에는 사용할 수 없습니다.</dd>
+                <dt>다시 열기</dt><dd><code>snoozed</code> 후보를 기한 전에 <code>pending</code>으로 되돌립니다.</dd>
+                <dt>stale 해제</dt><dd><code>stale</code> 후보를 <code>pending</code>으로 되돌립니다. 후보와 감사·근거 이력은 유지됩니다.</dd>
+                <dt>거절</dt><dd><code>pending</code> 후보를 <code>rejected</code>로 종료합니다. 영구 메모리를 만들지 않으며 근거 이력은 유지됩니다.</dd>
+              </dl>
+              <h3>일괄 작업</h3>
+              <dl>
+                <dt>전체 선택</dt><dd>현재 불러온 페이지에서 변경 가능한 후보를 선택합니다.</dd>
+                <dt>선택 해제</dt><dd>현재 후보 선택을 모두 해제합니다.</dd>
+                <dt>감사 비용 dry-run</dt><dd>감사 대상과 예상 호출량·토큰·비용만 계산합니다. provider를 호출하거나 후보 상태를 바꾸지 않습니다.</dd>
+                <dt>선택 후보 감사 제출</dt><dd>선택 후보의 durable 감사 작업을 큐에 넣습니다. 제출만으로 provider 실행이 완료되는 것은 아닙니다.</dd>
+                <dt>승인 후보 중복·업데이트 라우팅</dt><dd>감사 승인 후보를 신규·중복·보강·대체·충돌로 분류합니다. 영구 메모리를 직접 만들거나 수정하지 않습니다.</dd>
+                <dt>선택 후보 거절</dt><dd>선택한 <code>pending</code> 후보를 일괄 거절합니다.</dd>
+                <dt>다음 페이지</dt><dd>현재 필터를 유지한 채 다음 후보 페이지를 불러옵니다.</dd>
+              </dl>
+            </details>
             <div id="candidateSummary" class="muted"></div>
             <div class="actions bulkbar">
               <button id="selectAllCandidates">전체 선택</button>
