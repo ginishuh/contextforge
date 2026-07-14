@@ -22,6 +22,11 @@ test('release hygiene validates docs, versions, and the npm package boundary', a
     assert.equal(report.markdown.brokenLinks.length, 0);
     assert.equal(report.markdown.missingCommandFiles.length, 0);
     assert.equal(report.markdown.missingPackageScripts.length, 0);
+    assert.deepEqual(report.markdown.releaseBudgetChecks, {
+      packedBytes: true,
+      unpackedBytes: true,
+      entryCount: true,
+    });
     assert.equal(report.markdown.publishedPackage.passed, true);
     assert.equal(report.markdown.publishedPackage.missingLocalTargets.length, 0);
     assert.equal(report.markdown.publishedPackage.missingCommandTargets.length, 0);
