@@ -4,9 +4,11 @@ description: >-
   Use when working with ContextForge MCP as an agent memory runtime: scoped
   bootstrap/search, storage authority checks, repo/shared/local scopes,
   resume/handoff context, raw evidence capture, Codex/Claude session IDs,
-  distillation checkpoints, working summaries, memory candidates, closeout
-  promotion, automatic promotion, memory correction/reconciliation, embeddings,
-  or debugging sessionId/checkpointId/missing_closeout_source behavior.
+  distillation checkpoints, working summaries, memory candidates, scope backlog
+  review, candidate audit lifecycle, snooze/stale handling, supervised lifecycle
+  workers, closeout promotion, automatic promotion, memory
+  correction/reconciliation, embeddings, or debugging
+  sessionId/checkpointId/missing_closeout_source behavior.
 ---
 
 # ContextForge Memory
@@ -23,7 +25,8 @@ ContextForge has layered state:
 - `memory_candidate`: unreviewed candidate generated from a checkpoint; review
   material only. Candidate v2 review fields such as `durabilityReason`,
   `riskReason`, `evidenceRefs`, and `suggestedAction` may be present, but a
-  provider suggestion is not approval.
+  provider suggestion is not approval. Candidate disposition and audit state
+  are independent; an audited `approve` decision is not itself a durable write.
 - raw evidence: user/assistant conversation evidence used for distillation.
 - working summary/context: mutable session state, not durable memory.
 
@@ -37,10 +40,12 @@ the underlying core or remote API lacks the operation.
 
 - `agent-core` (default): bootstrap, scoped retrieval, manual evidence,
   checkpointing, durable distill submission/status, and ordinary closeout.
-- `review`: `agent-core` plus candidate audits, duplicate/update review,
+- `review`: `agent-core` plus candidate backlog planning, audit inventory and
+  submission, snooze/wake/stale review actions, duplicate/update review,
   correction, promotion, and deactivation.
 - `operator`: all runtime operations except workspace mutations; use for job
-  workers, due distills/consolidations, retention, embeddings, and usage.
+  workers, due distills/consolidations, mutating candidate lifecycle stages,
+  retention, embeddings, and usage.
 - `workspace-admin`: workspace profiles/members/routing and scope migration.
 - `all`: compatibility surface for clients that previously received every tool.
 
@@ -307,6 +312,72 @@ and bootstrap would otherwise expose only a thin latest slice.
   does not read raw evidence, does not create durable memory by itself, and
   should create at most a few review candidates for reinforced durable facts.
 
+## Scope-Wide Candidate Review
+
+Ordinary closeout is session/checkpoint scoped. Use a scope-wide backlog only
+when the task explicitly calls for backlog review; never broaden an empty
+closeout proposal into an implicit scope scan.
+
+1. In MCP, use `list_memory_candidates` without `sessionId` or `checkpointId`
+   for a bounded scope page. The specialized `memoryCandidateBacklog` aggregate
+   is available through the Admin UI and HTTP/core surfaces; it is
+   provider-free and adds same-filter lifecycle counts and freshness timestamps.
+2. Use `plan_memory_candidate_backlog_audit` before paid backlog work. It is
+   provider-free, scans at most 500 pending candidates, separates deterministic
+   exclusions and exact matches, and selects at most ten candidates for the next
+   executable provider batch. Pricing is reported only from caller-supplied
+   rates.
+3. To run the selected provider audit durably, call `submit_audit_job` with one
+   explicit canonical scope, a closeout `trigger`, and at most ten
+   `candidateIds`. An operator must run `process_jobs`; submission alone does
+   not execute the provider.
+4. Audit attempts are append-only provenance bound to candidate revision,
+   source mode/watermark, provider policy, and lease attempt. Editing candidate
+   key/content/category/tags invalidates the approved revision rather than
+   silently preserving approval.
+5. After approval, call `route_audited_memory_candidates` in its default
+   `dryRun=true` mode first. `new` can proceed to reviewed promotion; `duplicate`
+   must not create another durable row; `refinement`, `supersedes`, and
+   `conflict` become review-only memory update candidates. Routing does not
+   promote or edit durable memory.
+6. Use `snooze_memory_candidate` only with a finite future deadline, actor, and
+   reason. The default maximum is 90 days, and queued/running audits cannot be
+   snoozed. Use `wake_memory_candidate` for an early reopen; do not extend a
+   snooze by rewriting its active deadline.
+7. Treat `stale` as a reversible review disposition, not deletion. Use
+   `reopen_stale_memory_candidate` when review resumes. Candidate, checkpoint,
+   raw evidence, audit decisions, and lifecycle provenance remain available.
+
+## Unattended Candidate Lifecycle
+
+The `review` profile exposes provider-free inventory calls
+`list_due_candidate_audits`, `list_due_candidate_wakeups`, and
+`list_due_candidate_stale_transitions`. Their mutating `process_*` counterparts
+are operator-profile work and require one explicit canonical scope. Run them in
+dry-run first when operating manually.
+
+- Idle audit eligibility uses quiet time since the last raw event, not candidate
+  or checkpoint creation time. The default grace is ten minutes. Enqueue
+  revalidates a frozen raw/checkpoint watermark, so late evidence becomes a new
+  audit epoch instead of changing an existing job source.
+- Wake-up processing uses the stored finite snooze deadline and compare-and-swap
+  guards. Stale processing excludes queued/running audits and defaults to 14
+  days for deterministic triage/reject queues, 90 days for approved candidates
+  awaiting promotion, and 30 days for the other review queues.
+- For continuous convergence, run the CLI-only `candidateLifecycleWorker`
+  against an explicit scope or repo registry, or install
+  `scripts/install-candidate-lifecycle-worker-service.sh`. The one-shot CLI
+  defaults to dry-run; the packaged service opts into mutation, uses per-scope
+  limits of one due session, two candidates, and one audit job, and sets a
+  300-second remote timeout for the bounded provider wall-clock.
+- The packaged service loads a generated `0600` authority environment file
+  after the token file to force remote storage mode and the configured URL while
+  keeping the URL out of the command line. If limits increase, scale the remote
+  timeout for the worst-case provider-call count and concurrency.
+- Keep registry scope ownership and token authorization explicit. Watch
+  `/readyz` operation-worker freshness and operational metrics; one worker's
+  scope fence must not be mistaken for ownership of jobs outside its registry.
+
 ## Closeout Promotion
 
 At closeout triggers only, make sure durable memory candidates are audited:
@@ -320,8 +391,8 @@ At closeout triggers only, make sure durable memory candidates are audited:
    only whether audit-approved strict-safe results are written to durable memory.
 4. Use `audit_memory_candidates` to inspect stored audited recommendations or to
    audit unaudited candidates in the same closeout selection batch. It persists
-   candidate review metadata and audit usage events, but must not promote or
-   mutate durable memory.
+   append-only audit attempt provenance, compatibility review metadata, and
+   usage events, but must not promote or mutate durable memory.
 5. Promote only reviewed, stable, scoped, non-secret facts.
 6. Prefer `promote_memory_candidate` by `candidateId`.
 7. If `suggest_memory_promotions` reports a duplicate, refinement, supersedes,

@@ -50,3 +50,25 @@ test('release hygiene validates docs, versions, and the npm package boundary', a
     await fs.rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test('packaged memory skill covers the candidate backlog lifecycle', async () => {
+  const skill = await fs.readFile('docs/skills/contextforge-memory/SKILL.md', 'utf8');
+  for (const contract of [
+    'list_memory_candidates',
+    'memoryCandidateBacklog',
+    'plan_memory_candidate_backlog_audit',
+    'submit_audit_job',
+    'route_audited_memory_candidates',
+    'snooze_memory_candidate',
+    'wake_memory_candidate',
+    'reopen_stale_memory_candidate',
+    'list_due_candidate_audits',
+    'list_due_candidate_wakeups',
+    'list_due_candidate_stale_transitions',
+    'candidateLifecycleWorker',
+    '300-second remote timeout',
+    '`0600` authority environment file',
+  ]) {
+    assert.ok(skill.includes(contract), `missing candidate lifecycle skill contract: ${contract}`);
+  }
+});
