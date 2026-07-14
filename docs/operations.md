@@ -99,7 +99,8 @@ wakes expired snoozes, queues idle-session audits, applies stale-SLA transitions
 and claims audit jobs in that same scope. Defaults are 5 due sessions, 5
 candidates per session, 25 wake-ups, 25 stale transitions, and 5 audit jobs per
 scope per iteration. A failure is isolated to its scope and reported in the
-iteration summary.
+iteration summary. Unbounded watch mode rejects intervals below 1000ms to avoid
+a database busy loop.
 
 Install the remote-backed systemd user service:
 
@@ -116,6 +117,13 @@ grant review and operator capabilities for every configured scope. Queue work
 then appears in `/readyz` operation-worker freshness and `/metrics`. The unit
 loads the token file before forcing remote storage mode, so a server-owned env
 file cannot accidentally switch the worker to direct-local access.
+
+The registry must cover every repo scope this worker owns. Keep a separate
+distill-job worker (or an explicitly authorized all-scope operation worker) for
+jobs outside that registry; otherwise expired leases outside the lifecycle
+worker's fence remain visible as degraded queue readiness until their owning
+worker recovers them.
+
 Durable distill/audit submissions over HTTP JSON or HTTP MCP persist that
 request id with the existing job, session, and checkpoint identifiers.
 

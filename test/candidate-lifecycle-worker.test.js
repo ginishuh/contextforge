@@ -107,6 +107,35 @@ test('candidate lifecycle watch runs bounded iterations and reports compact tota
   assert.equal(calls.length, 6);
 });
 
+test('unbounded candidate lifecycle watch rejects a busy-loop interval', async () => {
+  await assert.rejects(
+    watchCandidateLifecycle(fakeLifecycleApp([]), {
+      scope: 'repo', scopeKey: 'github.com/example/contextforge', intervalMs: 0,
+    }),
+    /at least 1000ms/,
+  );
+});
+
+test('candidate lifecycle stop request prevents later stages and scopes from starting', async () => {
+  let stopped = false;
+  const calls = [];
+  const app = fakeLifecycleApp(calls);
+  const wake = app.processDueCandidateWakeups;
+  app.processDueCandidateWakeups = async (options) => {
+    const result = await wake(options);
+    stopped = true;
+    return result;
+  };
+  const result = await processCandidateLifecycle(app, {
+    scope: 'repo', scopeKey: 'github.com/example/contextforge',
+    shouldStop: () => stopped,
+  });
+  assert.equal(result.stopped, true);
+  assert.deepEqual(calls.map(([method]) => method), ['wake']);
+  assert.equal(result.scopes[0].status, 'stopped');
+  assert.equal(result.scopes[0].wakeups.dueCount, 2);
+});
+
 test('operation job claims can be fenced to one canonical scope', async () => {
   const dataDir = await makeTempDir();
   const store = new ContextForgeStore({ dataDir });
@@ -199,4 +228,20 @@ test('lifecycle scope resolver rejects non-canonical and empty registries', asyn
   const empty = path.join(dataDir, 'empty.json');
   await fs.writeFile(empty, JSON.stringify({ repos: [] }));
   await assert.rejects(resolveCandidateLifecycleScopes({ repoRegistry: empty }), /no enabled canonical scopes/);
+});
+
+test('all packaged remote watcher installers force remote mode after token env loading', async () => {
+  for (const file of [
+    'scripts/install-agent-router-service.sh',
+    'scripts/install-candidate-lifecycle-worker-service.sh',
+    'scripts/install-claude-code-router-service.sh',
+    'scripts/install-codex-router-service.sh',
+    'scripts/install-codex-watch-service.sh',
+  ]) {
+    const source = await fs.readFile(file, 'utf8');
+    assert.ok(
+      source.indexOf('EnvironmentFile=') < source.indexOf('Environment=CONTEXTFORGE_STORAGE_MODE=remote'),
+      `${file} must force remote storage mode after loading its token env file`,
+    );
+  }
 });

@@ -104,6 +104,7 @@ export async function resolveCandidateLifecycleScopes(options = {}) {
 
 export async function processCandidateLifecycle(app, options = {}) {
   const resolved = await resolveCandidateLifecycleScopes(options);
+  const shouldStop = typeof options.shouldStop === 'function' ? options.shouldStop : () => false;
   const dryRun = options.dryRun !== false;
   const auditLimit = positiveInteger(options.auditLimit, 'auditLimit', 5, 50);
   const auditBatchLimit = positiveInteger(options.auditBatchLimit, 'auditBatchLimit', 5, 10);
@@ -121,20 +122,45 @@ export async function processCandidateLifecycle(app, options = {}) {
     registryPath: resolved.registryPath,
     scopeCount: resolved.scopes.length,
     failedScopes: 0,
+    stopped: false,
     scopes: [],
     jobs: { claimed: 0, succeeded: 0, failed: 0, requeued: 0 },
   };
   for (const scope of resolved.scopes) {
+    if (shouldStop()) {
+      result.stopped = true;
+      break;
+    }
     try {
-      const wakeups = await app.processDueCandidateWakeups({ ...scope, dryRun, limit: wakeLimit });
-      const audits = await app.processDueCandidateAudits({
+      const stages = {};
+      stages.wakeups = compactWakeups(
+        await app.processDueCandidateWakeups({ ...scope, dryRun, limit: wakeLimit }),
+      );
+      if (shouldStop()) {
+        result.stopped = true;
+        result.scopes.push({ ...scope, status: 'stopped', ...stages });
+        break;
+      }
+      stages.audits = compactAudits(await app.processDueCandidateAudits({
         ...scope,
         dryRun,
         limit: auditLimit,
         batchLimit: auditBatchLimit,
         submittedBy: workerId,
-      });
-      const stale = await app.processDueCandidateStaleTransitions({ ...scope, dryRun, limit: staleLimit });
+      }));
+      if (shouldStop()) {
+        result.stopped = true;
+        result.scopes.push({ ...scope, status: 'stopped', ...stages });
+        break;
+      }
+      stages.stale = compactStale(
+        await app.processDueCandidateStaleTransitions({ ...scope, dryRun, limit: staleLimit }),
+      );
+      if (shouldStop()) {
+        result.stopped = true;
+        result.scopes.push({ ...scope, status: 'stopped', ...stages });
+        break;
+      }
       const jobs = dryRun
         ? { claimed: 0, succeeded: 0, failed: 0, requeued: 0 }
         : compactJobs(await app.processJobs({
@@ -152,9 +178,7 @@ export async function processCandidateLifecycle(app, options = {}) {
         scopeType: scope.scopeType,
         scopeKey: scope.scopeKey,
         status: 'ok',
-        wakeups: compactWakeups(wakeups),
-        audits: compactAudits(audits),
-        stale: compactStale(stale),
+        ...stages,
         jobs,
       });
     } catch (error) {
@@ -171,11 +195,16 @@ export async function processCandidateLifecycle(app, options = {}) {
 }
 
 export async function watchCandidateLifecycle(app, options = {}) {
-  const intervalMs = options.intervalMs == null ? 60000 : Math.max(0, Number(options.intervalMs));
-  if (!Number.isFinite(intervalMs)) throw new Error('intervalMs must be a non-negative number.');
-  const maxIterations = options.iterations == null ? null : Math.max(0, Number(options.iterations));
-  if (maxIterations != null && !Number.isInteger(maxIterations)) {
+  const intervalMs = options.intervalMs == null ? 60000 : Number(options.intervalMs);
+  const maxIterations = options.iterations == null ? null : Number(options.iterations);
+  if (!Number.isInteger(intervalMs) || intervalMs < 0) {
+    throw new Error('intervalMs must be a non-negative integer.');
+  }
+  if (maxIterations != null && (!Number.isInteger(maxIterations) || maxIterations < 0)) {
     throw new Error('iterations must be a non-negative integer.');
+  }
+  if (maxIterations == null && intervalMs < 1000) {
+    throw new Error('Unbounded candidate lifecycle watch requires intervalMs of at least 1000ms.');
   }
   const startedAt = new Date().toISOString();
   const results = [];
@@ -192,7 +221,7 @@ export async function watchCandidateLifecycle(app, options = {}) {
   try {
     while (!stopped && (maxIterations == null || iterations < maxIterations)) {
       iterations += 1;
-      const iteration = await processCandidateLifecycle(app, options);
+      const iteration = await processCandidateLifecycle(app, { ...options, shouldStop: () => stopped });
       totals.scopes += iteration.scopeCount;
       totals.failedScopes += iteration.failedScopes;
       totals.jobsClaimed += iteration.jobs.claimed;

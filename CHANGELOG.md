@@ -17,7 +17,9 @@
   registry, wakes expired snoozes, queues idle small-session audits, applies
   bounded stale SLA transitions, and processes audit jobs within each canonical
   scope. The CLI defaults to dry-run, while the systemd installer opts into
-  mutation explicitly.
+  mutation explicitly. Candidate lifecycle shutdown cooperates at scope-stage
+  boundaries, and every packaged remote watcher now forces remote mode after
+  loading its token environment file.
 
 ## 0.5.1 - 2026-07-10
 
