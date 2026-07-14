@@ -77,6 +77,16 @@ test('packaged memory skill uses bounded progressive disclosure without losing l
   ]) {
     assert.ok(skill.includes(reference), `missing progressive-disclosure link: ${reference}`);
   }
+  for (const contract of [
+    '`bootstrap_context` does not create a session.',
+    'Do not create a fresh `cf_...` session at closeout',
+    'Never broaden an empty closeout',
+    'It never scans the whole scope backlog.',
+    'Distillation failure must not erase raw evidence.',
+    'must not promote or mutate durable memory.',
+  ]) {
+    assert.ok(skill.includes(contract), `missing always-loaded safety contract: ${contract}`);
+  }
 
   for (const contract of [
     'list_memory_candidates',
