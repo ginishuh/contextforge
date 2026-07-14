@@ -20,7 +20,7 @@ import { SQLITE_MIGRATIONS } from '../../src/storage/migrations/index.js';
 import { SCHEMA_VERSION } from '../../src/storage/sqlite.js';
 
 test('operation registry is the canonical remote and authorization contract', () => {
-  assert.equal(OPERATION_REGISTRY.length, 83);
+  assert.equal(OPERATION_REGISTRY.length, 86);
   assert.equal(new Set(REMOTE_OPERATION_NAMES).size, REMOTE_OPERATION_NAMES.length);
   assert.deepEqual(REMOTE_METHODS, REMOTE_OPERATION_NAMES);
   assert.deepEqual(Object.keys(REMOTE_METHOD_CAPABILITIES), REMOTE_OPERATION_NAMES);

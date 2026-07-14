@@ -13,6 +13,7 @@ import { submitMemoryCandidateAuditJob } from './memory/candidate_audit_jobs.js'
 import { buildMemoryCandidateBacklog } from './memory/candidate_backlog.js';
 import { candidateDispositionMethods } from './memory/candidate_dispositions.js';
 import { memoryCandidateRevisionHash } from './memory/candidate_revision.js';
+import { candidateStaleSlaMethods } from './memory/candidate_stale_sla.js';
 import { dueDistillSessionSummary, listIdleCandidateAudits, processIdleCandidateAudits } from './memory/idle_candidate_audits.js';
 import { createRemoteContextForge } from './remote/client.js';
 import { searchMemories } from './retrieval/search.js';
@@ -3995,6 +3996,7 @@ export function createContextForge(options = {}) {
   return {
     config,
     ...candidateDispositionMethods({ config, useStore }),
+    ...candidateStaleSlaMethods({ config, useStore }),
 
     close() {
       if (sharedStore) {

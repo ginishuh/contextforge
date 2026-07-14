@@ -1703,6 +1703,35 @@ create a new finite snooze rather than changing its deadline in place. The
 default maximum is 90 days; set `CONTEXTFORGE_CANDIDATE_SNOOZE_MAX_MS` to an
 explicit positive millisecond limit when a different policy is required.
 
+Inspect and process candidates that exceeded their review queue SLA:
+
+```bash
+node src/cli.js listDueCandidateStaleTransitions --scope repo --scopeKey github.com/example/contextforge --limit 50
+node src/cli.js processDueCandidateStaleTransitions --scope repo --scopeKey github.com/example/contextforge --dryRun true
+node src/cli.js processDueCandidateStaleTransitions --scope repo --scopeKey github.com/example/contextforge --limit 50
+node src/cli.js reopenStaleMemoryCandidate --scope repo --scopeKey github.com/example/contextforge \
+  --candidateId candidate-id --reason "Review resumed" --actor reviewer-id
+```
+
+The inventory is provider-free. Processing requires one explicit canonical
+scope, reports per-candidate results, and CAS-fences disposition, audit state,
+audit decision, and the `reviewedAt` or `createdAt` SLA anchor. Active audits
+are excluded. `stale` is reversible and does not delete raw evidence or
+checkpoints. Default thresholds are 14 days for deterministic triage and reject
+recommendations, 90 days for approved-awaiting-promotion, and 30 days for the
+other review queues. Override them with the corresponding positive millisecond
+settings:
+
+- `CONTEXTFORGE_CANDIDATE_SLA_UNAUDITED_MS`
+- `CONTEXTFORGE_CANDIDATE_SLA_TRIAGED_NO_AUDIT_MS`
+- `CONTEXTFORGE_CANDIDATE_SLA_FAILED_RETRYABLE_MS`
+- `CONTEXTFORGE_CANDIDATE_SLA_FAILED_TERMINAL_MS`
+- `CONTEXTFORGE_CANDIDATE_SLA_LEGACY_UNKNOWN_MS`
+- `CONTEXTFORGE_CANDIDATE_SLA_APPROVED_MS`
+- `CONTEXTFORGE_CANDIDATE_SLA_NEEDS_REVIEW_MS`
+- `CONTEXTFORGE_CANDIDATE_SLA_REJECT_RECOMMENDED_MS`
+- `CONTEXTFORGE_CANDIDATE_SLA_AUDITED_UNKNOWN_MS`
+
 Queue provider work durably when it must outlive the submitting request:
 
 ```bash

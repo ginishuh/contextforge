@@ -106,6 +106,31 @@ clears the active snooze columns but keeps this transition history. To extend a
 snooze, wake the current epoch and create a new finite snooze rather than
 changing its deadline in place.
 
+## Stale review SLA
+
+`listDueCandidateStaleTransitions` is a provider-free, bounded inventory of
+`pending` candidates that exceeded their queue-specific review SLA.
+`processDueCandidateStaleTransitions` requires one explicit canonical scope and
+moves a bounded batch to the reversible `stale` disposition. It never deletes
+candidate, checkpoint, or raw evidence.
+
+The SLA anchor is `reviewedAt` after an audit or triage result and `createdAt`
+otherwise. `queued` and `running` audits are excluded. Before committing, the
+worker fences candidate disposition, audit state, audit decision, and the SLA
+anchor, so a concurrent audit or review wins instead of being overwritten.
+Dry-run returns the exact selected candidates, queue, age, threshold, policy
+version, and remaining count without mutation.
+
+Defaults are 14 days for `triaged_no_audit` and reject recommendations, 90 days
+for approved candidates awaiting promotion, and 30 days for unaudited,
+retryable or terminal failures, legacy or unknown audit results, and human
+review. Each threshold has a `CONTEXTFORGE_CANDIDATE_SLA_*_MS` override. A
+stale transition preserves the prior audit decision, review timestamp, and
+reason and appends actor, reason, queue, anchor, and policy provenance to
+`lifecycleEvents`. `reopenStaleMemoryCandidate` restores the candidate to
+`pending` without discarding that history, so stale remains a review
+disposition rather than a hard delete.
+
 ## Immutable audit provenance
 
 Every provider result is appended to `memory_candidate_audit_attempts`. The

@@ -120,12 +120,15 @@ export function wakeCandidate(store, scope, options = {}) {
       throw codedError(`Memory candidate ${candidate.id} has invalid wake-up status ${wakeUpStatus}.`, 'CONTEXTFORGE_CANDIDATE_WAKE_STATUS_INVALID');
     }
     const at = now.toISOString();
-    const metadata = lifecycleMetadata(candidate, {
-      type: 'woken', fromStatus: 'snoozed', toStatus: wakeUpStatus, at,
-      actor: options.actor, reason: options.reason, snoozedUntil: candidate.snoozedUntil,
-      snoozeReason: candidate.snoozeReason, snoozedBy: candidate.snoozedBy,
-      requestId: options.requestId || null,
-    });
+    const metadata = {
+      ...lifecycleMetadata(candidate, {
+        type: 'woken', fromStatus: 'snoozed', toStatus: wakeUpStatus, at,
+        actor: options.actor, reason: options.reason, snoozedUntil: candidate.snoozedUntil,
+        snoozeReason: candidate.snoozeReason, snoozedBy: candidate.snoozedBy,
+        requestId: options.requestId || null,
+      }),
+      candidateSlaAnchorAt: at,
+    };
     const updated = store.db.prepare(`
       UPDATE memory_candidate_index
       SET status = ?, snoozed_until = NULL, snooze_reason = NULL, snoozed_by = NULL, wake_up_status = NULL,

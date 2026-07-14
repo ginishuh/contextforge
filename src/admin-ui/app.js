@@ -663,6 +663,17 @@ async function loadAuditedCandidates({ cursor = null } = {}) {
       await loadAuditedCandidates();
     });
   });
+  document.querySelectorAll('[data-reopen-stale]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const candidate = state.candidates[Number(button.dataset.reopenStale)];
+      const reason = prompt('stale 후보를 다시 pending으로 여는 이유를 입력하세요.', 'Manual review resumed.');
+      if (!reason) return;
+      await call('reopenStaleMemoryCandidate', {
+        scope, scopeKey, candidateId: candidate.candidateId, reason, actor: 'admin-ui',
+      });
+      await loadAuditedCandidates();
+    });
+  });
 }
 
 $('#loadCandidates').addEventListener('click', async (event) => {
@@ -682,6 +693,7 @@ function candidateItem(candidate, index) {
   const model = candidate.audit?.metadata?.model || '';
   const mutable = candidate.disposition === 'pending';
   const wakeable = candidate.disposition === 'snoozed';
+  const staleReopenable = candidate.disposition === 'stale';
   const snoozeText = wakeable ? ` · 재검토 ${candidate.snoozedUntil || '미지정'}` : '';
   return `<article class="item">
     <header><span class="item-title"><input type="checkbox" data-candidate-select="${index}" aria-label="후보 선택" ${mutable ? '' : 'disabled'} /><strong>${escapeHtml(candidate.key)}</strong></span><span class="muted">${escapeHtml(candidate.disposition)} · ${escapeHtml(candidate.auditState)} · ${escapeHtml(action)} · ${escapeHtml(decision)}</span></header>
@@ -692,6 +704,7 @@ function candidateItem(candidate, index) {
       <button data-promote="${index}" ${mutable && candidate.recommendedAction === 'promote' ? '' : 'disabled'}>승격</button>
       <button data-snooze="${index}" ${mutable ? '' : 'disabled'}>미루기</button>
       <button data-wake="${index}" ${wakeable ? '' : 'disabled'}>다시 열기</button>
+      <button data-reopen-stale="${index}" ${staleReopenable ? '' : 'disabled'}>stale 해제</button>
       <button class="danger" data-reject="${index}" ${mutable ? '' : 'disabled'}>거절</button>
     </div>
   </article>`;
