@@ -9,7 +9,29 @@ function promotionBlockedReason(candidate) {
     case 'do_not_promote':
       return '중복 또는 체크포인트 유지 대상으로 분류되었습니다.';
     default:
-      return '감사 승인이 필요합니다.';
+      break;
+  }
+  switch (candidate.auditState) {
+    case 'unaudited':
+      return '아직 감사되지 않았습니다.';
+    case 'queued':
+      return '감사 대기 중입니다.';
+    case 'running':
+      return '감사 진행 중입니다.';
+    case 'failed_retryable':
+      return '감사가 실패했습니다. 재시도가 필요합니다.';
+    case 'failed_terminal':
+      return '감사가 최종 실패했습니다. 사람 검토가 필요합니다.';
+    case 'triaged_no_audit':
+      return '자동 감사 제외 대상으로 분류되었습니다.';
+    case 'legacy_unknown':
+      return '기존 후보라 감사 상태를 확인할 수 없습니다.';
+    case 'audited':
+      return candidate.auditDecision === 'reject'
+        ? '감사에서 거절되었습니다.'
+        : '감사 결과를 검토해야 합니다.';
+    default:
+      return '현재 감사 상태로는 승격할 수 없습니다.';
   }
 }
 
