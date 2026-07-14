@@ -1750,7 +1750,8 @@ node src/cli.js planMemoryCandidateBacklogAudit \
 This review-capability operation is provider-free and read-only. It reuses the
 real audit safety rules and prompt builder, groups exact candidate duplicates,
 detects exact active durable-memory matches, marks weak old candidates as stale
-suggestions, and reports both the next bounded batch and the full eligible
+suggestions, excludes those stale suggestions from paid audit selection, and
+reports both the next bounded batch and the full eligible
 inventory. Omit the two price inputs when only call and token estimates are
 needed; ContextForge does not hardcode model pricing. Supplying one price
 without the other is rejected. Admin UI exposes the same plan as `감사 비용

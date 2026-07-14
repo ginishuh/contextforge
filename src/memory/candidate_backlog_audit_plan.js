@@ -203,6 +203,10 @@ export function buildMemoryCandidateBacklogAuditPlan({
       item.classification === 'preference_policy' ||
       item.sourceEvidence === 'weak'
     );
+    if (item.staleSuggested && item.classification === 'provider_audit') {
+      item.classification = 'stale_suggested';
+      item.reasonCodes.push('weak_source_evidence_over_stale_threshold');
+    }
     return item;
   });
 

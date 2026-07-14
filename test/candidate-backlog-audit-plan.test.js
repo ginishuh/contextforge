@@ -83,7 +83,11 @@ test('candidate backlog audit plan is provider-free and estimates a bounded dedu
           category: 'preference',
           sourceEventIds: [],
         }),
+        candidate('weak-old-runbook', 'This plausible runbook has no source evidence.', {
+          sourceEventIds: [],
+        }),
         candidate('already-audited', 'This candidate is already audited.'),
+        candidate('active-queued', 'This candidate already has an active audit.'),
       ],
     },
   });
@@ -92,6 +96,8 @@ test('candidate backlog audit plan is provider-free and estimates a bounded dedu
   store.db.prepare(`
     UPDATE memory_candidate_index SET audit_state = 'audited', audit_decision = 'needs_review' WHERE id = ?
   `).run(audited.id);
+  const activeQueued = indexed.find((item) => item.candidate.key === 'active-queued');
+  store.db.prepare("UPDATE memory_candidate_index SET audit_state = 'queued' WHERE id = ?").run(activeQueued.id);
   const asOf = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString();
   const plan = app.planMemoryCandidateBacklogAudit({
     ...scope,
@@ -109,12 +115,13 @@ test('candidate backlog audit plan is provider-free and estimates a bounded dedu
   assert.equal(plan.readOnly, true);
   assert.equal(plan.providerInvoked, false);
   assert.equal(plan.provider.provider, 'synthetic_auditor');
-  assert.equal(plan.inventory.scannedCount, 8);
+  assert.equal(plan.inventory.scannedCount, 10);
   assert.equal(plan.inventory.exactCandidateDuplicateGroupCount, 1);
   assert.equal(plan.inventory.byClassification.exact_candidate_duplicate, 1);
   assert.equal(plan.inventory.byClassification.exact_durable_duplicate, 1);
   assert.equal(plan.inventory.byClassification.preference_policy, 1);
-  assert.equal(plan.inventory.byClassification.audit_state_ineligible, 1);
+  assert.equal(plan.inventory.byClassification.audit_state_ineligible, 2);
+  assert.equal(plan.inventory.byClassification.stale_suggested, 1);
   assert.ok(plan.inventory.byClassification.deterministic_triage >= 2);
   assert.equal(plan.inventory.plannedProviderCallCount, 2);
   assert.equal(plan.costEstimate.plannedBatch.providerCalls, 2);
@@ -125,12 +132,25 @@ test('candidate backlog audit plan is provider-free and estimates a bounded dedu
   assert.equal(plan.costEstimate.assumptions.pricingSource, 'caller_supplied');
   assert.equal(plan.candidates.find((item) => item.key === 'one-off-status').staleSuggested, true);
   assert.equal(plan.candidates.find((item) => item.key === 'preference-note').staleSuggested, true);
+  const weakOld = plan.candidates.find((item) => item.key === 'weak-old-runbook');
+  assert.equal(weakOld.staleSuggested, true);
+  assert.equal(weakOld.plannedProviderCall, false);
+  assert.equal(plan.plannedCandidateIds.includes(weakOld.candidateId), false);
+  assert.equal(plan.candidates.find((item) => item.key === 'active-queued').staleSuggested, false);
   assert.equal(auditInvocations, 0);
   assert.equal(app.listMemoryCandidateAuditAttempts({
     ...scope,
     candidateId: indexed[0].id,
   }).length, 0);
-  assert.equal(app.listMemoryCandidates({ ...scope, sessionId, status: 'pending', limit: 20 }).length, 8);
+  assert.equal(app.listMemoryCandidates({ ...scope, sessionId, status: 'pending', limit: 20 }).length, 10);
+
+  const oldestPage = app.listMemoryCandidates({ ...scope, sessionId, status: 'pending', sort: 'oldest', page: true, limit: 1 });
+  const nextOldestPage = app.listMemoryCandidates({
+    ...scope, sessionId, status: 'pending', sort: 'oldest', page: true, limit: 1, cursor: oldestPage.page.nextCursor,
+  });
+  assert.equal(oldestPage.items.length, 1);
+  assert.equal(nextOldestPage.items.length, 1);
+  assert.notEqual(oldestPage.items[0].id, nextOldestPage.items[0].id);
 
   assert.throws(
     () => app.planMemoryCandidateBacklogAudit({

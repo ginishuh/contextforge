@@ -147,7 +147,9 @@ candidate audit path. The plan reports:
   supplied by the caller.
 
 The planner never changes candidate state, creates a job, or invokes a
-provider. It does not hardcode model pricing. `asOf` can be fixed for a
+provider. A weak-evidence candidate beyond the stale threshold is excluded
+from `plannedCandidateIds`, so stale suggestions and paid provider calls never
+overlap. It does not hardcode model pricing. `asOf` can be fixed for a
 repeatable age calculation, explicit `candidateIds` are bounded at 500, and
 the executable audit batch remains bounded at 10 calls. Exact candidate
 grouping selects one stable representative; the other candidates remain
