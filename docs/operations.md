@@ -120,6 +120,12 @@ file to force remote storage mode and the configured URL. Systemd environment
 files override unit-level `Environment=` values, and later environment files
 override earlier ones. The remote URL therefore stays out of the process command
 line while the last-file-wins order provides the storage-authority boundary.
+The same authority file sets `CONTEXTFORGE_REMOTE_TIMEOUT_MS=180000` by default,
+which is longer than the default 120-second provider timeout. Override it with
+`--remote-timeout-ms` or `CONTEXTFORGE_REMOTE_TIMEOUT_MS`, but keep the remote
+timeout strictly greater than every provider timeout the watcher can invoke.
+This prevents a client disconnect from abandoning a provider call that the
+canonical server is still completing.
 
 The registry must cover every repo scope this worker owns. Keep a separate
 distill-job worker (or an explicitly authorized all-scope operation worker) for

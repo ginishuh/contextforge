@@ -5001,6 +5001,7 @@ export function createContextForge(options = {}) {
             jobId: job.id,
             _jobLeaseOwner: workerId,
             _jobLeaseAttempt: job.attempts,
+            _clientTimeoutMs: options._clientTimeoutMs,
           };
           const execute = () =>
             job.operation === 'distill_checkpoint'

@@ -10,6 +10,7 @@ import {
   resolveCandidateLifecycleScopes,
   watchCandidateLifecycle,
 } from '../src/memory/candidate_lifecycle_worker.js';
+import { createContextForge } from '../src/core.js';
 import { ContextForgeStore } from '../src/storage/sqlite.js';
 
 const execFileAsync = promisify(execFile);
@@ -18,7 +19,7 @@ async function makeTempDir() {
   return fs.mkdtemp(path.join(os.tmpdir(), 'contextforge-lifecycle-worker-test-'));
 }
 
-async function assertPrivateAuthorityFile({ home, unitName, authorityName, remoteUrl }) {
+async function assertPrivateAuthorityFile({ home, unitName, authorityName, remoteUrl, remoteTimeoutMs = 180000 }) {
   const unitDir = path.join(home, '.config', 'systemd', 'user');
   const authorityPath = path.join(unitDir, authorityName);
   const unit = await fs.readFile(path.join(unitDir, unitName), 'utf8');
@@ -27,7 +28,11 @@ async function assertPrivateAuthorityFile({ home, unitName, authorityName, remot
   assert.ok(unit.indexOf('EnvironmentFile=-') < unit.indexOf(`EnvironmentFile=${authorityUnitPath}`));
   assert.doesNotMatch(unit, /CONTEXTFORGE_REMOTE_URL=/);
   assert.doesNotMatch(unit, new RegExp(remoteUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  assert.equal(authority, `CONTEXTFORGE_STORAGE_MODE=remote\nCONTEXTFORGE_REMOTE_URL='${remoteUrl}'\n`);
+  assert.equal(
+    authority,
+    `CONTEXTFORGE_STORAGE_MODE=remote\nCONTEXTFORGE_REMOTE_URL='${remoteUrl}'\n` +
+      `CONTEXTFORGE_REMOTE_TIMEOUT_MS=${remoteTimeoutMs}\n`,
+  );
   assert.equal((await fs.stat(authorityPath)).mode & 0o777, 0o600);
   return unit;
 }
@@ -177,6 +182,67 @@ test('operation job claims can be fenced to one canonical scope', async () => {
   store.close();
 });
 
+test('durable audit workers propagate the remote client timeout before provider execution', async () => {
+  const dataDir = await makeTempDir();
+  let auditInvocations = 0;
+  const auditor = async () => {
+    auditInvocations += 1;
+    throw new Error('auditor must not execute when the client timeout contract is invalid');
+  };
+  auditor.metadata = {
+    provider: 'timeout_contract_auditor',
+    model: 'synthetic-model',
+    timeoutMs: 1000,
+  };
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'timeout_contract_source',
+    },
+    cwd: process.cwd(),
+    autoPromoteAuditor: auditor,
+    distillProviders: {
+      timeout_contract_source: async () => ({
+        summaryShort: 'Timeout contract source.',
+        summaryText: 'A durable audit job must inherit the remote client timeout.',
+        decisions: [],
+        todos: [],
+        openQuestions: [],
+        memoryCandidates: [{
+          key: 'durable-audit-timeout-contract',
+          content: 'Propagate the remote client timeout through durable audit job execution.',
+          category: 'runbook',
+          candidateType: 'runbook',
+          confidence: 0.96,
+          stability: 0.96,
+          sensitivity: 'low',
+          promotionRecommendation: 'promote',
+        }],
+      }),
+    },
+  });
+  const source = { scope: 'repo', scopeKey: 'timeout-contract-repo', sessionId: 'timeout-contract-session' };
+  app.appendRaw({ ...source, role: 'assistant', content: 'Create a candidate for the timeout contract test.' });
+  await app.distillCheckpoint(source);
+  const submitted = app.submitAuditJob({ ...source, trigger: 'manual_closeout' });
+
+  const processed = await app.processJobs({
+    workerId: 'timeout-contract-worker',
+    operation: 'audit_memory_candidates',
+    _clientTimeoutMs: 1000,
+  });
+
+  assert.equal(processed.claimed, 1);
+  assert.equal(processed.succeeded, 0);
+  assert.equal(processed.failed, 1);
+  assert.equal(auditInvocations, 0);
+  const failed = app.getJob({ jobId: submitted.jobId });
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.error.code, 'CONTEXTFORGE_PROVIDER_TIMEOUT_EXCEEDS_CLIENT_TIMEOUT');
+  assert.equal(failed.error.retryable, false);
+  assert.equal(failed.candidates[0].status, 'failed_terminal');
+});
+
 test('candidate lifecycle service installer writes a remote bounded worker unit', async () => {
   const home = await makeTempDir();
   const binDir = path.join(home, 'bin');
@@ -192,6 +258,7 @@ test('candidate lifecycle service installer writes a remote bounded worker unit'
     '--name', 'test',
     '--repo-registry', registry,
     '--remote-url', 'http://127.0.0.1:8766',
+    '--remote-timeout-ms', '240000',
     '--interval-ms', '30000',
     '--audit-limit', '3',
     '--job-limit', '2',
@@ -205,6 +272,7 @@ test('candidate lifecycle service installer writes a remote bounded worker unit'
     unitName: 'contextforge-candidate-lifecycle-test.service',
     authorityName: 'contextforge-candidate-lifecycle-test.authority.env',
     remoteUrl: 'http://127.0.0.1:8766',
+    remoteTimeoutMs: 240000,
   });
   assert.match(unit, /candidateLifecycleWorker/);
   assert.match(unit, /--watch --dryRun "false"/);
@@ -292,4 +360,11 @@ test('watcher installer rejects authority environment file injection', async () 
       (error) => error.code === 2 && /line break or single quote/.test(error.stderr),
     );
   }
+  await assert.rejects(
+    execFileAsync('bash', [
+      'scripts/install-candidate-lifecycle-worker-service.sh',
+      '--repo-registry', registry, '--remote-url', 'https://memory.example.com', '--remote-timeout-ms', '0',
+    ], { cwd: process.cwd(), env: { ...process.env, HOME: home } }),
+    (error) => error.code === 2 && /positive integer/.test(error.stderr),
+  );
 });
