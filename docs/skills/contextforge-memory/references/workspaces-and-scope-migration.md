@@ -7,7 +7,6 @@ agent-neutral lifecycle CLI.
 ## Contents
 
 - [Workspace Routing](#workspace-routing)
-- [Agent-Neutral Lifecycle CLI](#agent-neutral-lifecycle-cli)
 - [Repository Aliases And Scope Migration](#repository-aliases-and-scope-migration)
 - [Connection Diagnostics](#connection-diagnostics)
 
@@ -48,14 +47,6 @@ unbounded retrieval from that scope; workspace retrieval must still obey
 per-scope and total result limits. Workspace profile deactivation is soft
 delete: the profile becomes inactive and can be reactivated by upserting the
 same key.
-
-## Agent-Neutral Lifecycle CLI
-
-CLI users may use `agentStart` and `agentCloseout` as agent-neutral lifecycle
-wrappers. `agentStart` is a bootstrap convenience and may pass `workspaceKey`.
-`agentCloseout` requires `sessionId` or `checkpointId`, preserves
-adapter-prefixed ids, defaults to `dryRun=true`, and does not scan broad scope
-backlog by default.
 
 ## Repository Aliases And Scope Migration
 

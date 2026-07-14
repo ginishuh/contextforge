@@ -4,6 +4,11 @@ Read this reference only when the task explicitly calls for scope-wide backlog
 review, audited candidate routing, lifecycle dispositions, or worker operation.
 Ordinary closeout remains session/checkpoint scoped.
 
+Candidate v2 fields such as `durabilityReason`, `riskReason`, `evidenceRefs`, and
+`suggestedAction` are provider recommendations, not approval. An audited
+`approve` decision is not itself a durable write. Candidate
+disposition, audit state, and durable promotion remain separate lifecycle state.
+
 ## Scope-Wide Candidate Review
 
 Never broaden an empty closeout proposal into an implicit scope scan.

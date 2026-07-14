@@ -191,8 +191,13 @@ function inspectPackage() {
     'docs/operations.md',
     'docs/skills/contextforge-memory/SKILL.md',
     'docs/skills/contextforge-memory/agents/openai.yaml',
+    'docs/skills/contextforge-memory/references/bootstrap-and-retrieval.md',
     'docs/skills/contextforge-memory/references/candidate-lifecycle.md',
+    'docs/skills/contextforge-memory/references/closeout-and-corrections.md',
+    'docs/skills/contextforge-memory/references/distillation-and-jobs.md',
     'docs/skills/contextforge-memory/references/embeddings-and-maintenance.md',
+    'docs/skills/contextforge-memory/references/sessions-and-evidence.md',
+    'docs/skills/contextforge-memory/references/tool-profiles-and-authority.md',
     'docs/skills/contextforge-memory/references/workspaces-and-scope-migration.md',
     ...publishedScripts,
   ];

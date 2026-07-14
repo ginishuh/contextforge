@@ -11,10 +11,11 @@
   tool schema and packaged-skill lifecycle contract. Packaged Codex UI metadata
   now ships with an explicit `$contextforge-memory` prompt and candidate-review
   description so runtime installations do not drift from the skill body. The
-  skill now uses progressive disclosure for workspace migration, candidate
-  lifecycle operations, and embedding maintenance, with regression budgets of
-  340 lines and 18 KB for the always-loaded `SKILL.md` body, 120 lines and 6 KB
-  per on-demand reference, and 14 KB across all references.
+  skill now follows a router-and-references progressive disclosure structure:
+  the always-loaded `SKILL.md` contains only core invariants, the minimal
+  workflow, and direct read-when links for every detailed guide. Regression
+  budgets are 120 lines and 7 KB for the router, 120 lines and 6 KB per
+  on-demand reference, and 30 KB across all references.
 - Added operation-worker freshness to `/readyz` with a bounded startup grace
   period and an explicit `operation_worker_stale` reason. Operational metrics
   now include candidate throughput/latency, audit decision and routing

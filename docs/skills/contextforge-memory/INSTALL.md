@@ -63,7 +63,7 @@ After installing or updating the skill:
 4. Confirm the skill guidance covers bootstrap, storage authority, session IDs,
    distillation, checkpoint candidates, scope backlog review, candidate
    lifecycle workers, closeout promotion, corrections, and embeddings. Confirm
-   the three linked files under `references/` are present and readable.
+   every file directly linked under `references/` is present and readable.
 
 If `contextforge-memory` is not available in a session, the runtime skill
 installation is incomplete. Install or update the skill before doing
