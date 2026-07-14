@@ -20,9 +20,11 @@ import {
   memoryLifecycleSummary as summarizeMemoryLifecycle,
 } from './candidate_lifecycle.js';
 import { applySqliteMigrations } from './migrations/index.js';
+import { buildMemoryLifecycleQualitySnapshot } from './lifecycle_quality.js';
+import { buildOperationalSnapshot } from './operational_snapshot.js';
 import { secureDataDirectoryPermissions } from './permissions.js';
 
-export const SCHEMA_VERSION = 20;
+export const SCHEMA_VERSION = 21;
 export const SQLITE_BUSY_TIMEOUT_MS = 5000;
 export const SQLITE_JOURNAL_MODE = 'wal';
 export const SQLITE_SYNCHRONOUS = 'normal';
@@ -207,6 +209,7 @@ function hydrateOperationJob(row) {
     priority: row.priority,
     leaseOwner: row.lease_owner,
     leaseExpiresAt: row.lease_expires_at,
+    workerObservedAt: row.worker_observed_at || null,
     error: row.error_message
       ? {
           name: row.error_name || 'Error',
@@ -828,6 +831,7 @@ export class ContextForgeStore {
         priority INTEGER NOT NULL DEFAULT 0,
         lease_owner TEXT,
         lease_expires_at TEXT,
+        worker_observed_at TEXT,
         error_name TEXT,
         error_message TEXT,
         error_code TEXT,
@@ -946,6 +950,14 @@ export class ContextForgeStore {
         event_type TEXT NOT NULL,
         metadata_json TEXT NOT NULL DEFAULT '{}',
         created_at TEXT NOT NULL,
+        FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS memory_retrieval_stats (
+        memory_id TEXT PRIMARY KEY,
+        retrieval_count INTEGER NOT NULL DEFAULT 0 CHECK (retrieval_count >= 0),
+        first_retrieved_at TEXT NOT NULL,
+        last_retrieved_at TEXT NOT NULL,
         FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE
       );
 
@@ -1167,6 +1179,10 @@ export class ContextForgeStore {
 
       CREATE INDEX IF NOT EXISTS idx_memories_scope
         ON memories(scope_type, scope_key);
+      CREATE INDEX IF NOT EXISTS idx_memory_events_memory
+        ON memory_events(memory_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_memory_retrieval_stats_last
+        ON memory_retrieval_stats(last_retrieved_at);
       CREATE INDEX IF NOT EXISTS idx_raw_events_session
         ON raw_events(scope_type, scope_key, session_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_checkpoints_session
@@ -1285,6 +1301,7 @@ export class ContextForgeStore {
         workingSummaries: count('working_summaries'),
         sessionWorkingContexts: count('session_working_context'),
         memoryEvents: count('memory_events'),
+        memoryRetrievalStats: count('memory_retrieval_stats'),
         memoryCandidates: count('memory_candidate_index'),
         preferenceOccurrences: count('preference_occurrences'),
         memoryUpdateCandidates: count('memory_update_candidates'),
@@ -1316,109 +1333,11 @@ export class ContextForgeStore {
     };
   }
 
-  operationalSnapshot({ now = new Date() } = {}) {
-    const nowIsoText = now.toISOString();
-    const operationJobs = { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 };
-    for (const row of this.db.prepare('SELECT status, COUNT(*) AS count FROM operation_jobs GROUP BY status').all()) {
-      operationJobs[row.status] = row.count;
-    }
-    const oldestQueuedAt = this.db
-      .prepare("SELECT MIN(created_at) AS value FROM operation_jobs WHERE status = 'queued'")
-      .get().value;
-    const staleRunningJobs = this.db
-      .prepare(
-        "SELECT COUNT(*) AS count FROM operation_jobs WHERE status = 'running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?",
-      )
-      .get(nowIsoText).count;
-    const distill = this.db
-      .prepare(
-        `SELECT provider, status, COUNT(*) AS count,
-                  AVG(CASE WHEN completed_at IS NOT NULL
-                      THEN (julianday(completed_at) - julianday(created_at)) * 86400000
-                      ELSE NULL END) AS average_elapsed_ms
-         FROM distill_runs GROUP BY provider, status`,
-      )
-      .all()
-      .map((row) => ({
-        provider: row.provider,
-        status: row.status,
-        count: row.count,
-        averageElapsedMs: row.average_elapsed_ms,
-      }));
-    const usage = this.db
-      .prepare(
-        `SELECT COUNT(*) AS events,
-                COALESCE(SUM(total_tokens), 0) AS total_tokens,
-                COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failures,
-                AVG(elapsed_ms) AS average_elapsed_ms
-         FROM llm_usage_events`,
-      )
-      .get();
-    const usageByOperation = this.db
-      .prepare(
-        `SELECT operation, status, COUNT(*) AS events,
-                COALESCE(SUM(total_tokens), 0) AS total_tokens,
-                AVG(elapsed_ms) AS average_elapsed_ms
-         FROM llm_usage_events
-         GROUP BY operation, status
-         ORDER BY operation ASC, status ASC`,
-      )
-      .all()
-      .map((row) => ({
-        operation: row.operation,
-        status: row.status,
-        events: row.events,
-        totalTokens: row.total_tokens,
-        averageElapsedMs: row.average_elapsed_ms,
-      }));
-    const providerTimeouts = this.db
-      .prepare(
-        `SELECT COUNT(*) AS count FROM distill_runs
-         WHERE status = 'failed'
-           AND (lower(error_message) LIKE '%timeout%' OR lower(error_message) LIKE '%timed out%')`,
-      )
-      .get().count;
-    const disk = fs.statfsSync(this.dataDir);
-    let writable = true;
-    try {
-      fs.accessSync(this.dataDir, fs.constants.R_OK | fs.constants.W_OK);
-      fs.accessSync(this.dbPath, fs.constants.R_OK | fs.constants.W_OK);
-      writable = Number(this.db.pragma('query_only', { simple: true })) === 0;
-    } catch {
-      writable = false;
-    }
-    return {
-      observedAt: nowIsoText,
-      database: {
-        queryOk: this.db.prepare('SELECT 1 AS ok').get().ok === 1,
-        writable,
-        schemaVersion: Number(this.db.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").get().value),
-        supportedSchemaVersion: SCHEMA_VERSION,
-        sqlite: this.sqlitePolicy(),
-      },
-      disk: {
-        availableBytes: Number(disk.bavail) * Number(disk.bsize),
-        totalBytes: Number(disk.blocks) * Number(disk.bsize),
-      },
-      queues: {
-        operationJobs,
-        oldestQueuedAt: oldestQueuedAt || null,
-        oldestQueuedWaitMs: oldestQueuedAt ? Math.max(0, now.getTime() - Date.parse(oldestQueuedAt)) : 0,
-        staleRunningJobs,
-        embeddingJobs: this.countEmbeddingJobs(),
-      },
-      providers: {
-        distill,
-        usage: {
-          events: usage.events,
-          totalTokens: usage.total_tokens,
-          failures: usage.failures,
-          averageElapsedMs: usage.average_elapsed_ms,
-          byOperation: usageByOperation,
-          timeouts: providerTimeouts,
-        },
-      },
-    };
+  memoryLifecycleQualitySnapshot(options = {}) {
+    return buildMemoryLifecycleQualitySnapshot(this, options);
+  }
+  operationalSnapshot(options = {}) {
+    return buildOperationalSnapshot(this, { ...options, supportedSchemaVersion: SCHEMA_VERSION });
   }
 
   ensureEmbeddingIndex(dimensions, { resetOnDimensionChange = false } = {}) {
@@ -2888,6 +2807,26 @@ export class ContextForgeStore {
       .map(hydrateMemory);
   }
 
+  recordMemoryRetrievals(memoryIds, { at = nowIso() } = {}) {
+    const ids = [...new Set((memoryIds || []).map(String).filter(Boolean))].slice(0, 100);
+    if (ids.length === 0) return { recorded: 0, at };
+    if (Number(this.db.pragma('query_only', { simple: true })) === 1) {
+      return { recorded: 0, at, skipped: 'read_only' };
+    }
+    const statement = this.db.prepare(`
+      INSERT INTO memory_retrieval_stats (
+        memory_id, retrieval_count, first_retrieved_at, last_retrieved_at
+      ) VALUES (?, 1, ?, ?)
+      ON CONFLICT(memory_id) DO UPDATE SET
+        retrieval_count = memory_retrieval_stats.retrieval_count + 1,
+        last_retrieved_at = excluded.last_retrieved_at
+    `);
+    this.withTransaction(() => {
+      for (const memoryId of ids) statement.run(memoryId, at, at);
+    });
+    return { recorded: ids.length, at };
+  }
+
   listMemoriesForAdmin({ scopeType, scopeKey, status = 'active', query = null, limit = 100, after = null } = {}) {
     const filters = ['scope_type = ?', 'scope_key = ?'];
     const values = [scopeType, scopeKey];
@@ -4094,6 +4033,7 @@ export class ContextForgeStore {
           SET status = ?,
               lease_owner = NULL,
               lease_expires_at = NULL,
+              worker_observed_at = ?,
               error_name = 'JobLeaseExpiredError',
               error_message = 'Operation job lease expired before completion.',
               error_code = 'CONTEXTFORGE_JOB_LEASE_EXPIRED',
@@ -4103,7 +4043,7 @@ export class ContextForgeStore {
           WHERE id = ? AND status = 'running'
           RETURNING *
         `)
-        .get(exhausted ? 'failed' : 'queued', exhausted ? 0 : 1, now, exhausted ? now : null, row.id);
+        .get(exhausted ? 'failed' : 'queued', now, exhausted ? 0 : 1, now, exhausted ? now : null, row.id);
       if (updated) {
         if (this.listOperationJobCandidates({ jobId: updated.id }).length > 0) {
           this.settleOperationJobCandidates({
@@ -4148,6 +4088,7 @@ export class ContextForgeStore {
               attempts = attempts + 1,
               lease_owner = ?,
               lease_expires_at = ?,
+              worker_observed_at = ?,
               error_name = NULL,
               error_message = NULL,
               error_code = NULL,
@@ -4159,7 +4100,7 @@ export class ContextForgeStore {
           WHERE id = ? AND status = 'queued'
           RETURNING *
         `)
-        .get(workerId, leaseExpiresAt, nowText, nowText, candidate.id);
+        .get(workerId, leaseExpiresAt, nowText, nowText, nowText, candidate.id);
       if (row) claimed.push(hydrateOperationJob(row));
     }
     return claimed;
@@ -4175,6 +4116,7 @@ export class ContextForgeStore {
             result_json = ?,
             lease_owner = NULL,
             lease_expires_at = NULL,
+            worker_observed_at = ?,
             error_name = NULL,
             error_message = NULL,
             error_code = NULL,
@@ -4192,6 +4134,7 @@ export class ContextForgeStore {
       .get(
         checkpointId,
         json(result, {}),
+        timestamp,
         json(metadata, {}),
         timestamp,
         timestamp,
@@ -4211,7 +4154,7 @@ export class ContextForgeStore {
       this.db
         .prepare(`
           UPDATE operation_jobs
-          SET lease_expires_at = ?, updated_at = ?
+          SET lease_expires_at = ?, worker_observed_at = ?, updated_at = ?
           WHERE id = ?
             AND status = 'running'
             AND lease_owner = ?
@@ -4219,7 +4162,7 @@ export class ContextForgeStore {
             AND lease_expires_at > ?
           RETURNING *
         `)
-        .get(leaseExpiresAt, nowText, jobId, workerId, Number(attempt), nowText),
+        .get(leaseExpiresAt, nowText, nowText, jobId, workerId, Number(attempt), nowText),
     );
   }
 
@@ -4257,6 +4200,7 @@ export class ContextForgeStore {
             result_json = ?,
             lease_owner = NULL,
             lease_expires_at = NULL,
+            worker_observed_at = ?,
             error_name = ?,
             error_message = ?,
             error_code = ?,
@@ -4274,6 +4218,7 @@ export class ContextForgeStore {
       .get(
         retryable ? 1 : 0,
         json(result, {}),
+        timestamp,
         error?.name || 'Error',
         error?.message || String(error),
         error?.code || null,

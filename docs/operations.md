@@ -18,6 +18,7 @@ required checks pass, otherwise 503. Checks include:
 - a SQLite query and exact supported schema version;
 - available filesystem bytes;
 - queued operation-job threshold and expired running leases;
+- operation-worker freshness when queued work outlives its startup grace;
 - failed embedding jobs when embeddings are enabled;
 - the effective WAL, synchronous, busy-timeout, and foreign-key policy.
 
@@ -26,7 +27,15 @@ Tune the required thresholds on the server process:
 ```text
 CONTEXTFORGE_READINESS_MIN_FREE_BYTES=104857600
 CONTEXTFORGE_READINESS_MAX_QUEUED_JOBS=1000
+CONTEXTFORGE_READINESS_WORKER_STALE_AFTER_MS=300000
 ```
+
+An empty queue does not require a continuously running worker. When work is
+queued, readiness allows `CONTEXTFORGE_READINESS_WORKER_STALE_AFTER_MS` for a
+supervised worker or timer to claim it. After that boundary, no active lease and
+no recent worker-observed timestamp makes `/readyz` return 503 with
+`checks.operationWorker.reason=operation_worker_stale`. Claim, lease renewal,
+completion, retry, and expired-lease recovery update the worker timestamp.
 
 Provider credentials are never returned or actively exercised by readiness.
 Credential/provider smoke checks remain explicit operator actions so a health
@@ -45,6 +54,18 @@ admin session as the remote API. It exposes bounded aggregates for:
 - distill outcome/latency aggregates and LLM usage/failure/token totals;
 - provider concurrency, disk availability, retrieval latency/candidate scans;
 - raw-prune eligible/blocked results observed through the HTTP API.
+- memory-candidate throughput, queue age, audit/promotion latency, decisions,
+  and durable-write routing classifications;
+- 7/30-day post-promotion correction/deactivation, active duplicate,
+  transient-promotion, and candidate-to-durable conversion rates;
+- bounded provider/model/prompt audit quality slices and active durable-memory
+  retrieval-use coverage.
+
+Search and bootstrap retrieval update `memory_retrieval_stats` with only a
+memory id, counter, first-use time, and last-use time. Query text and raw result
+content are not stored. A query-only store skips this optional counter write so
+retrieval remains available. Audit-quality label cardinality is capped at 100
+provider/model/prompt combinations in one metrics snapshot.
 
 Every HTTP response includes `X-Request-Id`. A supplied `X-Request-Id` is
 preserved (bounded to 128 characters); otherwise the server generates one.
