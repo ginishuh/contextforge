@@ -61,7 +61,7 @@ function policyEntries(policy, asOfMs) {
     ['approvedAwaitingPromotion', "audit_state = 'audited' AND audit_decision = 'approve'", policy.approvedAwaitingPromotionMs],
     ['needsReview', "audit_state = 'audited' AND audit_decision = 'needs_review'", policy.needsReviewMs],
     ['rejectRecommended', "audit_state = 'audited' AND audit_decision = 'reject'", policy.rejectRecommendedMs],
-    ['auditedUnknown', "audit_state = 'audited' AND audit_decision IS NULL", policy.auditedUnknownMs],
+    ['auditedUnknown', "audit_state = 'audited' AND (audit_decision IS NULL OR audit_decision NOT IN ('approve', 'needs_review', 'reject'))", policy.auditedUnknownMs],
   ];
   return definitions.map(([queue, sql, slaMs]) => ({
     queue,
@@ -72,10 +72,9 @@ function policyEntries(policy, asOfMs) {
 }
 
 function expectedAnchor(candidate) {
-  return [candidate.createdAt, candidate.reviewedAt, candidate.reviewMetadata?.candidateSlaAnchorAt]
-    .filter(Boolean)
-    .sort()
-    .at(-1);
+  const base = candidate.reviewedAt || candidate.createdAt;
+  const reset = candidate.reviewMetadata?.candidateSlaAnchorAt || null;
+  return reset && reset > base ? reset : base;
 }
 
 export function listDueCandidateStaleTransitions(store, scope, options = {}, policy) {
@@ -284,7 +283,7 @@ export function candidateStaleSlaMethods({ config, useStore }) {
       return useStore((store) => listDueCandidateStaleTransitions(store, scope, options, config.candidateSla));
     },
     processDueCandidateStaleTransitions(options = {}) {
-      if (!((options.scope || options.scopeType) && options.scopeKey) && !options.cwd && !options.repoPath) {
+      if (!((options.scope || options.scopeType) && options.scopeKey)) {
         throw new Error('processDueCandidateStaleTransitions requires one explicit canonical scope.');
       }
       const scope = normalizeScopeOptions(options, config);

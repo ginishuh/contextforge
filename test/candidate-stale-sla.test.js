@@ -59,6 +59,7 @@ test('candidate stale SLA inventory is bounded and transitions with queue and an
         memoryCandidate('old-race'),
         memoryCandidate('active-audit'),
         memoryCandidate('recent-unaudited'),
+        memoryCandidate('snoozed-old'),
       ],
     },
   });
@@ -67,21 +68,30 @@ test('candidate stale SLA inventory is bounded and transitions with queue and an
   const oldAt = new Date(Date.now() - 120000).toISOString();
   store.db.prepare(`
     UPDATE memory_candidate_index SET created_at = ?
-    WHERE id IN (?, ?, ?, ?)
+    WHERE id IN (?, ?, ?, ?, ?)
   `).run(
     oldAt,
     byKey.get('old-unaudited').id,
     byKey.get('old-needs-review').id,
     byKey.get('old-race').id,
     byKey.get('active-audit').id,
+    byKey.get('snoozed-old').id,
   );
+  const olderReviewedAt = new Date(Date.now() - 180000).toISOString();
   store.db.prepare(`
     UPDATE memory_candidate_index
     SET audit_state = 'audited', audit_decision = 'needs_review', reviewed_at = ?, review_reason = ?
     WHERE id = ?
-  `).run(oldAt, 'Human review is required.', byKey.get('old-needs-review').id);
+  `).run(olderReviewedAt, 'Human review is required.', byKey.get('old-needs-review').id);
   store.db.prepare("UPDATE memory_candidate_index SET audit_state = 'queued' WHERE id = ?")
     .run(byKey.get('active-audit').id);
+  app.snoozeMemoryCandidate({
+    ...scope,
+    candidateId: byKey.get('snoozed-old').id,
+    snoozedUntil: new Date(Date.now() + 60000).toISOString(),
+    reason: 'Wait for a wake-up SLA regression check.',
+    actor: 'reviewer-1',
+  });
 
   const inventory = app.listDueCandidateStaleTransitions({ ...scope, limit: 2 });
   assert.equal(inventory.totalDueCount, 3);
@@ -126,7 +136,7 @@ test('candidate stale SLA inventory is bounded and transitions with queue and an
     .find((candidate) => candidate.id === byKey.get('old-needs-review').id);
   assert.equal(staledAudited.auditState, 'audited');
   assert.equal(staledAudited.auditDecision, 'needs_review');
-  assert.equal(staledAudited.reviewedAt, oldAt);
+  assert.equal(staledAudited.reviewedAt, olderReviewedAt);
   assert.equal(staledAudited.reviewReason, 'Human review is required.');
   const staleEvent = staledAudited.reviewMetadata.lifecycleEvents.at(-1);
   assert.deepEqual(
@@ -141,7 +151,7 @@ test('candidate stale SLA inventory is bounded and transitions with queue and an
     actor: 'reviewer-1',
   });
   assert.equal(reopened.candidate.status, 'pending');
-  assert.equal(reopened.candidate.reviewedAt, oldAt);
+  assert.equal(reopened.candidate.reviewedAt, olderReviewedAt);
   assert.equal(reopened.candidate.reviewReason, 'Human review is required.');
   assert.ok(reopened.candidate.reviewMetadata.candidateSlaAnchorAt > oldAt);
   assert.equal(app.reopenStaleMemoryCandidate({
@@ -152,6 +162,16 @@ test('candidate stale SLA inventory is bounded and transitions with queue and an
   }).deduplicated, true);
   assert.equal(app.listDueCandidateStaleTransitions({ ...scope, limit: 10 }).candidates
     .some((item) => item.candidate.id === staledAudited.id), false);
+
+  store.db.prepare('UPDATE memory_candidate_index SET snoozed_until = ? WHERE id = ?')
+    .run(new Date(Date.now() - 1000).toISOString(), byKey.get('snoozed-old').id);
+  const wakeResult = app.processDueCandidateWakeups({ ...scope, actor: 'wake-worker', reason: 'Snooze expired.' });
+  assert.equal(wakeResult.woken, 1);
+  const woken = app.listMemoryCandidates({ ...scope, status: 'pending' })
+    .find((candidate) => candidate.id === byKey.get('snoozed-old').id);
+  assert.ok(woken.reviewMetadata.candidateSlaAnchorAt > oldAt);
+  assert.equal(app.listDueCandidateStaleTransitions({ ...scope, limit: 10 }).candidates
+    .some((item) => item.candidate.id === woken.id), false);
   app.close();
 });
 
@@ -177,5 +197,9 @@ test('candidate stale SLA operations have scoped review and operator contracts',
   const dataDir = await makeTempDir();
   const app = createContextForge({ env: slaEnv(dataDir), cwd: process.cwd() });
   assert.throws(() => app.processDueCandidateStaleTransitions({ scope: 'repo' }), /explicit canonical scope/);
+  assert.throws(
+    () => app.processDueCandidateStaleTransitions({ repoPath: process.cwd() }),
+    /explicit canonical scope/,
+  );
   app.close();
 });
