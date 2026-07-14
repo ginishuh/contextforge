@@ -355,6 +355,13 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
         30000,
       ),
     },
+    candidateSnooze: {
+      maxMs: parsePositiveInteger(
+        env.CONTEXTFORGE_CANDIDATE_SNOOZE_MAX_MS,
+        'CONTEXTFORGE_CANDIDATE_SNOOZE_MAX_MS',
+        90 * 24 * 60 * 60 * 1000,
+      ),
+    },
     autoPromote: {
       enabled: parseBoolean(env.CONTEXTFORGE_AUTO_PROMOTE_ENABLED),
       audit: {

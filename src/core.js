@@ -11,6 +11,7 @@ import { createEmbeddingProvider } from './embeddings/index.js';
 import { normalizeAgentAdapterIds } from './ingest/agents.js';
 import { submitMemoryCandidateAuditJob } from './memory/candidate_audit_jobs.js';
 import { buildMemoryCandidateBacklog } from './memory/candidate_backlog.js';
+import { candidateDispositionMethods } from './memory/candidate_dispositions.js';
 import { memoryCandidateRevisionHash } from './memory/candidate_revision.js';
 import { dueDistillSessionSummary, listIdleCandidateAudits, processIdleCandidateAudits } from './memory/idle_candidate_audits.js';
 import { createRemoteContextForge } from './remote/client.js';
@@ -3993,6 +3994,7 @@ export function createContextForge(options = {}) {
 
   return {
     config,
+    ...candidateDispositionMethods({ config, useStore }),
 
     close() {
       if (sharedStore) {
@@ -7096,38 +7098,6 @@ export function createContextForge(options = {}) {
           },
         }, enqueueEmbeddingSources);
         return memory;
-      });
-    },
-
-    rejectMemoryCandidate(options) {
-      const scope = normalizeScopeOptions(options, config);
-      requireOption(options.candidateId, 'candidateId');
-      requireOption(options.reason, 'reason');
-      return useStore((store) => {
-        const candidate = store.getMemoryCandidate({
-          ...scope,
-          candidateId: options.candidateId,
-        });
-        if (!candidate) {
-          throw new Error(`Memory candidate not found: ${options.candidateId}`);
-        }
-        if (candidate.status !== 'pending' && !truthyOption(options.allowStatusOverride)) {
-          throw new Error(
-            `Memory candidate ${candidate.id} is ${candidate.status}; expected pending. Pass allowStatusOverride to change it anyway.`,
-          );
-        }
-        return store.markMemoryCandidateReviewed({
-          ...scope,
-          candidateId: options.candidateId,
-          status: 'rejected',
-          reason: options.reason,
-          allowStatusOverride: truthyOption(options.allowStatusOverride),
-          metadata: {
-            checkpointId: candidate.checkpointId,
-            sessionId: candidate.sessionId,
-            sourceCandidateIndex: candidate.index,
-          },
-        });
       });
     },
 

@@ -83,6 +83,29 @@ The default inferred-idle grace period is ten minutes and can be changed with
 not stored as an adapter terminal signal. Explicit terminal detection remains
 adapter-specific and must not be inferred from a quiet period.
 
+## Snooze and wake-up SLA
+
+`snoozeMemoryCandidate` moves one `pending` candidate to `snoozed`. It requires
+a finite future `snoozedUntil`, a reason, an actor, and the wake-up target
+`pending`. The default maximum is 90 days and can be changed with
+`CONTEXTFORGE_CANDIDATE_SNOOZE_MAX_MS`; permanent or over-limit snooze is not
+accepted. Candidates with a `queued` or
+`running` audit cannot be snoozed because that would race the immutable job
+selection.
+
+`listDueCandidateWakeups` is a provider-free, bounded inventory ordered by the
+stored snooze deadline. `processDueCandidateWakeups` requires one explicit
+canonical scope and reopens expired rows with a compare-and-swap update. A
+concurrent reschedule or wake-up is skipped instead of overwriting the newer
+epoch. `dryRun` returns the same bounded selection without mutation.
+
+Manual `wakeMemoryCandidate` may reopen a candidate before its deadline. Both
+snooze and wake transitions append actor, reason, time, request id, prior
+deadline, and status movement to `reviewMetadata.lifecycleEvents`. Wake-up
+clears the active snooze columns but keeps this transition history. To extend a
+snooze, wake the current epoch and create a new finite snooze rather than
+changing its deadline in place.
+
 ## Immutable audit provenance
 
 Every provider result is appended to `memory_candidate_audit_attempts`. The

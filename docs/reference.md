@@ -1683,6 +1683,26 @@ checkpoint or its candidates does not restart that clock.
 Quiet-time inference is reported as `sourceSignal: "inferred_idle"`; it is not
 an adapter terminal signal.
 
+Snooze a pending candidate only with a finite review deadline:
+
+```bash
+node src/cli.js snoozeMemoryCandidate --scope repo --scopeKey github.com/example/contextforge \
+  --candidateId candidate-id --snoozedUntil 2026-07-15T09:00:00.000Z \
+  --reason "Review after rollout" --actor reviewer-id
+node src/cli.js listDueCandidateWakeups --scope repo --scopeKey github.com/example/contextforge --limit 50
+node src/cli.js processDueCandidateWakeups --scope repo --scopeKey github.com/example/contextforge --dryRun true
+node src/cli.js processDueCandidateWakeups --scope repo --scopeKey github.com/example/contextforge --limit 50
+```
+
+The process call requires one canonical scope, invokes no provider, and uses a
+candidate-status plus snooze-epoch CAS before reopening to `pending`. Manual
+`wakeMemoryCandidate` can reopen early. Snooze is rejected while an audit is
+`queued` or `running`, and every transition retains actor/reason provenance in
+the candidate lifecycle history. To extend a snooze, wake the current epoch and
+create a new finite snooze rather than changing its deadline in place. The
+default maximum is 90 days; set `CONTEXTFORGE_CANDIDATE_SNOOZE_MAX_MS` to an
+explicit positive millisecond limit when a different policy is required.
+
 Queue provider work durably when it must outlive the submitting request:
 
 ```bash

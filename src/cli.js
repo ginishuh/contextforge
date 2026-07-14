@@ -360,12 +360,18 @@ async function main() {
       app.listDueCandidateAudits(preserveCoreLimitDefault(coreOptions, rawOptions)),
     processDueCandidateAudits: (app, coreOptions, rawOptions) =>
       app.processDueCandidateAudits(preserveCoreLimitDefault(coreOptions, rawOptions)),
+    listDueCandidateWakeups: (app, coreOptions, rawOptions) =>
+      app.listDueCandidateWakeups(preserveCoreLimitDefault(coreOptions, rawOptions)),
+    processDueCandidateWakeups: (app, coreOptions, rawOptions) =>
+      app.processDueCandidateWakeups(preserveCoreLimitDefault(coreOptions, rawOptions)),
     listDueConsolidations: (app, coreOptions) => app.listDueConsolidations(coreOptions),
     processConsolidations: (app, coreOptions) => app.processConsolidations(coreOptions),
     remember: (app, coreOptions) => app.remember(coreOptions),
     promoteMemory: (app, coreOptions) => app.promoteMemory(coreOptions),
     promoteMemoryCandidate: (app, coreOptions) => app.promoteMemoryCandidate(coreOptions),
     rejectMemoryCandidate: (app, coreOptions) => app.rejectMemoryCandidate(coreOptions),
+    snoozeMemoryCandidate: (app, coreOptions) => app.snoozeMemoryCandidate(coreOptions),
+    wakeMemoryCandidate: (app, coreOptions) => app.wakeMemoryCandidate(coreOptions),
     correctMemory: (app, coreOptions) => app.correctMemory(coreOptions),
     deactivateMemory: (app, coreOptions) => app.deactivateMemory(coreOptions),
     listMemoryEvents: (app, coreOptions, rawOptions) =>
