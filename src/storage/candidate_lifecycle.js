@@ -51,6 +51,48 @@ export function hydrateMemoryCandidateAuditAttempt(row) {
   };
 }
 
+export function listCandidateAuditSessions(store, {
+  scopeType = null,
+  scopeKey = null,
+  limit = 100,
+  order = 'asc',
+} = {}) {
+  const filters = [
+    "status = 'pending'",
+    "audit_state IN ('unaudited', 'failed_retryable', 'legacy_unknown')",
+  ];
+  const values = [];
+  if (scopeType) {
+    filters.push('scope_type = ?');
+    values.push(scopeType);
+  }
+  if (scopeKey) {
+    filters.push('scope_key = ?');
+    values.push(scopeKey);
+  }
+  const parsedLimit = Math.min(500, Math.max(1, Number(limit) || 100));
+  const direction = order === 'desc' ? 'DESC' : 'ASC';
+  return store.db.prepare(`
+    SELECT scope_type, scope_key, session_id,
+           COUNT(*) AS eligible_candidate_count,
+           MIN(created_at) AS oldest_candidate_at,
+           MAX(created_at) AS latest_candidate_at
+    FROM memory_candidate_index
+    WHERE ${filters.join(' AND ')}
+    GROUP BY scope_type, scope_key, session_id
+    ORDER BY oldest_candidate_at ${direction}, scope_type ${direction},
+             scope_key ${direction}, session_id ${direction}
+    LIMIT ?
+  `).all(...values, parsedLimit).map((row) => ({
+    scopeType: row.scope_type,
+    scopeKey: row.scope_key,
+    sessionId: row.session_id,
+    eligibleCandidateCount: Number(row.eligible_candidate_count || 0),
+    oldestCandidateAt: row.oldest_candidate_at,
+    latestCandidateAt: row.latest_candidate_at,
+  }));
+}
+
 export function backfillMemoryCandidateAuditStateOnce(store) {
   const completed = store.db
     .prepare("SELECT value FROM schema_meta WHERE key = 'memory_candidate_audit_state_backfill_completed_at'")
@@ -339,21 +381,28 @@ export function memoryLifecycleSummary(store, options) {
   return summary;
 }
 
-export function markMemoryCandidateTriagedNoAudit(store, { scopeType, scopeKey, candidateId, reason, metadata = {} }) {
-  const existing = store.getMemoryCandidate({ scopeType, scopeKey, candidateId });
-  if (!existing) throw new Error(`Memory candidate not found: ${candidateId}`);
-  const reviewedAt = nowIso();
-  const reviewMetadata = { ...(existing.reviewMetadata || {}), triage: { reason, ...metadata, triagedAt: reviewedAt } };
-  const result = store.db.prepare(`
-    UPDATE memory_candidate_index
-    SET audit_state = 'triaged_no_audit', reviewed_at = ?, review_reason = ?, review_metadata_json = ?
-    WHERE scope_type = ? AND scope_key = ? AND id = ? AND status = 'pending'
-  `).run(reviewedAt, reason, json(reviewMetadata, {}), scopeType, scopeKey, candidateId);
-  if (result.changes === 0) throw new Error(`Memory candidate ${candidateId} changed before triage could be committed.`);
-  if (metadata.operationJobId) {
-    markOperationJobCandidateSkipped(store, { jobId: metadata.operationJobId, candidateId, reason, metadata });
-  }
-  return store.getMemoryCandidate({ scopeType, scopeKey, candidateId });
+export function markMemoryCandidateTriagedNoAudit(store, {
+  scopeType, scopeKey, candidateId, reason, metadata = {}, leaseOwner = null, leaseAttempt = null,
+}) {
+  return store.withTransaction(() => {
+    if (metadata.operationJobId && leaseOwner && leaseAttempt != null) {
+      store.assertOperationJobLease({ jobId: metadata.operationJobId, workerId: leaseOwner, attempt: leaseAttempt });
+    }
+    const existing = store.getMemoryCandidate({ scopeType, scopeKey, candidateId });
+    if (!existing) throw new Error(`Memory candidate not found: ${candidateId}`);
+    const reviewedAt = nowIso();
+    const reviewMetadata = { ...(existing.reviewMetadata || {}), triage: { reason, ...metadata, triagedAt: reviewedAt } };
+    const result = store.db.prepare(`
+      UPDATE memory_candidate_index
+      SET audit_state = 'triaged_no_audit', reviewed_at = ?, review_reason = ?, review_metadata_json = ?
+      WHERE scope_type = ? AND scope_key = ? AND id = ? AND status = 'pending'
+    `).run(reviewedAt, reason, json(reviewMetadata, {}), scopeType, scopeKey, candidateId);
+    if (result.changes === 0) throw new Error(`Memory candidate ${candidateId} changed before triage could be committed.`);
+    if (metadata.operationJobId) {
+      markOperationJobCandidateSkipped(store, { jobId: metadata.operationJobId, candidateId, reason, metadata });
+    }
+    return store.getMemoryCandidate({ scopeType, scopeKey, candidateId });
+  });
 }
 
 export function listMemoryCandidateAuditAttempts(store, { scopeType, scopeKey, candidateId, limit = 100 }) {

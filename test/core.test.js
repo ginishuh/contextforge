@@ -989,7 +989,7 @@ test('MCP tool profiles have exact bounded surfaces and reject invalid configura
   assert.deepEqual(MCP_TOOL_PROFILES['agent-core'], expectedAgentCore);
   assert.deepEqual(
     Object.fromEntries(Object.entries(MCP_TOOL_PROFILES).map(([name, tools]) => [name, tools.length])),
-    { 'agent-core': 24, review: 37, operator: 56, 'workspace-admin': 11, all: 62 },
+    { 'agent-core': 24, review: 38, operator: 58, 'workspace-admin': 11, all: 64 },
   );
   assert.deepEqual(MCP_TOOL_PROFILES.all, ALL_MCP_TOOL_NAMES);
 
@@ -1034,7 +1034,7 @@ test('MCP default profile stays within the context budget without requiring an i
     const surface = getContextForgeMcpSurfaceInfo(defaultServer);
     const allSurface = getContextForgeMcpSurfaceInfo(allServer);
     assert.equal(surface.toolCount, 24);
-    assert.equal(allSurface.toolCount, 62);
+    assert.equal(allSurface.toolCount, 64);
     assert.ok(surface.instructionsBytes <= 1600, `instructions=${surface.instructionsBytes}`);
     assert.ok(surface.toolSchemaBytes <= 26000, `schema=${surface.toolSchemaBytes}`);
     assert.ok(surface.estimatedInitialTokens <= 6700, `tokens=${surface.estimatedInitialTokens}`);
@@ -15110,7 +15110,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'get_session_working_context',
       'get_working_summary',
       'get_workspace',
-      'list_checkpoints',
+      'list_checkpoints', 'list_due_candidate_audits',
       'list_due_consolidations',
       'list_due_distill_sessions',
       'list_embedding_jobs',
@@ -15123,7 +15123,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'list_workspaces',
       'llm_usage_rollup',
       'migrate_scope',
-      'process_consolidations',
+      'process_consolidations', 'process_due_candidate_audits',
       'process_due_distills',
       'process_embedding_jobs',
       'process_jobs',

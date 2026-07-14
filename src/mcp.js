@@ -33,6 +33,7 @@ const closeoutTriggerSchema = z.enum([
   'user_merged_then_synced',
   'user_declared_work_done',
   'manual_closeout',
+  'idle_closeout',
 ]);
 
 export const ALL_MCP_TOOL_NAMES = MCP_OPERATION_TOOL_NAMES;
@@ -66,6 +67,7 @@ const AGENT_CORE_TOOLS = Object.freeze([
 
 const REVIEW_EXTRA_TOOLS = Object.freeze([
   'submit_audit_job',
+  'list_due_candidate_audits',
   'list_memory_events',
   'list_preference_occurrences',
   'list_memory_update_candidates',
@@ -843,6 +845,53 @@ export function createContextForgeMcpServer({
       },
     },
     async (args) => jsonResult(await app.processDueDistills(args)),
+  );
+
+  registerTool(
+    'list_due_candidate_audits',
+    {
+      title: 'List Due Candidate Audits',
+      description:
+        'Read a bounded inventory of idle sessions with unaudited candidate backlog. Each row includes the raw-event fingerprint and checkpoint coversTo used as the idle audit epoch; no provider is called.',
+      inputSchema: {
+        ...scopedSchema,
+        limit: z.number().int().positive().optional(),
+        scanLimit: z.number().int().positive().max(500).optional(),
+        idleMs: z.number().int().nonnegative().optional(),
+        batchLimit: z.number().int().positive().max(10).optional(),
+        order: z.enum(['asc', 'desc']).optional(),
+      },
+      annotations: {
+        title: 'List Due Candidate Audits',
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.listDueCandidateAudits(args)),
+  );
+
+  registerTool(
+    'process_due_candidate_audits',
+    {
+      title: 'Queue Due Candidate Audits',
+      description:
+        'Queue bounded durable audit jobs for idle candidate sessions. The source watermark is revalidated transactionally; late events create a later epoch instead of being folded into the queued audit.',
+      inputSchema: {
+        ...scopedSchema,
+        limit: z.number().int().positive().optional(),
+        scanLimit: z.number().int().positive().max(500).optional(),
+        idleMs: z.number().int().nonnegative().optional(),
+        batchLimit: z.number().int().positive().max(10).optional(),
+        order: z.enum(['asc', 'desc']).optional(),
+        dryRun: z.boolean().optional(),
+        submittedBy: z.string().optional(),
+      },
+      annotations: {
+        title: 'Queue Due Candidate Audits',
+        destructiveHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args) => jsonResult(await app.processDueCandidateAudits(args)),
   );
 
   const consolidationSchema = {
