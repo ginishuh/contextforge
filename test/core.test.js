@@ -15177,8 +15177,8 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     const submitDistillJobTool = toolList.tools.find((tool) => tool.name === 'submit_distill_job');
     assert.ok(submitDistillJobTool.inputSchema.properties.idempotencyKey);
     assert.ok(submitDistillJobTool.description.includes('return immediately'));
-    const submitAuditJobTool = toolList.tools.find((tool) => tool.name === 'submit_audit_job');
-    assert.ok(submitAuditJobTool.description.includes('once per selected candidate'));
+    const submitAuditJobTool = toolList.tools.find((tool) => tool.name === 'submit_audit_job'); assert.ok(submitAuditJobTool.description.includes('once per selected candidate')); assert.ok(submitAuditJobTool.description.includes('candidateIds backlog batch'));
+    assert.deepEqual({ minItems: submitAuditJobTool.inputSchema.properties.candidateIds.minItems, maxItems: submitAuditJobTool.inputSchema.properties.candidateIds.maxItems }, { minItems: 1, maxItems: 10 });
     const backlogPlanTool = toolList.tools.find((tool) => tool.name === 'plan_memory_candidate_backlog_audit'); assert.ok(backlogPlanTool.inputSchema.properties.maxProviderCalls); assert.ok(backlogPlanTool.inputSchema.properties.inputUsdPerMillionTokens); assert.equal(backlogPlanTool.annotations.readOnlyHint, true);
     const processJobsTool = toolList.tools.find((tool) => tool.name === 'process_jobs');
     assert.ok(processJobsTool.inputSchema.properties.leaseMs);

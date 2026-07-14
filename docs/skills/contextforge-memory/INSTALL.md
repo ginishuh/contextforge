@@ -57,8 +57,8 @@ After installing or updating the skill:
 2. Start a fresh agent session.
 3. Ask the agent to use `$contextforge-memory` or invoke the skill by name.
 4. Confirm the skill guidance covers bootstrap, storage authority, session IDs,
-   distillation, checkpoint candidates, closeout promotion, corrections, and
-   embeddings.
+   distillation, checkpoint candidates, scope backlog review, candidate
+   lifecycle workers, closeout promotion, corrections, and embeddings.
 
 If `contextforge-memory` is not available in a session, the runtime skill
 installation is incomplete. Install or update the skill before doing
