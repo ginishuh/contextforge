@@ -23,7 +23,8 @@ async function assertPrivateAuthorityFile({ home, unitName, authorityName, remot
   const authorityPath = path.join(unitDir, authorityName);
   const unit = await fs.readFile(path.join(unitDir, unitName), 'utf8');
   const authority = await fs.readFile(authorityPath, 'utf8');
-  assert.ok(unit.indexOf('EnvironmentFile=-') < unit.indexOf(`EnvironmentFile=${authorityPath}`));
+  const authorityUnitPath = `%h/.config/systemd/user/${authorityName}`;
+  assert.ok(unit.indexOf('EnvironmentFile=-') < unit.indexOf(`EnvironmentFile=${authorityUnitPath}`));
   assert.doesNotMatch(unit, /CONTEXTFORGE_REMOTE_URL=/);
   assert.doesNotMatch(unit, new RegExp(remoteUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.equal(authority, `CONTEXTFORGE_STORAGE_MODE=remote\nCONTEXTFORGE_REMOTE_URL='${remoteUrl}'\n`);

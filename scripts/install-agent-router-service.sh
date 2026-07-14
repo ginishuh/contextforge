@@ -104,6 +104,7 @@ unit_dir="$HOME/.config/systemd/user"
 unit_name="contextforge-agent-router-${safe_name}.service"
 unit_path="$unit_dir/$unit_name"
 authority_env_path="$unit_dir/contextforge-agent-router-${safe_name}.authority.env"
+authority_env_unit_path="%h/.config/systemd/user/contextforge-agent-router-${safe_name}.authority.env"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cli_path="${repo_root}/src/cli.js"
 
@@ -138,7 +139,7 @@ After=network-online.target
 Type=simple
 WorkingDirectory=$repo_root
 EnvironmentFile=-$token_env_file
-EnvironmentFile=$authority_env_path
+EnvironmentFile=$authority_env_unit_path
 Environment=CONTEXTFORGE_WATCH_STATE_DIR=%h/.local/state/contextforge/watch
 ExecStart=$(systemd_quote "$node_bin") $(systemd_quote "$cli_path") ingestAgentRoutedSessions${adapter_args} --codexSessionsDir $(systemd_quote "$codex_sessions_dir") --claudeCodeProjectsDir $(systemd_quote "$claude_code_projects_dir") --opencodeDb $(systemd_quote "$opencode_db") --grokSessionsDir $(systemd_quote "$grok_sessions_dir") --cursorProjectsDir $(systemd_quote "$cursor_projects_dir") --repoRegistry $(systemd_quote "$repo_registry") --sinceMinutes $(systemd_quote "$since_minutes") --distill $(systemd_quote "$distill") --watch --intervalMs $(systemd_quote "$interval_ms")
 Restart=always

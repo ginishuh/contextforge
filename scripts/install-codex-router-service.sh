@@ -71,6 +71,7 @@ unit_dir="$HOME/.config/systemd/user"
 unit_name="contextforge-codex-router-${safe_name}.service"
 unit_path="$unit_dir/$unit_name"
 authority_env_path="$unit_dir/contextforge-codex-router-${safe_name}.authority.env"
+authority_env_unit_path="%h/.config/systemd/user/contextforge-codex-router-${safe_name}.authority.env"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 repo_count="$("$node_bin" --input-type=module -e 'const registry = JSON.parse(await import("node:fs/promises").then((fs) => fs.readFile(process.argv[1], "utf8"))); const repos = Array.isArray(registry) ? registry : registry.repos; if (!Array.isArray(repos)) throw new Error("Repo registry must be a JSON array or an object with a repos array."); console.log(repos.filter((repo) => repo && repo.enabled !== false && (!repo.adapters || String(repo.adapters).split(",").map((item) => item.trim()).includes("codex"))).length);' "$repo_registry")"
@@ -99,7 +100,7 @@ After=network-online.target
 Type=simple
 WorkingDirectory=${repo_root}
 EnvironmentFile=-${token_env_file}
-EnvironmentFile=${authority_env_path}
+EnvironmentFile=${authority_env_unit_path}
 Environment=CONTEXTFORGE_WATCH_STATE_DIR=%h/.local/state/contextforge/watch
 ExecStart=${node_bin} ${repo_root}/src/cli.js ingestCodexRoutedSessions --sessionsDir ${sessions_dir} --repoRegistry ${repo_registry} --sinceMinutes ${since_minutes} --distill ${distill} --watch --intervalMs ${interval_ms}
 Restart=always

@@ -81,6 +81,7 @@ unit_dir="$HOME/.config/systemd/user"
 unit_name="contextforge-codex-watch-${safe_name}.service"
 unit_path="$unit_dir/$unit_name"
 authority_env_path="$unit_dir/contextforge-codex-watch-${safe_name}.authority.env"
+authority_env_unit_path="%h/.config/systemd/user/contextforge-codex-watch-${safe_name}.authority.env"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 resolved_scope_key="$scope_key"
 
@@ -118,7 +119,7 @@ After=network-online.target
 Type=simple
 WorkingDirectory=${repo_root}
 EnvironmentFile=-${token_env_file}
-EnvironmentFile=${authority_env_path}
+EnvironmentFile=${authority_env_unit_path}
 Environment=CONTEXTFORGE_WATCH_STATE_DIR=%h/.local/state/contextforge/watch
 ExecStart=${node_bin} ${repo_root}/src/cli.js ingestCodexSessions --sessionsDir ${sessions_dir} --scope repo --repoPath ${repo_path} --scopeKey ${resolved_scope_key} --sinceMinutes ${since_minutes} --distill ${distill} --watch --intervalMs ${interval_ms}
 Restart=always
