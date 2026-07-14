@@ -59,10 +59,25 @@ safe_name="$(printf '%s' "$name" | tr -c 'A-Za-z0-9_.@-' '-')"
 unit_dir="$HOME/.config/systemd/user"
 unit_name="contextforge-candidate-lifecycle-${safe_name}.service"
 unit_path="$unit_dir/$unit_name"
+authority_env_path="$unit_dir/contextforge-candidate-lifecycle-${safe_name}.authority.env"
+authority_env_unit_path="%h/.config/systemd/user/contextforge-candidate-lifecycle-${safe_name}.authority.env"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cli_path="${repo_root}/src/cli.js"
 
 mkdir -p "$unit_dir"
+
+if [[ "$remote_url" == *$'\n'* || "$remote_url" == *$'\r'* || "$remote_url" == *"'"* ]]; then
+  echo "Remote URL cannot contain a line break or single quote." >&2
+  exit 2
+fi
+previous_umask="$(umask)"
+umask 077
+cat >"$authority_env_path" <<EOF
+CONTEXTFORGE_STORAGE_MODE=remote
+CONTEXTFORGE_REMOTE_URL='$remote_url'
+EOF
+umask "$previous_umask"
+chmod 600 "$authority_env_path"
 
 cat >"$unit_path" <<EOF
 [Unit]
@@ -73,8 +88,7 @@ After=network-online.target
 Type=simple
 WorkingDirectory=$repo_root
 EnvironmentFile=-$token_env_file
-Environment=CONTEXTFORGE_STORAGE_MODE=remote
-Environment=$(systemd_quote "CONTEXTFORGE_REMOTE_URL=$remote_url")
+EnvironmentFile=$authority_env_unit_path
 ExecStart=$(systemd_quote "$node_bin") $(systemd_quote "$cli_path") candidateLifecycleWorker --repoRegistry $(systemd_quote "$repo_registry") --watch --dryRun $(systemd_quote "$dry_run") --intervalMs $(systemd_quote "$interval_ms") --auditLimit $(systemd_quote "$audit_limit") --auditBatchLimit $(systemd_quote "$audit_batch_limit") --wakeLimit $(systemd_quote "$wake_limit") --staleLimit $(systemd_quote "$stale_limit") --jobLimit $(systemd_quote "$job_limit") --leaseMs $(systemd_quote "$lease_ms") --workerId $(systemd_quote "candidate-lifecycle-$safe_name")
 Restart=always
 RestartSec=10

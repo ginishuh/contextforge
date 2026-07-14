@@ -18,8 +18,9 @@
   bounded stale SLA transitions, and processes audit jobs within each canonical
   scope. The CLI defaults to dry-run, while the systemd installer opts into
   mutation explicitly. Candidate lifecycle shutdown cooperates at scope-stage
-  boundaries, and every packaged remote watcher now forces remote mode after
-  loading its token environment file.
+  boundaries, and every packaged remote watcher now loads a private generated
+  authority environment file after its token file to force remote mode without
+  exposing the remote URL in the process command line.
 
 ## 0.5.1 - 2026-07-10
 

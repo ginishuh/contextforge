@@ -70,11 +70,26 @@ safe_name="$(printf '%s' "$name" | tr -c 'A-Za-z0-9_.@-' '-')"
 unit_dir="$HOME/.config/systemd/user"
 unit_name="contextforge-claude-code-router-${safe_name}.service"
 unit_path="$unit_dir/$unit_name"
+authority_env_path="$unit_dir/contextforge-claude-code-router-${safe_name}.authority.env"
+authority_env_unit_path="%h/.config/systemd/user/contextforge-claude-code-router-${safe_name}.authority.env"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 repo_count="$("$node_bin" --input-type=module -e 'const registry = JSON.parse(await import("node:fs/promises").then((fs) => fs.readFile(process.argv[1], "utf8"))); const repos = Array.isArray(registry) ? registry : registry.repos; if (!Array.isArray(repos)) throw new Error("Repo registry must be a JSON array or an object with a repos array."); console.log(repos.filter((repo) => repo && repo.enabled !== false && (!repo.adapters || String(repo.adapters).split(",").map((item) => item.trim()).includes("claude_code"))).length);' "$repo_registry")"
 
 mkdir -p "$unit_dir"
+
+if [[ "$remote_url" == *$'\n'* || "$remote_url" == *$'\r'* || "$remote_url" == *"'"* ]]; then
+  echo "Remote URL cannot contain a line break or single quote." >&2
+  exit 2
+fi
+previous_umask="$(umask)"
+umask 077
+cat >"$authority_env_path" <<EOF
+CONTEXTFORGE_STORAGE_MODE=remote
+CONTEXTFORGE_REMOTE_URL='$remote_url'
+EOF
+umask "$previous_umask"
+chmod 600 "$authority_env_path"
 
 cat >"$unit_path" <<EOF
 [Unit]
@@ -85,8 +100,7 @@ After=network-online.target
 Type=simple
 WorkingDirectory=${repo_root}
 EnvironmentFile=-${token_env_file}
-Environment=CONTEXTFORGE_STORAGE_MODE=remote
-Environment=CONTEXTFORGE_REMOTE_URL=${remote_url}
+EnvironmentFile=${authority_env_unit_path}
 Environment=CONTEXTFORGE_WATCH_STATE_DIR=%h/.local/state/contextforge/watch
 ExecStart=${node_bin} ${repo_root}/src/cli.js ingestClaudeCodeRoutedSessions --projectsDir ${projects_dir} --repoRegistry ${repo_registry} --sinceMinutes ${since_minutes} --distill ${distill} --watch --intervalMs ${interval_ms}
 Restart=always
