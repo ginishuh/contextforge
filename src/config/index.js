@@ -362,6 +362,54 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
         90 * 24 * 60 * 60 * 1000,
       ),
     },
+    candidateSla: {
+      version: 'candidate-sla.v1',
+      unauditedMs: parsePositiveInteger(
+        env.CONTEXTFORGE_CANDIDATE_SLA_UNAUDITED_MS,
+        'CONTEXTFORGE_CANDIDATE_SLA_UNAUDITED_MS',
+        30 * 24 * 60 * 60 * 1000,
+      ),
+      triagedNoAuditMs: parsePositiveInteger(
+        env.CONTEXTFORGE_CANDIDATE_SLA_TRIAGED_NO_AUDIT_MS,
+        'CONTEXTFORGE_CANDIDATE_SLA_TRIAGED_NO_AUDIT_MS',
+        14 * 24 * 60 * 60 * 1000,
+      ),
+      failedRetryableMs: parsePositiveInteger(
+        env.CONTEXTFORGE_CANDIDATE_SLA_FAILED_RETRYABLE_MS,
+        'CONTEXTFORGE_CANDIDATE_SLA_FAILED_RETRYABLE_MS',
+        30 * 24 * 60 * 60 * 1000,
+      ),
+      failedTerminalMs: parsePositiveInteger(
+        env.CONTEXTFORGE_CANDIDATE_SLA_FAILED_TERMINAL_MS,
+        'CONTEXTFORGE_CANDIDATE_SLA_FAILED_TERMINAL_MS',
+        30 * 24 * 60 * 60 * 1000,
+      ),
+      legacyUnknownMs: parsePositiveInteger(
+        env.CONTEXTFORGE_CANDIDATE_SLA_LEGACY_UNKNOWN_MS,
+        'CONTEXTFORGE_CANDIDATE_SLA_LEGACY_UNKNOWN_MS',
+        30 * 24 * 60 * 60 * 1000,
+      ),
+      approvedAwaitingPromotionMs: parsePositiveInteger(
+        env.CONTEXTFORGE_CANDIDATE_SLA_APPROVED_MS,
+        'CONTEXTFORGE_CANDIDATE_SLA_APPROVED_MS',
+        90 * 24 * 60 * 60 * 1000,
+      ),
+      needsReviewMs: parsePositiveInteger(
+        env.CONTEXTFORGE_CANDIDATE_SLA_NEEDS_REVIEW_MS,
+        'CONTEXTFORGE_CANDIDATE_SLA_NEEDS_REVIEW_MS',
+        30 * 24 * 60 * 60 * 1000,
+      ),
+      rejectRecommendedMs: parsePositiveInteger(
+        env.CONTEXTFORGE_CANDIDATE_SLA_REJECT_RECOMMENDED_MS,
+        'CONTEXTFORGE_CANDIDATE_SLA_REJECT_RECOMMENDED_MS',
+        14 * 24 * 60 * 60 * 1000,
+      ),
+      auditedUnknownMs: parsePositiveInteger(
+        env.CONTEXTFORGE_CANDIDATE_SLA_AUDITED_UNKNOWN_MS,
+        'CONTEXTFORGE_CANDIDATE_SLA_AUDITED_UNKNOWN_MS',
+        30 * 24 * 60 * 60 * 1000,
+      ),
+    },
     autoPromote: {
       enabled: parseBoolean(env.CONTEXTFORGE_AUTO_PROMOTE_ENABLED),
       audit: {

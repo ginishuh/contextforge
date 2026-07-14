@@ -364,6 +364,11 @@ async function main() {
       app.listDueCandidateWakeups(preserveCoreLimitDefault(coreOptions, rawOptions)),
     processDueCandidateWakeups: (app, coreOptions, rawOptions) =>
       app.processDueCandidateWakeups(preserveCoreLimitDefault(coreOptions, rawOptions)),
+    listDueCandidateStaleTransitions: (app, coreOptions, rawOptions) =>
+      app.listDueCandidateStaleTransitions(preserveCoreLimitDefault(coreOptions, rawOptions)),
+    processDueCandidateStaleTransitions: (app, coreOptions, rawOptions) =>
+      app.processDueCandidateStaleTransitions(preserveCoreLimitDefault(coreOptions, rawOptions)),
+    reopenStaleMemoryCandidate: (app, coreOptions) => app.reopenStaleMemoryCandidate(coreOptions),
     listDueConsolidations: (app, coreOptions) => app.listDueConsolidations(coreOptions),
     processConsolidations: (app, coreOptions) => app.processConsolidations(coreOptions),
     remember: (app, coreOptions) => app.remember(coreOptions),

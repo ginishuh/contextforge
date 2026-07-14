@@ -68,9 +68,11 @@ const AGENT_CORE_TOOLS = Object.freeze([
 const REVIEW_EXTRA_TOOLS = Object.freeze([
   'submit_audit_job',
   'list_due_candidate_audits',
+  'list_due_candidate_stale_transitions',
   'list_due_candidate_wakeups',
   'snooze_memory_candidate',
   'wake_memory_candidate',
+  'reopen_stale_memory_candidate',
   'list_memory_events',
   'list_preference_occurrences',
   'list_memory_update_candidates',
@@ -923,6 +925,32 @@ export function createContextForgeMcpServer({
     async (args) => jsonResult(await app.processDueCandidateWakeups(args)),
   );
 
+  registerTool('list_due_candidate_stale_transitions', {
+    title: 'List Due Candidate Stale Transitions',
+    description:
+      'List a bounded provider-free inventory of pending candidates that exceeded their queue-specific review SLA. Active audit jobs and snoozed candidates are excluded.',
+    inputSchema: { ...scopedSchema, limit: z.number().int().positive().max(500).optional(), order: z.enum(['asc', 'desc']).optional() },
+    annotations: { title: 'List Due Candidate Stale Transitions', idempotentHint: true },
+  }, async (args) => jsonResult(await app.listDueCandidateStaleTransitions(args)));
+
+  registerTool('process_due_candidate_stale_transitions', {
+    title: 'Process Due Candidate Stale Transitions',
+    description:
+      'Move one bounded explicit canonical-scope batch of overdue pending candidates to reversible stale disposition with queue/anchor CAS fencing and per-candidate results.',
+    inputSchema: {
+      ...scopedSchema, limit: z.number().int().positive().max(500).optional(), order: z.enum(['asc', 'desc']).optional(),
+      dryRun: z.boolean().optional(), actor: z.string().optional(), reason: z.string().optional(), requestId: z.string().optional(),
+    },
+    annotations: { title: 'Process Due Candidate Stale Transitions', idempotentHint: true },
+  }, async (args) => jsonResult(await app.processDueCandidateStaleTransitions(args)));
+
+  registerTool('reopen_stale_memory_candidate', {
+    title: 'Reopen Stale Memory Candidate',
+    description: 'Return one reversible stale candidate to its prior pending review queues while preserving audit metadata and lifecycle history.',
+    inputSchema: { ...scopedSchema, candidateId: z.string(), reason: z.string(), actor: z.string(), requestId: z.string().optional() },
+    annotations: { title: 'Reopen Stale Memory Candidate', idempotentHint: true },
+  }, async (args) => jsonResult(await app.reopenStaleMemoryCandidate(args)));
+
   const consolidationSchema = {
     ...scopedSchema,
     sessionId: z.string().optional(),
@@ -1763,6 +1791,7 @@ export function createContextForgeMcpServer({
     },
     async (args) => jsonResult(await app.wakeMemoryCandidate(args)),
   );
+
 
   registerTool(
     'correct_memory',
