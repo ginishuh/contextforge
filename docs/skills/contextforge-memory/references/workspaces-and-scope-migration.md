@@ -1,8 +1,7 @@
 # Workspaces, Scope Migration, And Storage Authority
 
 Read this reference when configuring multi-repo retrieval, diagnosing storage
-authority, renaming or transferring a repository scope, or using the
-agent-neutral lifecycle CLI.
+authority, or renaming or transferring a repository scope.
 
 ## Contents
 
