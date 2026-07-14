@@ -15,6 +15,10 @@ description: >-
 
 Use ContextForge as a scoped memory and distillation sidecar for coding agents. It is not a replacement for live verification: verify mutable repo/GitHub/CI/runtime facts from their source before acting.
 
+Linked files under `references/` are on-demand guidance. If a linked file is
+unavailable, the runtime skill installation is incomplete; reinstall it before
+performing that operation rather than improvising omitted safety rules.
+
 ## Mental Model
 
 ContextForge has layered state:

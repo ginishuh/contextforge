@@ -13,7 +13,8 @@
   description so runtime installations do not drift from the skill body. The
   skill now uses progressive disclosure for workspace migration, candidate
   lifecycle operations, and embedding maintenance, with regression budgets of
-  340 lines and 18 KB for the always-loaded `SKILL.md` body.
+  340 lines and 18 KB for the always-loaded `SKILL.md` body, 120 lines and 6 KB
+  per on-demand reference, and 14 KB across all references.
 - Added operation-worker freshness to `/readyz` with a bounded startup grace
   period and an explicit `operation_worker_stale` reason. Operational metrics
   now include candidate throughput/latency, audit decision and routing

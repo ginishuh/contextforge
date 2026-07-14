@@ -65,11 +65,20 @@ test('packaged memory skill uses bounded progressive disclosure without losing l
     'docs/skills/contextforge-memory/references/workspaces-and-scope-migration.md',
     'utf8',
   );
+  const references = [candidateLifecycle, embeddings, workspaces];
   const metadata = await fs.readFile('docs/skills/contextforge-memory/agents/openai.yaml', 'utf8');
   const shortDescription = 'Scoped memory, distillation, and candidate review';
 
   assert.ok(skill.split('\n').length <= 340, 'SKILL.md exceeds the 340-line prompt budget');
   assert.ok(Buffer.byteLength(skill) <= 18_000, 'SKILL.md exceeds the 18 KB prompt budget');
+  for (const reference of references) {
+    assert.ok(reference.split('\n').length <= 120, 'skill reference exceeds the 120-line budget');
+    assert.ok(Buffer.byteLength(reference) <= 6_000, 'skill reference exceeds the 6 KB budget');
+  }
+  assert.ok(
+    references.reduce((total, reference) => total + Buffer.byteLength(reference), 0) <= 14_000,
+    'skill references exceed the combined 14 KB budget',
+  );
   for (const reference of [
     'references/workspaces-and-scope-migration.md',
     'references/candidate-lifecycle.md',
@@ -78,7 +87,9 @@ test('packaged memory skill uses bounded progressive disclosure without losing l
     assert.ok(skill.includes(reference), `missing progressive-disclosure link: ${reference}`);
   }
   for (const contract of [
+    'If a linked file is\nunavailable, the runtime skill installation is incomplete',
     '`bootstrap_context` does not create a session.',
+    '`connection.accessMode`',
     'Do not create a fresh `cf_...` session at closeout',
     'Never broaden an empty closeout',
     'It never scans the whole scope backlog.',
