@@ -5,6 +5,7 @@ import { normalizeObjectSchema } from '@modelcontextprotocol/sdk/server/zod-comp
 import { toJsonSchemaCompat } from '@modelcontextprotocol/sdk/server/zod-json-schema-compat.js';
 import { z } from 'zod';
 import { candidateBacklogAuditPlanToolConfig } from './memory/candidate_backlog_audit_plan_mcp.js';
+import { auditedCandidateRoutingMcpToolConfig } from './memory/audited_candidate_routing.js';
 import { createContextForge } from './core.js';
 import { MCP_OPERATION_TOOL_NAMES, operationByMcpTool } from './operations/registry.js';
 import { CONTEXTFORGE_VERSION } from './version.js';
@@ -68,7 +69,7 @@ const AGENT_CORE_TOOLS = Object.freeze([
 
 const REVIEW_EXTRA_TOOLS = Object.freeze([
   'submit_audit_job',
-  'plan_memory_candidate_backlog_audit',
+  'plan_memory_candidate_backlog_audit', 'route_audited_memory_candidates',
   'list_due_candidate_audits',
   'list_due_candidate_stale_transitions',
   'list_due_candidate_wakeups',
@@ -1448,6 +1449,7 @@ export function createContextForgeMcpServer({
   );
   registerTool('plan_memory_candidate_backlog_audit', candidateBacklogAuditPlanToolConfig(z, scopedSchema),
     async (args) => jsonResult(await app.planMemoryCandidateBacklogAudit(args)));
+  registerTool('route_audited_memory_candidates', auditedCandidateRoutingMcpToolConfig(z, scopedSchema), async (args) => jsonResult(await app.routeAuditedMemoryCandidates(args)));
   registerTool(
     'list_preference_occurrences',
     {
@@ -1526,7 +1528,7 @@ export function createContextForgeMcpServer({
         tags: optionalTags,
         importance: z.number().int().optional(),
         reason: z.string().optional(),
-        allowStatusOverride: z.boolean().optional(),
+        allowStatusOverride: z.boolean().optional(), allowTargetRevisionOverride: z.boolean().optional(),
       },
       annotations: {
         title: 'Apply Memory Update Candidate',

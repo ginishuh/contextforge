@@ -232,11 +232,16 @@
               <button id="clearCandidateSelection">선택 해제</button>
               <button id="planCandidateAudit">감사 비용 dry-run</button>
               <button id="auditSelectedCandidates">선택 후보 감사 제출</button>
+              <button id="routeSelectedCandidates">승인 후보 중복·업데이트 라우팅</button>
               <button class="danger" id="rejectSelectedCandidates">선택 후보 거절</button>
               <button id="nextCandidatePage" hidden>다음 페이지</button>
             </div>
             <pre id="candidateAuditPlan"></pre>
             <div id="candidates" class="list"></div>
+            <h3>메모리 업데이트 검토</h3>
+            <p class="muted">refinement/supersedes/conflict는 새 메모리를 만들지 않고 이 검토 큐로 이동합니다.</p>
+            <button id="loadMemoryUpdates">업데이트 검토 큐 불러오기</button>
+            <div id="memoryUpdates" class="list"></div>
           </section>
         </div>
       </section>

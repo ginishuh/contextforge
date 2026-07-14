@@ -12,6 +12,7 @@ import {
   markMemoryCandidateReviewed as markCandidateReviewed,
   markMemoryCandidateAudited as markCandidateAudited,
   markMemoryCandidateTriagedNoAudit as markCandidateTriagedNoAudit,
+  markMemoryCandidatePromotionRouted as markCandidatePromotionRouted,
   markOperationJobCandidateSkipped as markAuditJobCandidateSkipped,
   registerOperationJobCandidates as registerAuditJobCandidates,
   settleOperationJobCandidates as settleAuditJobCandidates,
@@ -3612,6 +3613,7 @@ export class ContextForgeStore {
       action,
       targetMemoryId,
       targetMemoryKey,
+      sourceCandidateId,
       sourceCheckpointId,
       proposedKey,
       correction,
@@ -3622,7 +3624,8 @@ export class ContextForgeStore {
       this.db
         .prepare(`
           UPDATE memory_update_candidates
-          SET proposed_key = ?,
+          SET target_memory_id = ?, target_memory_key = ?,
+              proposed_key = ?,
               proposed_content = ?,
               proposed_category = ?,
               proposed_tags_json = ?,
@@ -3638,6 +3641,7 @@ export class ContextForgeStore {
           WHERE id = ?
         `)
         .run(
+          targetMemoryId, targetMemoryKey,
           proposedKey,
           proposedContent,
           proposedCategory,
@@ -3690,19 +3694,17 @@ export class ContextForgeStore {
   }
 
   findPendingMemoryUpdateCandidate({
-    scopeType,
-    scopeKey,
-    action,
+    scopeType, scopeKey, action,
     targetMemoryId = null,
     targetMemoryKey = null,
-    sourceCheckpointId = null,
-    proposedKey = null,
-    correction = null,
+    sourceCandidateId = null, sourceCheckpointId = null,
+    proposedKey = null, correction = null,
   }) {
-    const conditions = ['scope_type = ?', 'scope_key = ?', "status = 'pending'", 'action = ?'];
-    const values = [scopeType, scopeKey, action];
+    const conditions = ['scope_type = ?', 'scope_key = ?', "status = 'pending'", 'action = ?']; const values = [scopeType, scopeKey, action];
     // Dedup uses the strongest available identity. For the same target, the latest correction wins.
-    if (targetMemoryId) {
+    if (sourceCandidateId) {
+      conditions.push('source_candidate_id = ?'); values.push(sourceCandidateId);
+    } else if (targetMemoryId) {
       conditions.push('target_memory_id = ?');
       values.push(targetMemoryId);
     } else if (targetMemoryKey) {
@@ -3720,17 +3722,15 @@ export class ContextForgeStore {
     } else {
       return null;
     }
-    const row = this.db
-      .prepare(`
+    const row = this.db.prepare(`
         SELECT * FROM memory_update_candidates
         WHERE ${conditions.join(' AND ')}
         ORDER BY created_at DESC, id DESC
         LIMIT 1
-      `)
-      .get(...values);
+      `).get(...values);
     return hydrateMemoryUpdateCandidate(row);
   }
-
+  markMemoryCandidatePromotionRouted(options) { return markCandidatePromotionRouted(this, options); }
   listMemoryUpdateCandidates({ scopeType, scopeKey, status = null, action = null, limit = null, after = null }) {
     const conditions = ['scope_type = ?', 'scope_key = ?'];
     const values = [scopeType, scopeKey];

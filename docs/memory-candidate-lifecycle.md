@@ -155,6 +155,29 @@ the executable audit batch remains bounded at 10 calls. Exact candidate
 grouping selects one stable representative; the other candidates remain
 unchanged until a later reviewed disposition step.
 
+## Audited durable-write routing
+
+An approved audit does not imply that a new durable row is safe. The audit
+commit immediately repeats same-scope durable-memory assessment. `new` remains
+eligible for reviewed promotion, `duplicate` is labeled
+`do_not_create_duplicate_memory`, and `refinement`, `supersedes`, or `conflict`
+creates an idempotent `memory_update_candidate` for human review. This routing
+does not promote or edit durable memory.
+
+`routeAuditedMemoryCandidates` applies the same provider-free contract to an
+existing approved backlog. It defaults to `dryRun=true`, accepts at most 100
+explicit ids or the oldest bounded approved batch, and refuses candidate
+revisions that no longer match the approved audit hash. Separate audited source
+candidates never overwrite each other's pending update proposals, even when
+they target the same memory.
+
+Applying an update candidate marks its linked source candidate `promoted` and
+records the resulting durable memory id. Rejecting the update marks the source
+candidate `rejected`; skipping it moves the source candidate to reversible
+`stale`. Apply also fences the target memory id; a concurrently corrected target
+must be re-routed or explicitly overridden with a reason. The audit attempt and
+routing metadata remain available in every case.
+
 ## Immutable audit provenance
 
 Every provider result is appended to `memory_candidate_audit_attempts`. The

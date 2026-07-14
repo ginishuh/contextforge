@@ -15,6 +15,7 @@ import { candidateBacklogAuditPlanMethods } from './memory/candidate_backlog_aud
 import { candidateDispositionMethods } from './memory/candidate_dispositions.js';
 import { memoryCandidateRevisionHash } from './memory/candidate_revision.js';
 import { candidateStaleSlaMethods } from './memory/candidate_stale_sla.js';
+import { assertMemoryUpdateTarget, buildAuditedPromotionProposal, durableMemoryRevisionHash, finalizeRoutedSourceCandidate, persistApprovedAuditRouting, promotionRoutingResult, routeAuditedMemoryCandidates } from './memory/audited_candidate_routing.js';
 import { dueDistillSessionSummary, listIdleCandidateAudits, processIdleCandidateAudits } from './memory/idle_candidate_audits.js';
 import { createRemoteContextForge } from './remote/client.js';
 import { searchMemories } from './retrieval/search.js';
@@ -1719,6 +1720,7 @@ function memorySimilaritySummary(memory, { key, content, candidate = {} }, retri
   const overlap = tokenOverlapScore(candidateText, memoryText);
   return {
     memoryId: memory.id,
+    revisionHash: durableMemoryRevisionHash(memory),
     key: memory.key,
     category: memory.category,
     content: truncateText(memory.content, 280),
@@ -2375,6 +2377,7 @@ function updateCandidateDraftForPromotionAssessment(scope, indexedCandidate, ass
         category: target.category,
         content: target.content,
         overlap: target.overlap,
+        revisionHash: target.revisionHash,
         classification: assessment.classification,
       },
       indexedCandidateBasisResult(indexedCandidate),
@@ -2385,7 +2388,6 @@ function updateCandidateDraftForPromotionAssessment(scope, indexedCandidate, ass
 function persistUpdateCandidateDraft(store, draft) {
   return draft ? store.createMemoryUpdateCandidate(draft) : null;
 }
-
 function candidateWarningReason(warnings) {
   if (!warnings.length) return null;
   return warnings.map((warning) => warning.code).join(', ');
@@ -2631,9 +2633,8 @@ function auditCandidateWarnings(store, scope, indexedCandidate, policy) {
   }
   return warnings;
 }
-
 const AUDIT_CANDIDATE_SKIP_WARNING_CODES = new Set([
-  ...AUTO_SKIP_WARNING_CODES,
+  ...[...AUTO_SKIP_WARNING_CODES].filter((code) => !['existing_key_conflict', 'candidate_refinement_requires_update', 'candidate_supersedes_requires_update', 'candidate_conflict_requires_update'].includes(code)),
   'audit_disallowed_category',
   'audit_low_confidence',
   'audit_low_stability',
@@ -2641,7 +2642,6 @@ const AUDIT_CANDIDATE_SKIP_WARNING_CODES = new Set([
   'auto_one_off_event',
   'auto_transient_category',
 ]);
-
 function autoPromotionWouldPromote(indexedCandidate, warnings, rank) {
   const proposal = promotionProposal(indexedCandidate, warnings, rank);
   return {
@@ -2652,15 +2652,10 @@ function autoPromotionWouldPromote(indexedCandidate, warnings, rank) {
   };
 }
 
-function auditedPromotionProposal(indexedCandidate, warnings, audit, rank, { auditEnabled = true } = {}) {
-  const proposal = promotionProposal(indexedCandidate, warnings, rank);
-  const approved = auditEnabled && audit?.approved === true;
-  return {
-    ...proposal,
-    audit,
-    auditReason: audit?.reason || null,
-    recommendedAction: approved ? 'promote' : 'review',
-  };
+function auditedPromotionProposal(indexedCandidate, warnings, audit, rank, options = {}) {
+  return buildAuditedPromotionProposal({
+    indexedCandidate, warnings, audit, rank, ...options, makeProposal: promotionProposal,
+  });
 }
 
 function hasRealAuditProvider(audit) {
@@ -4001,7 +3996,7 @@ export function createContextForge(options = {}) {
     ...candidateBacklogAuditPlanMethods({
       config, useStore, getEffectiveRuntime, getAutoPromoteAuditor, normalizeAllowedCategories,
       auditCategories: AUDIT_CANDIDATE_CATEGORIES, auditCandidateWarnings, scorePromotionCandidate,
-      auditSkipWarnings: AUDIT_CANDIDATE_SKIP_WARNING_CODES,
+      auditSkipWarnings: new Set([...AUDIT_CANDIDATE_SKIP_WARNING_CODES, 'existing_key_conflict', 'candidate_refinement_requires_update', 'candidate_supersedes_requires_update', 'candidate_conflict_requires_update']),
     }),
 
     close() {
@@ -5429,7 +5424,14 @@ export function createContextForge(options = {}) {
       const scope = normalizeScopeOptions(options, config);
       return useStore((store) => buildMemoryCandidateBacklog({ store, scope, options }));
     },
-
+    routeAuditedMemoryCandidates(options = {}) {
+      const scope = normalizeScopeOptions(options, config);
+      return useStore((store) => routeAuditedMemoryCandidates({
+        store, scope, options, positiveNumber, truthyOption, revisionHash: memoryCandidateRevisionHash,
+        assess: promotionAssessmentForIndexedCandidate, buildUpdateDraft: updateCandidateDraftForPromotionAssessment,
+        formatUpdateCandidate: memoryUpdateCandidateProposal,
+      }));
+    },
     listMemoryCandidateAuditAttempts(options = {}) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.candidateId, 'candidateId');
@@ -5476,29 +5478,38 @@ export function createContextForge(options = {}) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.candidateId, 'candidateId');
       requireOption(options.reason, 'reason');
-      return useStore((store) =>
-        store.markMemoryUpdateCandidateReviewed({
+      return useStore((store) => store.withTransaction(() => {
+        const reviewed = store.markMemoryUpdateCandidateReviewed({
           ...scope,
           candidateId: options.candidateId,
           status: 'rejected',
           reason: options.reason,
           allowStatusOverride: truthyOption(options.allowStatusOverride),
-        }),
-      );
+        });
+        const sourceCandidate = finalizeRoutedSourceCandidate(store, scope, reviewed, {
+          outcome: 'rejected', reason: options.reason,
+        });
+        return { ...reviewed, sourceCandidate };
+      }));
     },
 
     skipMemoryUpdateCandidate(options) {
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.candidateId, 'candidateId');
-      return useStore((store) =>
-        store.markMemoryUpdateCandidateReviewed({
+      return useStore((store) => store.withTransaction(() => {
+        const reason = options.reason || 'Skipped by reviewer.';
+        const reviewed = store.markMemoryUpdateCandidateReviewed({
           ...scope,
           candidateId: options.candidateId,
           status: 'skipped',
-          reason: options.reason || 'Skipped by reviewer.',
+          reason,
           allowStatusOverride: truthyOption(options.allowStatusOverride),
-        }),
-      );
+        });
+        const sourceCandidate = finalizeRoutedSourceCandidate(store, scope, reviewed, {
+          outcome: 'skipped', reason,
+        });
+        return { ...reviewed, sourceCandidate };
+      }));
     },
 
     auditMemoryDuplicates(options = {}) {
@@ -5654,6 +5665,7 @@ export function createContextForge(options = {}) {
             if (!previous) {
               throw new Error(`Memory not found: ${key}`);
             }
+            assertMemoryUpdateTarget(candidate, previous, options);
             memory = store.rememberMemory({
               ...scope,
               key,
@@ -5739,10 +5751,14 @@ export function createContextForge(options = {}) {
               ...reviewMetadata,
             },
           });
+          const sourceCandidate = finalizeRoutedSourceCandidate(store, scope, reviewed, {
+            outcome: 'applied', reason, memory,
+          });
           return {
             kind: 'memory_update_candidate_apply_result',
             candidate: reviewed,
             memory,
+            sourceCandidate,
           };
         }),
       );
@@ -6259,7 +6275,11 @@ export function createContextForge(options = {}) {
                 },
               });
             });
-            audited.push({ ...item, candidate: auditedCandidate, audit });
+            const routed = persistApprovedAuditRouting({
+              store, scope, auditedCandidate, audit, assertLease: assertJobLease, assess: promotionAssessmentForIndexedCandidate,
+              buildUpdateDraft: updateCandidateDraftForPromotionAssessment, errorSummary,
+            });
+            audited.push({ ...item, candidate: routed.candidate, audit, promotionRouting: routed.routing, promotionRoutingError: routed.error });
           } catch (error) {
             if (error?.code === 'CONTEXTFORGE_JOB_LEASE_LOST') throw error;
             rethrowExternalProviderTestError(error);
@@ -6344,6 +6364,8 @@ export function createContextForge(options = {}) {
             ...audited.map((item, index) =>
               auditedPromotionProposal(item.candidate, item.warnings, item.audit, storedAudited.length + index + 1, {
                 auditEnabled: Boolean(auditor),
+                promotionRouting: promotionRoutingResult(item.promotionRouting, memoryUpdateCandidateProposal),
+                promotionRoutingError: item.promotionRoutingError,
               }),
             ),
           ].slice(0, limit),

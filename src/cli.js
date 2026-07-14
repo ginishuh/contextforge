@@ -402,6 +402,8 @@ async function main() {
       app.listMemoryCandidates(preserveCoreLimitDefault(coreOptions, rawOptions)),
     planMemoryCandidateBacklogAudit: (app, coreOptions, rawOptions) =>
       app.planMemoryCandidateBacklogAudit(preserveCoreLimitDefault(coreOptions, rawOptions)),
+    routeAuditedMemoryCandidates: (app, coreOptions, rawOptions) =>
+      app.routeAuditedMemoryCandidates(preserveCoreLimitDefault(coreOptions, rawOptions)),
     listPreferenceOccurrences: (app, coreOptions, rawOptions) =>
       app.listPreferenceOccurrences(preserveCoreLimitDefault(coreOptions, rawOptions)),
     listMemoryUpdateCandidates: (app, coreOptions, rawOptions) =>

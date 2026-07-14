@@ -989,7 +989,7 @@ test('MCP tool profiles have exact bounded surfaces and reject invalid configura
   assert.deepEqual(MCP_TOOL_PROFILES['agent-core'], expectedAgentCore);
   assert.deepEqual(
     Object.fromEntries(Object.entries(MCP_TOOL_PROFILES).map(([name, tools]) => [name, tools.length])),
-    { 'agent-core': 24, review: 44, operator: 66, 'workspace-admin': 11, all: 72 },
+    { 'agent-core': 24, review: 45, operator: 67, 'workspace-admin': 11, all: 73 },
   );
   assert.deepEqual(MCP_TOOL_PROFILES.all, ALL_MCP_TOOL_NAMES);
 
@@ -1034,7 +1034,7 @@ test('MCP default profile stays within the context budget without requiring an i
     const surface = getContextForgeMcpSurfaceInfo(defaultServer);
     const allSurface = getContextForgeMcpSurfaceInfo(allServer);
     assert.equal(surface.toolCount, 24);
-    assert.equal(allSurface.toolCount, 72);
+    assert.equal(allSurface.toolCount, 73);
     assert.ok(surface.instructionsBytes <= 1600, `instructions=${surface.instructionsBytes}`);
     assert.ok(surface.toolSchemaBytes <= 26000, `schema=${surface.toolSchemaBytes}`);
     assert.ok(surface.estimatedInitialTokens <= 6700, `tokens=${surface.estimatedInitialTokens}`);
@@ -15137,7 +15137,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'reject_memory_update_candidate',
       'remember',
       'remove_workspace_member', 'remove_workspace_routing_rule', 'reopen_stale_memory_candidate',
-      'resolve_workspace',
+      'resolve_workspace', 'route_audited_memory_candidates',
       'search',
       'session_status',
       'skip_memory_update_candidate', 'snooze_memory_candidate',
