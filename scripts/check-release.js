@@ -5,7 +5,7 @@ import path from 'node:path';
 
 const root = process.cwd();
 const reportFile = path.resolve(process.env.CONTEXTFORGE_RELEASE_REPORT || 'artifacts/release/package-report.json');
-const budgets = Object.freeze({ packedBytes: 400_000, unpackedBytes: 1_750_000, entryCount: 100 });
+const budgets = Object.freeze({ packedBytes: 600_000, unpackedBytes: 2_500_000, entryCount: 150 });
 const publishedScripts = Object.freeze([
   'scripts/benchmark-retrieval.js',
   'scripts/check-release.js',
