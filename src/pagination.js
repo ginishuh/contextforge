@@ -7,6 +7,7 @@ const CURSOR_POSITION_TYPES = Object.freeze({
   checkpoints: ['string', 'number'],
   embedding_jobs: ['string', 'string'],
   memory_candidates: ['string', 'string'],
+  memory_candidate_backlog: ['string', 'string'],
   memory_events: ['string', 'string'],
   preference_occurrences: ['number', 'string', 'string'],
   memory_update_candidates: ['string', 'string'],

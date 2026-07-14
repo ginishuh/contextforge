@@ -9000,7 +9000,9 @@ test('durable distill jobs do not swallow lease loss during embedded closeout au
   assert.equal(processed.jobs[0].attempts, 1);
   let [candidate] = app.listMemoryCandidates({ ...source, status: 'pending' });
   assert.equal(candidate.reviewedAt, null);
-
+  assert.equal(candidate.auditState, 'failed_retryable');
+  const [retryableJobCandidate] = app.getJob({ jobId: submittedJobId }).candidates;
+  assert.equal(retryableJobCandidate.status, 'failed_retryable');
   const replacement = await app.processJobs({ workerId: 'stable-closeout-worker', leaseMs: 1000 });
   assert.equal(replacement.succeeded, 1);
   assert.equal(replacement.jobs[0].status, 'succeeded');
@@ -9008,6 +9010,9 @@ test('durable distill jobs do not swallow lease loss during embedded closeout au
   assert.equal(replacement.jobs[0].result.checkpointId != null, true);
   [candidate] = app.listMemoryCandidates({ ...source, status: 'pending' });
   assert.ok(candidate.reviewedAt);
+  assert.equal(candidate.auditState, 'audited');
+  const [completedJobCandidate] = app.getJob({ jobId: submittedJobId }).candidates;
+  assert.deepEqual({ status: completedJobCandidate.status, attempt: completedJobCandidate.attempt }, { status: 'succeeded', attempt: 2 });
   assert.equal(auditInvocations, 2);
   const [recoveredRun] = app.listDistillRuns(source);
   assert.equal(recoveredRun.status, 'succeeded');
@@ -9066,7 +9071,7 @@ test('durable distill jobs retry embedded closeout audit provider failures', asy
   app.appendRaw({ ...source, role: 'assistant', content: 'Create an older checkpoint candidate.' });
   await app.distillCheckpoint(source);
   app.appendRaw({ ...source, role: 'assistant', content: 'Create the job checkpoint before auditing the older candidate.' });
-  app.submitDistillJob({ ...source, auditTrigger: 'manual_closeout', maxAttempts: 2 });
+  const submitted = app.submitDistillJob({ ...source, auditTrigger: 'manual_closeout', maxAttempts: 2 });
 
   const first = await app.processJobs({ workerId: 'embedded-retry-worker-1', leaseMs: 1000 });
   assert.equal(first.failed, 1);
@@ -9075,6 +9080,9 @@ test('durable distill jobs retry embedded closeout audit provider failures', asy
   assert.equal(first.jobs[0].result.candidateAudit.needsRetry, true);
   assert.equal(first.jobs[0].result.candidateAudit.retryableFailureCount, 5);
   assert.equal(app.listCheckpoints(source).length, 2);
+  const retryableCandidates = app.getJob({ jobId: submitted.jobId }).candidates;
+  assert.equal(retryableCandidates.length, 5);
+  assert.ok(retryableCandidates.every((candidate) => candidate.status === 'failed_retryable'));
 
   const second = await app.processJobs({ workerId: 'embedded-retry-worker-2', leaseMs: 1000 });
   assert.equal(second.succeeded, 1);
@@ -9087,6 +9095,8 @@ test('durable distill jobs retry embedded closeout audit provider failures', asy
   const candidates = app.listMemoryCandidates({ ...source, status: 'pending' });
   assert.equal(candidates.length, 5);
   assert.ok(candidates.every((candidate) => candidate.reviewMetadata.audit.decision === 'approve'));
+  const completedCandidates = app.getJob({ jobId: submitted.jobId }).candidates;
+  assert.ok(completedCandidates.every((candidate) => candidate.status === 'succeeded' && candidate.attempt === 2));
   assert.equal(auditInvocations, 10);
   assert.equal(distillInvocations, 2);
 });
@@ -9148,15 +9158,9 @@ test('durable audit jobs persist job provenance without promoting memory', async
     trigger: 'manual_closeout',
     maxAttempts: 2,
   });
-  const checkpointSubmission = app.submitAuditJob({
-    scope: source.scope,
-    scopeKey: source.scopeKey,
-    checkpointId: checkpoint.id,
-    trigger: 'manual_closeout',
-    maxAttempts: 2,
-  });
-  assert.equal(checkpointSubmission.jobId, submitted.jobId);
-  assert.equal(submitted.job.metadata.sourceFingerprint.candidateIds.length, 1);
+  assert.equal(submitted.job.checkpointId, null);
+  assert.equal(submitted.job.payload.sourceMode, 'session');
+  assert.equal(submitted.job.metadata.sourceFingerprint.candidateIds.length, 2);
   assert.equal(auditInvocations, 0);
   const firstAttempt = await app.processJobs({ workerId: 'audit-worker-1', operation: 'audit_memory_candidates' });
   assert.equal(firstAttempt.failed, 1);
@@ -9165,13 +9169,20 @@ test('durable audit jobs persist job provenance without promoting memory', async
   assert.equal(firstAttempt.jobs[0].result.audit.needsRetry, true);
   const processed = await app.processJobs({ workerId: 'audit-worker-2', operation: 'audit_memory_candidates' });
   assert.equal(processed.succeeded, 1);
-  assert.equal(auditInvocations, 2);
+  assert.equal(auditInvocations, 3);
   const [candidate] = app.listMemoryCandidates({ ...source, checkpointId: checkpoint.id, status: 'pending' });
   assert.equal(candidate.reviewMetadata.auditMetadata.operationJobId, submitted.jobId);
+  assert.equal(candidate.auditState, 'audited');
+  assert.equal(candidate.auditDecision, 'approve');
   assert.equal(app.getMemory({ ...source, key: 'durable-audit-runbook' }), null);
   const usage = app.listLlmUsageEvents({ ...source, jobId: submitted.jobId });
-  assert.equal(usage.length, 1);
-  assert.equal(usage[0].operation, 'candidate_audit');
+  assert.equal(usage.length, 2);
+  assert.ok(usage.every((event) => event.operation === 'candidate_audit'));
+  const attempts = app.listMemoryCandidateAuditAttempts({ ...source, candidateId: candidate.id });
+  assert.equal(attempts.length, 2);
+  assert.equal(attempts[0].operationJobId, submitted.jobId);
+  assert.equal(attempts[0].state, 'audited');
+  assert.equal(attempts[1].state, 'failed_retryable');
 });
 
 test('provider timeout mismatch fails before execution and records non-retryable run state', async () => {
@@ -11524,7 +11535,9 @@ test('distillCheckpoint automatically audits session candidate batches', async (
   });
   assert.equal(candidates.length, 2);
   assert.ok(candidates.every((candidate) => candidate.reviewMetadata.audit?.metadata?.model === 'gpt-5.5'));
-  assert.ok(candidates.every((candidate) => candidate.reviewMetadata.auditMetadata?.sourceMode === 'threshold_batch'));
+  assert.ok(candidates.every((candidate) => candidate.reviewMetadata.auditMetadata?.sourceMode === 'checkpoint'));
+  const attempts = app.listMemoryCandidateAuditAttempts({ scope: 'repo', scopeKey: 'batch-audit-repo', candidateId: candidates[0].id });
+  assert.ok(attempts.every((attempt) => attempt.sourceMode === 'checkpoint'));
   const usageEvents = app.listLlmUsageEvents({
     scope: 'repo',
     scopeKey: 'batch-audit-repo',
@@ -16244,15 +16257,17 @@ test('HTTP server serves admin UI assets', async () => {
     assert.match(html, /ContextForge 관리/);
     assert.match(html, /후보 검토/);
     assert.match(html, /candidateSession/);
-    assert.match(html, /감사 후보 불러오기/);
+    assert.match(html, /후보 backlog 불러오기/);
+    assert.match(html, /candidateAuditState/);
     assert.match(html, /CONTEXTFORGE_OPENAI_COMPATIBLE_API_KEY/);
 
     const script = await fetch(`${remote.url}/ui/app.js`);
     assert.equal(script.status, 200);
     assert.match(script.headers.get('content-type'), /text\/javascript/);
     const scriptText = await script.text();
-    assert.match(scriptText, /auditMemoryCandidates/);
-    assert.match(scriptText, /GPT 감사 후보/);
+    assert.match(scriptText, /memoryCandidateBacklog/);
+    assert.match(scriptText, /submitAuditJob/);
+    assert.doesNotMatch(scriptText, /GPT-5\.5 감사 결과만 표시/);
     assert.match(scriptText, /구조화 디스틸/);
     assert.match(scriptText, /structured 있음/);
     assert.match(scriptText, /runtime\.warnings/);

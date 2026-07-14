@@ -5,7 +5,7 @@ import path from 'node:path';
 
 const roots = ['src', 'scripts', 'test'];
 const lineBudgets = Object.freeze({
-  'src/core.js': 8750,
+  'src/core.js': 8780,
   'src/storage/sqlite.js': 5300,
   'src/mcp.js': 1900,
   'test/core.test.js': 17100,

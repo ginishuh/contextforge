@@ -9,6 +9,9 @@ import { checkOpenAiCompatibleProvider } from './distill/providers/openai_compat
 import { STRUCTURED_CHECKPOINT_SCHEMA_VERSION, validateDistillOutput } from './distill/validate.js';
 import { createEmbeddingProvider } from './embeddings/index.js';
 import { normalizeAgentAdapterIds } from './ingest/agents.js';
+import { submitMemoryCandidateAuditJob } from './memory/candidate_audit_jobs.js';
+import { buildMemoryCandidateBacklog } from './memory/candidate_backlog.js';
+import { memoryCandidateRevisionHash } from './memory/candidate_revision.js';
 import { createRemoteContextForge } from './remote/client.js';
 import { searchMemories } from './retrieval/search.js';
 import {
@@ -2687,9 +2690,12 @@ function promoteCandidateToMemory(
     allowStatusOverride = false,
     eventMetadata = {},
     reviewMetadata = {},
+    beforeWrite = null,
   },
+  enqueueEmbeddings = null,
 ) {
   return store.withTransaction(() => {
+    const freshValidation = typeof beforeWrite === 'function' ? beforeWrite() || {} : {};
     const memory = store.rememberMemory({
       ...scope,
       key,
@@ -2708,6 +2714,7 @@ function promoteCandidateToMemory(
         promotionWarnings: warnings,
         reason,
         ...eventMetadata,
+        ...(freshValidation.eventMetadata || {}),
       },
     });
     if (indexedCandidate) {
@@ -2723,14 +2730,16 @@ function promoteCandidateToMemory(
           memoryId: memory.id,
           promotionWarnings: warnings,
           ...reviewMetadata,
+          ...(freshValidation.reviewMetadata || {}),
         },
       });
     }
+    if (enqueueEmbeddings) enqueueEmbeddings(store, [store.embeddingSourceForMemory(memory)]);
     return memory;
   });
 }
 
-function autoPromoteIndexedCandidate(store, scope, indexedCandidate, warnings, reason, audit = null) {
+function autoPromoteIndexedCandidate(store, scope, indexedCandidate, warnings, reason, audit = null, enqueueEmbeddings = null) {
   const candidate = indexedCandidate.candidate || {};
   return promoteCandidateToMemory(store, scope, {
     candidate,
@@ -2747,7 +2756,7 @@ function autoPromoteIndexedCandidate(store, scope, indexedCandidate, warnings, r
     warnings,
     eventMetadata: { autoPromoted: true, autoPromotionAudit: audit },
     reviewMetadata: { autoPromoted: true, autoPromotionAudit: audit },
-  });
+  }, enqueueEmbeddings);
 }
 
 async function auditAutoPromotionCandidate({
@@ -3218,6 +3227,9 @@ export function createContextForge(options = {}) {
   }
 
   function auditSourceKey(store, scope, options = {}) {
+    if (Array.isArray(options.candidateIds) && options.candidateIds.length > 0) {
+      return operationKey('candidate_audit_source', scope, `backlog:${contentHash(options.candidateIds.slice().sort().join(':'))}`);
+    }
     let sessionId = options.sessionId || null;
     if (!sessionId && options.checkpointId) {
       sessionId = store.getCheckpointById({ ...scope, checkpointId: options.checkpointId })?.sessionId || null;
@@ -4908,107 +4920,13 @@ export function createContextForge(options = {}) {
 
     submitAuditJob(options = {}) {
       const scope = normalizeScopeOptions(options, config);
-      if (!options.sessionId && !options.checkpointId) {
-        throw new Error('submitAuditJob requires sessionId or checkpointId.');
-      }
-      if (!CLOSEOUT_TRIGGERS.has(options.trigger)) {
-        throw new Error('trigger must be a closeout trigger.');
-      }
-      return useStore((store) => {
-        const payload = publicJobPayload(options, scope, [
-          'sessionId',
-          'checkpointId',
-          'trigger',
-          'limit',
-          'scanLimit',
-          'minConfidence',
-          'minStability',
-          'allowedCategories',
-          'promotionRecommendation',
-          'force',
-        ]);
-        const scanLimit = positiveInteger(options.scanLimit == null ? 50 : options.scanLimit, 'scanLimit');
-        let canonicalCheckpoint = null;
-        if (options.checkpointId) {
-          canonicalCheckpoint = store.getCheckpointById({ ...scope, checkpointId: options.checkpointId });
-          if (!canonicalCheckpoint) throw new Error(`Checkpoint not found: ${options.checkpointId}`);
-          if (options.sessionId && canonicalCheckpoint.sessionId !== options.sessionId) {
-            throw new Error('sessionId does not match the supplied checkpointId.');
-          }
-        } else if (options.sessionId) {
-          canonicalCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId, level: 0 });
-        }
-        if (canonicalCheckpoint) {
-          payload.sessionId = canonicalCheckpoint.sessionId;
-          payload.checkpointId = canonicalCheckpoint.id;
-        }
-        const pendingCandidates = store.listMemoryCandidates({
-          ...scope,
-          sessionId: canonicalCheckpoint ? null : options.sessionId || null,
-          checkpointId: canonicalCheckpoint?.id || null,
-          status: 'pending',
-          sort: 'recommendation',
-          limit: scanLimit,
-        });
-        const sourceFingerprint = {
-          candidateIds: pendingCandidates.map((candidate) => candidate.id),
-        };
-        const {
-          scope: _scope,
-          scopeType: _scopeType,
-          scopeKey: _scopeKey,
-          sessionId: _sessionId,
-          checkpointId: _checkpointId,
-          ...policyPayload
-        } = payload;
-        const canonicalSource = canonicalCheckpoint
-          ? { checkpointId: canonicalCheckpoint.id }
-          : { sessionId: options.sessionId || null };
-        const idempotencyKey =
-          options.idempotencyKey
-            ? operationJobIdempotencyKey('audit_memory_candidates', {
-                scope,
-                providedKey: options.idempotencyKey,
-              })
-            : operationJobIdempotencyKey('audit_memory_candidates', {
-                scope,
-                source: canonicalSource,
-                sourceFingerprint,
-                policy: policyPayload,
-              });
-        const maxAttempts = positiveInteger(options.maxAttempts == null ? 3 : options.maxAttempts, 'maxAttempts');
-        const priority = Number(options.priority || 0);
-        if (!Number.isInteger(priority)) throw new Error('priority must be an integer.');
-        const queued = store.enqueueOperationJob({
-          operation: 'audit_memory_candidates',
-          ...scope,
-          sessionId: canonicalCheckpoint?.sessionId || options.sessionId || null,
-          checkpointId: canonicalCheckpoint?.id || null,
-          idempotencyKey,
-          payload,
-          maxAttempts,
-          priority,
-          retryFailed: truthyOption(options.retryFailed),
-          metadata: {
-            submittedBy: options.submittedBy || 'api',
-            requestId: options.requestId || null,
-            authTokenId: options.authTokenId || null,
-            authKind: options.authKind || null,
-            sourceFingerprint,
-            executionMode: 'durable_worker',
-            providerBatchMode: 'per_candidate',
-          },
-        });
-        return {
-          kind: 'operation_job_submission',
-          operation: 'audit_memory_candidates',
-          jobId: queued.job.id,
-          status: queued.job.status,
-          deduplicated: queued.deduplicated,
-          requeued: queued.requeued,
-          job: queued.job,
-        };
-      });
+      if (!CLOSEOUT_TRIGGERS.has(options.trigger)) throw new Error('trigger must be a closeout trigger.');
+      return useStore((store) => submitMemoryCandidateAuditJob({
+        store,
+        scope,
+        options,
+        auditor: getAutoPromoteAuditor(store),
+      }));
     },
 
     getJob(options = {}) {
@@ -5022,10 +4940,10 @@ export function createContextForge(options = {}) {
           scopeKey: scope?.scopeKey || null,
         });
         if (!job) throw new Error(`Operation job not found: ${options.jobId}`);
-        return job;
+        const candidates = store.listOperationJobCandidates({ jobId: job.id });
+        return candidates.length > 0 ? { ...job, candidates } : job;
       });
     },
-
     listJobs(options = {}) {
       const shouldNarrowScope = Boolean(options.scope || options.scopeType || options.scopeKey || options.cwd || options.repoPath);
       const scope = shouldNarrowScope ? normalizeScopeOptions(options, config) : null;
@@ -5484,6 +5402,10 @@ export function createContextForge(options = {}) {
         status: options.status || null,
         candidateType: options.candidateType || null,
         promotionRecommendation: options.promotionRecommendation || null,
+        auditState: options.auditState || null,
+        auditDecision: options.auditDecision || null,
+        category: options.category || null,
+        sourceAgent: options.sourceAgent || null,
         sort: options.sort || null,
       };
       return useStore((store) =>
@@ -5495,6 +5417,25 @@ export function createContextForge(options = {}) {
           positionForItem: (item) => [item.createdAt, item.id],
         }),
       );
+    },
+
+    memoryCandidateBacklog(options = {}) {
+      const scope = normalizeScopeOptions(options, config);
+      return useStore((store) => buildMemoryCandidateBacklog({ store, scope, options }));
+    },
+
+    listMemoryCandidateAuditAttempts(options = {}) {
+      const scope = normalizeScopeOptions(options, config);
+      requireOption(options.candidateId, 'candidateId');
+      return useStore((store) => {
+        const candidate = store.getMemoryCandidate({ ...scope, candidateId: options.candidateId });
+        if (!candidate) throw new Error(`Memory candidate not found: ${options.candidateId}`);
+        return store.listMemoryCandidateAuditAttempts({
+          ...scope,
+          candidateId: options.candidateId,
+          limit: options.limit,
+        });
+      });
     },
 
     listPreferenceOccurrences(options) {
@@ -6024,7 +5965,11 @@ export function createContextForge(options = {}) {
       }
       const scanLimit = positiveNumber(options.scanLimit == null ? 50 : Number(options.scanLimit), 'scanLimit');
       const promotionRecommendation = options.promotionRecommendation || null;
-      if (!options.sessionId && !options.checkpointId) {
+      if (
+        !options.sessionId &&
+        !options.checkpointId &&
+        !(Array.isArray(options.candidateIds) && options.candidateIds.length > 0)
+      ) {
         return {
           kind: 'memory_candidate_audit_suggestions',
           trigger,
@@ -6069,7 +6014,10 @@ export function createContextForge(options = {}) {
       const inFlightKey = operationKey(
         'audit_memory_candidates',
         scope,
-        options.jobId || options.sessionId || options.checkpointId,
+        options.jobId ||
+          options.sessionId ||
+          options.checkpointId ||
+          (Array.isArray(options.candidateIds) ? `backlog:${contentHash(options.candidateIds.slice().sort().join(':'))}` : null),
       );
       return runInFlightOnce(inFlightKey, () => useStore(async (store) =>
         runWithKeyedLock(auditSourceKey(store, scope, options), async () => {
@@ -6078,13 +6026,33 @@ export function createContextForge(options = {}) {
         if (checkpointId) {
           sourceMode = 'checkpoint';
         } else if (options.sessionId) {
-          sourceMode = 'session_pending_batch';
+          sourceMode = 'session';
+        } else if (Array.isArray(options.candidateIds) && options.candidateIds.length > 0) {
+          sourceMode = 'backlog_batch';
         } else {
           const latestCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId, level: 0 });
           checkpointId = latestCheckpoint?.id || null;
           sourceMode = 'latest_checkpoint';
         }
-        const auditor = checkpointId || options.sessionId ? getAutoPromoteAuditor(store) : null;
+        const auditor = checkpointId || options.sessionId || sourceMode === 'backlog_batch'
+          ? getAutoPromoteAuditor(store)
+          : null;
+        if (options.expectedAuditConfiguration) {
+          const actualConfiguration = {
+            provider: auditor?.metadata?.provider || 'none',
+            model: auditor?.metadata?.model || null,
+            reasoningEffort: auditor?.metadata?.reasoningEffort || null,
+            promptVersion: auditor?.metadata?.promptVersion || null,
+            outputSchemaVersion: auditor?.metadata?.outputSchemaVersion || null,
+          };
+          if (JSON.stringify(actualConfiguration) !== JSON.stringify(options.expectedAuditConfiguration)) {
+            const error = new Error('Audit provider configuration changed after this durable job was submitted. Submit a new job with the current configuration.');
+            error.name = 'AuditConfigurationDriftError';
+            error.code = 'CONTEXTFORGE_AUDIT_CONFIGURATION_DRIFT';
+            error.retryable = false;
+            throw error;
+          }
+        }
         const auditPolicy = {
           enabled: Boolean(auditor),
           executed: false,
@@ -6128,19 +6096,31 @@ export function createContextForge(options = {}) {
           promotionRecommendation,
           sort: 'recommendation',
           limit: scanLimit,
+          candidateIds: Array.isArray(options.candidateIds) ? options.candidateIds : null,
         });
         const storedAudited = truthyOption(options.force)
           ? []
-          : allCandidates.filter(
-              (candidate) => candidate.reviewMetadata?.audit && candidate.reviewMetadata.audit.retryable !== true,
-            );
+          : allCandidates.filter((candidate) => candidate.auditState === 'audited');
         const candidates = allCandidates.filter(
           (candidate) =>
             truthyOption(options.force) ||
-            !candidate.reviewMetadata?.audit ||
-            candidate.reviewMetadata.audit.retryable === true,
+            candidate.auditState === 'unaudited' ||
+            candidate.auditState === 'queued' ||
+            candidate.auditState === 'running' ||
+            candidate.auditState === 'failed_retryable' ||
+            candidate.auditState === 'legacy_unknown',
         );
         if (!auditor) {
+          if (options.jobId) {
+            for (const candidate of candidates) {
+              store.markOperationJobCandidateSkipped({
+                jobId: options.jobId,
+                candidateId: candidate.id,
+                reason: 'audit_disabled',
+                candidateAuditState: 'unaudited',
+              });
+            }
+          }
           return {
             kind: 'memory_candidate_audit_suggestions',
             trigger,
@@ -6190,6 +6170,20 @@ export function createContextForge(options = {}) {
           .filter((item) => item.score > 0)
           .sort((a, b) => b.score - a.score)
           .slice(0, limit);
+        for (const item of assessed.filter((candidate) => candidate.score <= 0)) {
+          const reason = item.warnings.map((warning) => warning.code).join(', ') || 'deterministic_triage';
+          store.markMemoryCandidateTriagedNoAudit({
+            ...scope,
+            candidateId: item.candidate.id,
+            reason,
+            metadata: {
+              trigger,
+              sourceMode,
+              operationJobId: options.jobId || null,
+              warnings: item.warnings,
+            },
+          });
+        }
         if (selected.length > 0) {
           assertProviderTimeoutFitsClient({
             operation: 'candidate audit',
@@ -6210,8 +6204,14 @@ export function createContextForge(options = {}) {
           }
         };
         for (const item of selected) {
+          const auditStartedAt = new Date().toISOString();
           try {
-            assertJobLease();
+            if (options.jobId) {
+              store.startOperationJobCandidate({
+                jobId: options.jobId, candidateId: item.candidate.id, attempt: options._jobLeaseAttempt,
+                leaseOwner: options._jobLeaseOwner, leaseAttempt: options._jobLeaseAttempt,
+              });
+            }
             const audit = await auditAutoPromotionCandidate({
               auditor,
               store,
@@ -6242,6 +6242,9 @@ export function createContextForge(options = {}) {
                   checkpointId,
                   sessionId: options.sessionId || null,
                   operationJobId: options.jobId || null,
+                  leaseAttempt: options._jobLeaseAttempt ?? null,
+                  startedAt: auditStartedAt,
+                  policyVersion: 'candidate-audit.v1',
                   mutatesDurableMemory: false,
                   persistsAuditMetadata: true,
                 },
@@ -6282,6 +6285,9 @@ export function createContextForge(options = {}) {
                   checkpointId,
                   sessionId: options.sessionId || null,
                   operationJobId: options.jobId || null,
+                  leaseAttempt: options._jobLeaseAttempt ?? null,
+                  startedAt: auditStartedAt,
+                  policyVersion: 'candidate-audit.v1',
                   mutatesDurableMemory: false,
                   persistsAuditMetadata: true,
                 },
@@ -6431,7 +6437,7 @@ export function createContextForge(options = {}) {
         if (checkpointId) {
           sourceMode = 'checkpoint';
         } else if (options.sessionId) {
-          sourceMode = 'session_pending_batch';
+          sourceMode = 'session';
         } else {
           const latestCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId, level: 0 });
           checkpointId = latestCheckpoint?.id || null;
@@ -6651,8 +6657,7 @@ export function createContextForge(options = {}) {
             : auditApproved.map((item, index) => {
                 const reason =
                   'Auto-promoted by auto_promote_memory_candidates after strict closeout-scoped safety checks and audit approval.';
-                const memory = autoPromoteIndexedCandidate(store, scope, item.candidate, item.warnings, reason, item.audit);
-                enqueueEmbeddingSources(store, [store.embeddingSourceForMemory(memory)]);
+                const memory = autoPromoteIndexedCandidate(store, scope, item.candidate, item.warnings, reason, item.audit, enqueueEmbeddingSources);
                 return {
                   ...promotionProposal(item.candidate, item.warnings, index + 1),
                   memoryId: memory.id,
@@ -6997,8 +7002,34 @@ export function createContextForge(options = {}) {
         requireOption(key, 'key');
         const content = options.content || candidate.content;
         requireOption(content, 'content');
-        const assessment = promotionAssessment(store, scope, { key, content, candidate });
-        const warnings = candidatePromotionWarnings(store, scope, { key, content, candidate, assessment });
+        const category = options.category || candidate.category || 'note';
+        const tags = options.tags?.length ? options.tags : candidate.tags || [];
+        const proposedRevision = { key, content, category, tags };
+        const proposedRevisionHash = memoryCandidateRevisionHash(proposedRevision);
+        const auditApprovalChanged =
+          indexedCandidate?.auditDecision === 'approve' &&
+          indexedCandidate.auditContentHash &&
+          indexedCandidate.auditContentHash !== proposedRevisionHash;
+        if (auditApprovalChanged && !truthyOption(options.allowAuditRevisionOverride)) {
+          const error = new Error(
+            'The candidate revision differs from the revision approved by audit. Re-audit it or pass allowAuditRevisionOverride with a reason for an explicit human override.',
+          );
+          error.name = 'MemoryCandidateAuditRevisionMismatchError';
+          error.code = 'CONTEXTFORGE_CANDIDATE_AUDIT_REVISION_MISMATCH';
+          error.auditedContentHash = indexedCandidate.auditContentHash;
+          error.proposedContentHash = proposedRevisionHash;
+          throw error;
+        }
+        if (auditApprovalChanged && !options.reason) {
+          throw new Error('reason is required when allowAuditRevisionOverride changes an audited candidate revision.');
+        }
+        const assessment = promotionAssessment(store, scope, { key, content, candidate: proposedRevision });
+        const warnings = candidatePromotionWarnings(store, scope, {
+          key,
+          content,
+          candidate: { ...candidate, ...proposedRevision },
+          assessment,
+        });
         if (warnings.length > 0 && !truthyOption(options.allowWarnings)) {
           const error = new Error(
             `Memory candidate promotion has ${warnings.length} warning(s). Pass allowWarnings to promote anyway.`,
@@ -7015,8 +7046,8 @@ export function createContextForge(options = {}) {
           indexedCandidate,
           key,
           content,
-          category: options.category || candidate.category || 'note',
-          tags: options.tags?.length ? options.tags : candidate.tags || [],
+          category,
+          tags,
           importance: clampImportance(options.importance == null ? candidate.importance || 0 : options.importance),
           reason: options.reason || null,
           warnings,
@@ -7027,9 +7058,43 @@ export function createContextForge(options = {}) {
           },
           reviewMetadata: {
             promotionAssessment: assessment,
+            promotedRevisionHash: proposedRevisionHash,
+            auditRevisionOverride: auditApprovalChanged
+              ? {
+                  reason: options.reason,
+                  reviewer: options.reviewedBy || null,
+                  auditedContentHash: indexedCandidate.auditContentHash,
+                  proposedContentHash: proposedRevisionHash,
+                }
+              : null,
           },
-        });
-        enqueueEmbeddingSources(store, [store.embeddingSourceForMemory(memory)]);
+          beforeWrite: () => {
+            const freshAssessment = promotionAssessment(store, scope, {
+              key,
+              content,
+              candidate: proposedRevision,
+            });
+            const freshWarnings = candidatePromotionWarnings(store, scope, {
+              key,
+              content,
+              candidate: { ...candidate, ...proposedRevision },
+              assessment: freshAssessment,
+            });
+            if (freshWarnings.length > 0 && !truthyOption(options.allowWarnings)) {
+              const error = new Error(
+                `Memory candidate promotion has ${freshWarnings.length} warning(s) after transaction-time reassessment. Pass allowWarnings to promote anyway.`,
+              );
+              error.name = 'MemoryCandidatePromotionWarningError';
+              error.code = 'CONTEXTFORGE_PROMOTION_ASSESSMENT_STALE';
+              error.warnings = freshWarnings;
+              throw error;
+            }
+            return {
+              eventMetadata: { promotionAssessment: freshAssessment, promotionRevisionHash: proposedRevisionHash },
+              reviewMetadata: { promotionAssessment: freshAssessment, promotedRevisionHash: proposedRevisionHash },
+            };
+          },
+        }, enqueueEmbeddingSources);
         return memory;
       });
     },
@@ -8303,9 +8368,11 @@ export function createContextForge(options = {}) {
               .filter((item) => item.score > 0)
               .sort((a, b) => b.score - a.score)
               .slice(0, batchLimit);
+            if (options.jobId && selected.length > 0) {
+              store.registerOperationJobCandidates({ jobId: options.jobId, candidateIds: selected.map((item) => item.candidate.id), leaseOwner: options._jobLeaseOwner, leaseAttempt: options._jobLeaseAttempt });
+            }
             const auditBatchId = randomUUID();
-            let auditedCount = 0;
-            let promotedCount = 0;
+            let auditedCount = 0, promotedCount = 0;
             let failedCount = 0;
             let retryableFailureCount = 0;
             if (selected.length > 0) {
@@ -8326,9 +8393,12 @@ export function createContextForge(options = {}) {
               }
             };
             for (const item of selected) {
+              const auditStartedAt = new Date().toISOString();
               let audit;
               try {
-                assertJobLease();
+                if (options.jobId) {
+                  store.startOperationJobCandidate({ jobId: options.jobId, candidateId: item.candidate.id, attempt: options._jobLeaseAttempt, leaseOwner: options._jobLeaseOwner, leaseAttempt: options._jobLeaseAttempt });
+                }
                 audit = await auditAutoPromotionCandidate({
                   auditor,
                   store,
@@ -8372,10 +8442,11 @@ export function createContextForge(options = {}) {
                   metadata: {
                     auditBatchId,
                     trigger: auditTrigger || 'batch_threshold',
-                    sourceMode: forceAudit ? 'closeout_batch' : 'threshold_batch',
+                    sourceMode: 'checkpoint',
                     sessionId: options.sessionId,
                     checkpointId: checkpoint.id,
                     operationJobId: options.jobId || null,
+                    leaseAttempt: options._jobLeaseAttempt ?? null, startedAt: auditStartedAt,
                     minBatchCandidates,
                     batchLimit,
                     autoPromoteEnabled: config.autoPromote.enabled,
@@ -8400,15 +8471,15 @@ export function createContextForge(options = {}) {
                     'Auto-promoted after automatic candidate audit approved this strict safe candidate.';
                   store.withTransaction(() => {
                     assertJobLease();
-                    const memory = autoPromoteIndexedCandidate(
+                    autoPromoteIndexedCandidate(
                       store,
                       scope,
                       auditedCandidate,
                       autoWarnings,
                       reason,
                       audit,
+                      enqueueEmbeddingSources,
                     );
-                    enqueueEmbeddingSources(store, [store.embeddingSourceForMemory(memory)]);
                   });
                   promotedCount += 1;
                 }
