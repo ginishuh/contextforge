@@ -9148,15 +9148,9 @@ test('durable audit jobs persist job provenance without promoting memory', async
     trigger: 'manual_closeout',
     maxAttempts: 2,
   });
-  const checkpointSubmission = app.submitAuditJob({
-    scope: source.scope,
-    scopeKey: source.scopeKey,
-    checkpointId: checkpoint.id,
-    trigger: 'manual_closeout',
-    maxAttempts: 2,
-  });
-  assert.equal(checkpointSubmission.jobId, submitted.jobId);
-  assert.equal(submitted.job.metadata.sourceFingerprint.candidateIds.length, 1);
+  assert.equal(submitted.job.checkpointId, null);
+  assert.equal(submitted.job.payload.sourceMode, 'session');
+  assert.equal(submitted.job.metadata.sourceFingerprint.candidateIds.length, 2);
   assert.equal(auditInvocations, 0);
   const firstAttempt = await app.processJobs({ workerId: 'audit-worker-1', operation: 'audit_memory_candidates' });
   assert.equal(firstAttempt.failed, 1);
@@ -9165,13 +9159,20 @@ test('durable audit jobs persist job provenance without promoting memory', async
   assert.equal(firstAttempt.jobs[0].result.audit.needsRetry, true);
   const processed = await app.processJobs({ workerId: 'audit-worker-2', operation: 'audit_memory_candidates' });
   assert.equal(processed.succeeded, 1);
-  assert.equal(auditInvocations, 2);
+  assert.equal(auditInvocations, 3);
   const [candidate] = app.listMemoryCandidates({ ...source, checkpointId: checkpoint.id, status: 'pending' });
   assert.equal(candidate.reviewMetadata.auditMetadata.operationJobId, submitted.jobId);
+  assert.equal(candidate.auditState, 'audited');
+  assert.equal(candidate.auditDecision, 'approve');
   assert.equal(app.getMemory({ ...source, key: 'durable-audit-runbook' }), null);
   const usage = app.listLlmUsageEvents({ ...source, jobId: submitted.jobId });
-  assert.equal(usage.length, 1);
-  assert.equal(usage[0].operation, 'candidate_audit');
+  assert.equal(usage.length, 2);
+  assert.ok(usage.every((event) => event.operation === 'candidate_audit'));
+  const attempts = app.listMemoryCandidateAuditAttempts({ ...source, candidateId: candidate.id });
+  assert.equal(attempts.length, 2);
+  assert.equal(attempts[0].operationJobId, submitted.jobId);
+  assert.equal(attempts[0].state, 'audited');
+  assert.equal(attempts[1].state, 'failed_retryable');
 });
 
 test('provider timeout mismatch fails before execution and records non-retryable run state', async () => {
@@ -16244,15 +16245,17 @@ test('HTTP server serves admin UI assets', async () => {
     assert.match(html, /ContextForge 관리/);
     assert.match(html, /후보 검토/);
     assert.match(html, /candidateSession/);
-    assert.match(html, /감사 후보 불러오기/);
+    assert.match(html, /후보 backlog 불러오기/);
+    assert.match(html, /candidateAuditState/);
     assert.match(html, /CONTEXTFORGE_OPENAI_COMPATIBLE_API_KEY/);
 
     const script = await fetch(`${remote.url}/ui/app.js`);
     assert.equal(script.status, 200);
     assert.match(script.headers.get('content-type'), /text\/javascript/);
     const scriptText = await script.text();
-    assert.match(scriptText, /auditMemoryCandidates/);
-    assert.match(scriptText, /GPT 감사 후보/);
+    assert.match(scriptText, /memoryCandidateBacklog/);
+    assert.match(scriptText, /submitAuditJob/);
+    assert.doesNotMatch(scriptText, /GPT-5\.5 감사 결과만 표시/);
     assert.match(scriptText, /구조화 디스틸/);
     assert.match(scriptText, /structured 있음/);
     assert.match(scriptText, /runtime\.warnings/);

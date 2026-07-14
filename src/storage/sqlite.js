@@ -3,10 +3,24 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
+import {
+  backfillMemoryCandidateAuditStateOnce as backfillCandidateAuditState,
+  hydrateMemoryCandidateAuditAttempt,
+  listMemoryCandidateAuditAttempts as listCandidateAuditAttempts,
+  listOperationJobCandidates as listAuditJobCandidates,
+  markMemoryCandidateReviewed as markCandidateReviewed,
+  markMemoryCandidateAudited as markCandidateAudited,
+  markMemoryCandidateTriagedNoAudit as markCandidateTriagedNoAudit,
+  markOperationJobCandidateSkipped as markAuditJobCandidateSkipped,
+  registerOperationJobCandidates as registerAuditJobCandidates,
+  settleOperationJobCandidates as settleAuditJobCandidates,
+  startOperationJobCandidate as startAuditJobCandidate,
+  memoryLifecycleSummary as summarizeMemoryLifecycle,
+} from './candidate_lifecycle.js';
 import { applySqliteMigrations } from './migrations/index.js';
 import { secureDataDirectoryPermissions } from './permissions.js';
 
-export const SCHEMA_VERSION = 19;
+export const SCHEMA_VERSION = 20;
 export const SQLITE_BUSY_TIMEOUT_MS = 5000;
 export const SQLITE_JOURNAL_MODE = 'wal';
 export const SQLITE_SYNCHRONOUS = 'normal';
@@ -279,6 +293,14 @@ function hydrateMemoryCandidate(row) {
     scopeKey: row.scope_key,
     index: row.candidate_index,
     status: row.status,
+    auditState: row.audit_state || 'unaudited',
+    auditDecision: row.audit_decision || null,
+    auditContentHash: row.audit_content_hash || null,
+    latestAuditAttemptId: row.latest_audit_attempt_id || null,
+    snoozedUntil: row.snoozed_until || null,
+    snoozeReason: row.snooze_reason || null,
+    snoozedBy: row.snoozed_by || null,
+    wakeUpStatus: row.wake_up_status || null,
     candidate: {
       ...(candidateJson && typeof candidateJson === 'object' && !Array.isArray(candidateJson) ? candidateJson : {}),
       key: row.candidate_key,
@@ -947,6 +969,14 @@ export class ContextForgeStore {
         source_event_ids_json TEXT NOT NULL DEFAULT '[]',
         candidate_json TEXT NOT NULL DEFAULT '{}',
         status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'promoted', 'rejected', 'stale', 'snoozed')),
+        audit_state TEXT NOT NULL DEFAULT 'unaudited' CHECK (audit_state IN ('unaudited', 'queued', 'running', 'audited', 'failed_retryable', 'failed_terminal', 'triaged_no_audit', 'legacy_unknown')),
+        audit_decision TEXT CHECK (audit_decision IS NULL OR audit_decision IN ('approve', 'needs_review', 'reject')),
+        audit_content_hash TEXT,
+        latest_audit_attempt_id TEXT,
+        snoozed_until TEXT,
+        snooze_reason TEXT,
+        snoozed_by TEXT,
+        wake_up_status TEXT,
         created_at TEXT NOT NULL,
         reviewed_at TEXT,
         review_reason TEXT,
@@ -955,6 +985,56 @@ export class ContextForgeStore {
         UNIQUE (checkpoint_id, candidate_index),
         FOREIGN KEY (checkpoint_id) REFERENCES checkpoints(id) ON DELETE CASCADE,
         FOREIGN KEY (promoted_memory_id) REFERENCES memories(id) ON DELETE SET NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS memory_candidate_audit_attempts (
+        id TEXT PRIMARY KEY,
+        candidate_id TEXT NOT NULL,
+        operation_job_id TEXT,
+        lease_attempt INTEGER,
+        scope_type TEXT NOT NULL CHECK (scope_type IN ('shared', 'repo', 'local')),
+        scope_key TEXT NOT NULL,
+        source_mode TEXT NOT NULL CHECK (source_mode IN ('checkpoint', 'session', 'backlog_batch')),
+        source_session_id TEXT,
+        source_checkpoint_id TEXT,
+        source_watermark_json TEXT,
+        content_hash TEXT NOT NULL,
+        policy_version TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT,
+        reasoning_effort TEXT,
+        prompt_version TEXT,
+        schema_version TEXT,
+        state TEXT NOT NULL CHECK (state IN ('audited', 'failed_retryable', 'failed_terminal')),
+        decision TEXT CHECK (decision IS NULL OR decision IN ('approve', 'needs_review', 'reject')),
+        reason TEXT,
+        risk_codes_json TEXT NOT NULL DEFAULT '[]',
+        usage_json TEXT NOT NULL DEFAULT '{}',
+        failure_json TEXT,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        started_at TEXT NOT NULL,
+        completed_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (candidate_id) REFERENCES memory_candidate_index(id) ON DELETE CASCADE,
+        FOREIGN KEY (operation_job_id) REFERENCES operation_jobs(id) ON DELETE SET NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS operation_job_candidates (
+        job_id TEXT NOT NULL,
+        candidate_id TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'running', 'succeeded', 'failed_retryable', 'failed_terminal', 'skipped')),
+        attempt INTEGER NOT NULL DEFAULT 0,
+        audit_attempt_id TEXT,
+        reason TEXT,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT,
+        PRIMARY KEY (job_id, candidate_id),
+        FOREIGN KEY (job_id) REFERENCES operation_jobs(id) ON DELETE CASCADE,
+        FOREIGN KEY (candidate_id) REFERENCES memory_candidate_index(id) ON DELETE CASCADE,
+        FOREIGN KEY (audit_attempt_id) REFERENCES memory_candidate_audit_attempts(id) ON DELETE SET NULL
       );
 
       CREATE TABLE IF NOT EXISTS preference_occurrences (
@@ -1115,6 +1195,12 @@ export class ContextForgeStore {
         ON memory_candidate_index(scope_type, scope_key, status, created_at);
       CREATE INDEX IF NOT EXISTS idx_memory_candidate_checkpoint
         ON memory_candidate_index(checkpoint_id, candidate_index);
+      CREATE INDEX IF NOT EXISTS idx_memory_candidate_audit_attempts_candidate
+        ON memory_candidate_audit_attempts(candidate_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_memory_candidate_audit_attempts_job
+        ON memory_candidate_audit_attempts(operation_job_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_operation_job_candidates_status
+        ON operation_job_candidates(job_id, status, position);
       CREATE INDEX IF NOT EXISTS idx_preference_occurrences_scope
         ON preference_occurrences(scope_type, scope_key, status, updated_at);
       CREATE INDEX IF NOT EXISTS idx_embedding_jobs_status
@@ -1146,6 +1232,8 @@ export class ContextForgeStore {
       ensureColumn: (table, column, definition) => this.ensureColumn(table, column, definition),
     });
     this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_memory_candidate_audit_queue
+        ON memory_candidate_index(scope_type, scope_key, status, audit_state, audit_decision, created_at);
       CREATE INDEX IF NOT EXISTS idx_distill_runs_job
         ON distill_runs(job_id);
       CREATE INDEX IF NOT EXISTS idx_llm_usage_events_job
@@ -1157,6 +1245,7 @@ export class ContextForgeStore {
     this.backfillMemoryCandidateIndexOnce();
     this.backfillMemoryCandidateJsonOnce();
     this.backfillPreferenceOccurrencesOnce();
+    this.backfillMemoryCandidateAuditStateOnce();
     this.ensureMemoryFts();
 
     this.db
@@ -2279,6 +2368,10 @@ export class ContextForgeStore {
       .run(nowIso());
   }
 
+  backfillMemoryCandidateAuditStateOnce() {
+    return backfillCandidateAuditState(this);
+  }
+
   indexMemoryCandidatesForCheckpoint(checkpoint) {
     const candidates = Array.isArray(checkpoint?.metadata?.memoryCandidates)
       ? checkpoint.metadata.memoryCandidates
@@ -3297,6 +3390,11 @@ export class ContextForgeStore {
     status = null,
     candidateType = null,
     promotionRecommendation = null,
+    auditState = null,
+    auditDecision = null,
+    category = null,
+    sourceAgent = null,
+    candidateIds = null,
     sort = null,
     limit = null,
     after = null,
@@ -3322,6 +3420,28 @@ export class ContextForgeStore {
     if (promotionRecommendation) {
       conditions.push('memory_candidate_index.promotion_recommendation = ?');
       values.push(promotionRecommendation);
+    }
+    if (auditState) {
+      conditions.push('memory_candidate_index.audit_state = ?');
+      values.push(auditState);
+    }
+    if (auditDecision) {
+      conditions.push('memory_candidate_index.audit_decision = ?');
+      values.push(auditDecision);
+    }
+    if (category) {
+      conditions.push('memory_candidate_index.category = ?');
+      values.push(category);
+    }
+    if (sourceAgent) {
+      conditions.push("json_extract(checkpoints.metadata_json, '$.sourceProvenance.sourceAgent') = ?");
+      values.push(sourceAgent);
+    }
+    if (Array.isArray(candidateIds)) {
+      if (candidateIds.length === 0) return [];
+      if (candidateIds.length > 500) throw new Error('candidateIds supports at most 500 items.');
+      conditions.push(`memory_candidate_index.id IN (${candidateIds.map(() => '?').join(', ')})`);
+      values.push(...candidateIds);
     }
     if (after) {
       conditions.push(`(
@@ -3370,75 +3490,8 @@ export class ContextForgeStore {
       .map(hydrateMemoryCandidate);
   }
 
-  memoryLifecycleSummary({ scopeType, scopeKey, sinceIso }) {
-    const candidateRows = this.db
-      .prepare(`
-        SELECT
-          status,
-          promotion_recommendation,
-          COUNT(*) AS count,
-          MAX(created_at) AS latest_created_at,
-          MAX(reviewed_at) AS latest_reviewed_at
-        FROM memory_candidate_index
-        WHERE scope_type = ? AND scope_key = ?
-        GROUP BY status, promotion_recommendation
-      `)
-      .all(scopeType, scopeKey);
-    const recentCandidates = this.db
-      .prepare(`
-        SELECT COUNT(*) AS count
-        FROM memory_candidate_index
-        WHERE scope_type = ? AND scope_key = ? AND created_at >= ?
-      `)
-      .get(scopeType, scopeKey, sinceIso).count;
-    const recentPromoted = this.db
-      .prepare(`
-        SELECT COUNT(*) AS count
-        FROM memories
-        WHERE scope_type = ? AND scope_key = ? AND created_at >= ?
-      `)
-      .get(scopeType, scopeKey, sinceIso).count;
-    const latestMemory = this.db
-      .prepare(`
-        SELECT MAX(created_at) AS latest_created_at
-        FROM memories
-        WHERE scope_type = ? AND scope_key = ?
-      `)
-      .get(scopeType, scopeKey);
-    const summary = {
-      latestCandidateAt: null,
-      latestCandidateReviewedAt: null,
-      latestPromotedAt: latestMemory?.latest_created_at || null,
-      pendingCandidateCount: 0,
-      pendingReviewCount: 0,
-      candidatesLast7d: Number(recentCandidates || 0),
-      promotedLast7d: Number(recentPromoted || 0),
-      byStatus: {},
-      byRecommendation: {},
-    };
-    for (const row of candidateRows) {
-      const status = row.status || 'unknown';
-      const recommendation = row.promotion_recommendation || 'none';
-      const count = Number(row.count || 0);
-      summary.byStatus[status] = (summary.byStatus[status] || 0) + count;
-      summary.byRecommendation[recommendation] = (summary.byRecommendation[recommendation] || 0) + count;
-      if (status === 'pending') {
-        summary.pendingCandidateCount += count;
-        if (recommendation === 'review') {
-          summary.pendingReviewCount += count;
-        }
-      }
-      if (!summary.latestCandidateAt || (row.latest_created_at && row.latest_created_at > summary.latestCandidateAt)) {
-        summary.latestCandidateAt = row.latest_created_at || summary.latestCandidateAt;
-      }
-      if (
-        !summary.latestCandidateReviewedAt ||
-        (row.latest_reviewed_at && row.latest_reviewed_at > summary.latestCandidateReviewedAt)
-      ) {
-        summary.latestCandidateReviewedAt = row.latest_reviewed_at || summary.latestCandidateReviewedAt;
-      }
-    }
-    return summary;
+  memoryLifecycleSummary(options) {
+    return summarizeMemoryLifecycle(this, options);
   }
 
   getPreferenceOccurrence({ scopeType, scopeKey, mergeKey = null, candidateId = null }) {
@@ -3780,91 +3833,20 @@ export class ContextForgeStore {
     return hydrateMemoryCandidate(row);
   }
 
-  markMemoryCandidateReviewed({
-    scopeType,
-    scopeKey,
-    candidateId,
-    status,
-    reason = null,
-    promotedMemoryId = null,
-    metadata = {},
-    expectedStatus = 'pending',
-    allowStatusOverride = false,
-  }) {
-    const existing = this.getMemoryCandidate({ scopeType, scopeKey, candidateId });
-    if (!existing) {
-      throw new Error(`Memory candidate not found: ${candidateId}`);
-    }
-    if (!allowStatusOverride && existing.status !== expectedStatus) {
-      throw new Error(
-        `Memory candidate ${candidateId} is ${existing.status}; expected ${expectedStatus}. Pass allowStatusOverride to change it anyway.`,
-      );
-    }
-    const reviewedAt = nowIso();
-    const result = this.db
-      .prepare(`
-        UPDATE memory_candidate_index
-        SET status = ?,
-            reviewed_at = ?,
-            review_reason = ?,
-            review_metadata_json = ?,
-            promoted_memory_id = ?
-        WHERE scope_type = ?
-          AND scope_key = ?
-          AND id = ?
-      `)
-      .run(status, reviewedAt, reason, json(metadata, {}), promotedMemoryId, scopeType, scopeKey, candidateId);
-    if (result.changes === 0) {
-      throw new Error(`Memory candidate not found: ${candidateId}`);
-    }
-    return this.getMemoryCandidate({ scopeType, scopeKey, candidateId });
+  markMemoryCandidateReviewed(options) {
+    return markCandidateReviewed(this, options);
   }
 
-  markMemoryCandidateAudited({
-    scopeType,
-    scopeKey,
-    candidateId,
-    audit,
-    reason = null,
-    metadata = {},
-    expectedStatus = 'pending',
-  }) {
-    const existing = this.getMemoryCandidate({ scopeType, scopeKey, candidateId });
-    if (!existing) {
-      throw new Error(`Memory candidate not found: ${candidateId}`);
-    }
-    if (existing.status !== expectedStatus) {
-      throw new Error(`Memory candidate ${candidateId} is ${existing.status}; expected ${expectedStatus}.`);
-    }
-    const reviewedAt = nowIso();
-    const reviewMetadata = {
-      ...(existing.reviewMetadata || {}),
-      audit,
-      auditMetadata: metadata,
-      auditedAt: reviewedAt,
-    };
-    const result = this.db
-      .prepare(`
-        UPDATE memory_candidate_index
-        SET reviewed_at = ?,
-            review_reason = ?,
-            review_metadata_json = ?
-        WHERE scope_type = ?
-          AND scope_key = ?
-          AND id = ?
-      `)
-      .run(
-        reviewedAt,
-        reason || audit?.reason || existing.reviewReason || null,
-        json(reviewMetadata, {}),
-        scopeType,
-        scopeKey,
-        candidateId,
-      );
-    if (result.changes === 0) {
-      throw new Error(`Memory candidate not found: ${candidateId}`);
-    }
-    return this.getMemoryCandidate({ scopeType, scopeKey, candidateId });
+  markMemoryCandidateAudited(options) {
+    return markCandidateAudited(this, options);
+  }
+
+  markMemoryCandidateTriagedNoAudit(options) {
+    return markCandidateTriagedNoAudit(this, options);
+  }
+
+  listMemoryCandidateAuditAttempts(options) {
+    return listCandidateAuditAttempts(this, options);
   }
 
   insertCheckpoint({
@@ -4000,6 +3982,26 @@ export class ContextForgeStore {
     return { job: existing, deduplicated: true, requeued: false };
   }
 
+  registerOperationJobCandidates(options) {
+    return registerAuditJobCandidates(this, options);
+  }
+
+  listOperationJobCandidates(options) {
+    return listAuditJobCandidates(this, options);
+  }
+
+  settleOperationJobCandidates(options) {
+    return settleAuditJobCandidates(this, options);
+  }
+
+  startOperationJobCandidate(options) {
+    return startAuditJobCandidate(this, options);
+  }
+
+  markOperationJobCandidateSkipped(options) {
+    return markAuditJobCandidateSkipped(this, options);
+  }
+
   getOperationJob({ jobId, scopeType = null, scopeKey = null }) {
     const filters = ['id = ?'];
     const values = [jobId];
@@ -4091,7 +4093,16 @@ export class ContextForgeStore {
           RETURNING *
         `)
         .get(exhausted ? 'failed' : 'queued', exhausted ? 0 : 1, now, exhausted ? now : null, row.id);
-      if (updated) recovered.push(hydrateOperationJob(updated));
+      if (updated) {
+        if (updated.operation === 'audit_memory_candidates') {
+          this.settleOperationJobCandidates({
+            jobId: updated.id,
+            status: updated.status,
+            reason: 'Operation job lease expired before candidate audit completion.',
+          });
+        }
+        recovered.push(hydrateOperationJob(updated));
+      }
     }
     return recovered;
   }
@@ -4266,6 +4277,13 @@ export class ContextForgeStore {
         timestamp,
       );
     if (!row) throw new Error(`Running operation job lease not found: ${jobId}`);
+    if (row.operation === 'audit_memory_candidates') {
+      this.settleOperationJobCandidates({
+        jobId: row.id,
+        status: row.status,
+        reason: error?.message || String(error),
+      });
+    }
     return hydrateOperationJob(row);
   }
 
@@ -4294,6 +4312,13 @@ export class ContextForgeStore {
         RETURNING *
       `)
       .get(reason || 'Operation job was cancelled before execution.', timestamp, timestamp, jobId);
+    if (row?.operation === 'audit_memory_candidates') {
+      this.settleOperationJobCandidates({
+        jobId: row.id,
+        status: 'cancelled',
+        reason: reason || 'Operation job was cancelled before execution.',
+      });
+    }
     return row
       ? { job: hydrateOperationJob(row), cancelled: true, reason: 'cancelled_before_execution' }
       : { job: this.getOperationJob({ jobId, scopeType, scopeKey }), cancelled: false, reason: 'claim_race' };

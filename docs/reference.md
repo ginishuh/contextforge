@@ -1677,8 +1677,11 @@ node src/cli.js listJobs --status failed
 node src/cli.js cancelJob --jobId <queued-job-id>
 ```
 
-`submitAuditJob` provides the same durable path for closeout-scoped candidate
-audits and requires `sessionId` or `checkpointId` plus a closeout `trigger`.
+`submitAuditJob` provides the same durable path for candidate audits and
+requires a closeout `trigger` plus exactly one source: `sessionId`,
+`checkpointId`, or an explicit bounded `candidateIds` backlog batch. Session
+sources retain session semantics and are not reduced to the latest checkpoint.
+Backlog batches are limited to one canonical scope and at most ten ids.
 Submissions are idempotent for the same scoped source window and policy unless
 the caller supplies `idempotencyKey`. Workers claim bounded batches, renew
 leases while providers run, recover expired leases after crashes, and retry
@@ -1686,6 +1689,12 @@ retryable failures up to `maxAttempts`. Queued cancellation is guaranteed;
 running provider calls report `running_not_interruptible` and are not
 force-killed. Candidate audits are still one provider call per selected
 candidate; this API does not claim true provider batching.
+
+Use `memoryCandidateBacklog` for the review-capability, provider-free inventory
+surface. It returns a cursor page, an `asOf` timestamp, and lifecycle summary
+counts from the same canonical scope. See
+[Memory candidate lifecycle](memory-candidate-lifecycle.md) for audit state,
+immutable attempt, retry, and promotion revision rules.
 
 Provider execution is at-least-once: a process that loses its lease may already
 have incurred provider cost, but lease-attempt fencing prevents it from

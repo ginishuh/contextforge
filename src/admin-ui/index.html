@@ -177,10 +177,40 @@
             <label>상태 <select id="memoryStatus"><option value="active">활성</option><option value="inactive">비활성</option><option value="all">전체</option></select></label>
             <label>후보 세션 <input id="candidateSession" placeholder="선택 사항" /></label>
             <label>후보 체크포인트 <input id="candidateCheckpoint" placeholder="선택 사항" /></label>
+            <label>후보 상태
+              <select id="candidateStatus">
+                <option value="pending">pending</option>
+                <option value="promoted">promoted</option>
+                <option value="rejected">rejected</option>
+                <option value="stale">stale</option>
+                <option value="snoozed">snoozed</option>
+              </select>
+            </label>
+            <label>감사 상태
+              <select id="candidateAuditState">
+                <option value="">전체</option>
+                <option value="unaudited">unaudited</option>
+                <option value="queued">queued</option>
+                <option value="running">running</option>
+                <option value="audited">audited</option>
+                <option value="failed_retryable">failed_retryable</option>
+                <option value="failed_terminal">failed_terminal</option>
+                <option value="triaged_no_audit">triaged_no_audit</option>
+                <option value="legacy_unknown">legacy_unknown</option>
+              </select>
+            </label>
+            <label>감사 판단
+              <select id="candidateAuditDecision">
+                <option value="">전체</option>
+                <option value="approve">approve</option>
+                <option value="needs_review">needs_review</option>
+                <option value="reject">reject</option>
+              </select>
+            </label>
           </div>
           <div class="actions">
             <button id="loadMemories">메모리 불러오기</button>
-            <button id="loadCandidates">감사 후보 불러오기</button>
+            <button id="loadCandidates">후보 backlog 불러오기</button>
           </div>
         </section>
         <div class="split">
@@ -195,11 +225,14 @@
           </section>
           <section class="panel">
             <h2>후보 검토</h2>
-            <p class="muted">GPT-5.5 감사 결과만 표시합니다. 자동승격 설정은 실제 저장 여부만 제어합니다.</p>
+            <p class="muted">목록 조회는 provider를 호출하지 않습니다. 실제 provider/model은 각 후보의 감사 이력에서 표시합니다.</p>
+            <div id="candidateSummary" class="muted"></div>
             <div class="actions bulkbar">
               <button id="selectAllCandidates">전체 선택</button>
               <button id="clearCandidateSelection">선택 해제</button>
+              <button id="auditSelectedCandidates">선택 후보 감사 제출</button>
               <button class="danger" id="rejectSelectedCandidates">선택 후보 거절</button>
+              <button id="nextCandidatePage" hidden>다음 페이지</button>
             </div>
             <div id="candidates" class="list"></div>
           </section>

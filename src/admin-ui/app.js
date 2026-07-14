@@ -4,6 +4,7 @@ const state = {
   scopeKeys: [],
   memories: [],
   candidates: [],
+  candidateCursor: null,
   runs: [],
 };
 
@@ -537,29 +538,55 @@ function auditDecisionLabel(audit) {
   return labels[String(audit.decision || '').toLowerCase()] || String(audit.decision || 'unknown');
 }
 
-async function loadAuditedCandidates() {
+async function loadAuditedCandidates({ cursor = null } = {}) {
   const scope = $('#memoryScope').value;
   const scopeKey = $('#memoryScopeKey').value;
   const sessionId = $('#candidateSession').value.trim();
   const checkpointId = $('#candidateCheckpoint').value.trim();
-  if (!sessionId && !checkpointId) {
-    state.candidates = [];
-    $('#candidates').innerHTML =
-      '<p class="muted">감사할 세션 또는 체크포인트를 선택하세요. 실행 기록에서 감사 후보 보기를 누르면 자동으로 채워집니다.</p>';
-    return;
-  }
-  const result = await call('auditMemoryCandidates', {
+  const result = await call('memoryCandidateBacklog', {
     scope,
     scopeKey,
-    trigger: 'manual_closeout',
-    ...(checkpointId ? { checkpointId } : { sessionId }),
-    limit: 10,
-    scanLimit: 100,
+    ...(checkpointId ? { checkpointId } : sessionId ? { sessionId } : {}),
+    status: $('#candidateStatus').value,
+    ...($('#candidateAuditState').value ? { auditState: $('#candidateAuditState').value } : {}),
+    ...($('#candidateAuditDecision').value ? { auditDecision: $('#candidateAuditDecision').value } : {}),
+    limit: 50,
+    page: true,
+    ...(cursor ? { cursor } : {}),
   });
-  state.candidates = result.proposals || [];
-  const warnings = (result.requestWarnings || []).map((warning) => warning.message || warning.code).join('\n');
-  const emptyMessage = warnings || 'GPT-5.5 감사 후보가 없습니다.';
-  $('#candidates').innerHTML = state.candidates.map(candidateItem).join('') || `<p class="muted">${escapeHtml(emptyMessage)}</p>`;
+  state.candidates = (result.page?.items || []).map((item) => ({
+    ...item.candidate,
+    candidateId: item.id,
+    disposition: item.status,
+    auditState: item.auditState,
+    auditDecision: item.auditDecision,
+    auditContentHash: item.auditContentHash,
+    audit: item.reviewMetadata?.audit || null,
+    auditReason: item.reviewReason,
+    reviewedAt: item.reviewedAt,
+    evidence: {
+      checkpointId: item.checkpointId,
+      sessionId: item.sessionId,
+      sourceAgent: item.source?.sourceAgent || null,
+      sourceProvenance: item.source?.sourceProvenance || null,
+    },
+    recommendedAction: item.auditDecision === 'approve' ? 'promote' : 'review',
+    source: item.source,
+  }));
+  state.candidateCursor = result.page?.page?.nextCursor || null;
+  const summary = result.summary || {};
+  $('#candidateSummary').textContent = [
+    `기준 ${result.asOf || ''}`,
+    `pending ${summary.pendingCandidateCount || 0}`,
+    `미감사 ${summary.byAuditState?.unaudited || 0}`,
+    `감사 대기/실행 ${Number(summary.byAuditState?.queued || 0) + Number(summary.byAuditState?.running || 0)}`,
+    `승인 후 대기 ${summary.byAuditDecision?.approve || 0}`,
+    `사람 검토 ${summary.byAuditDecision?.needs_review || 0}`,
+    `거절 권고 ${summary.byAuditDecision?.reject || 0}`,
+    `oldest ${summary.oldestPendingAt || '-'}`,
+  ].join(' · ');
+  $('#nextCandidatePage').hidden = !state.candidateCursor;
+  $('#candidates').innerHTML = state.candidates.map(candidateItem).join('') || '<p class="muted">현재 필터에 해당하는 후보가 없습니다.</p>';
   document.querySelectorAll('[data-candidate]').forEach((button) => {
     button.addEventListener('click', () => showDetail('감사 후보', state.candidates[Number(button.dataset.candidate)]));
   });
@@ -570,6 +597,9 @@ async function loadAuditedCandidates() {
       if (!key) return;
       const content = prompt('메모리 내용', candidate.content);
       if (!content) return;
+      const edited = key !== candidate.key || content !== candidate.content;
+      const revisionReason = edited ? prompt('감사된 원문을 수정해 승격하는 이유를 입력하세요.') : null;
+      if (edited && !revisionReason) return;
       await call('promoteMemoryCandidate', {
         scope,
         scopeKey,
@@ -580,6 +610,7 @@ async function loadAuditedCandidates() {
         tags: candidate.tags || [],
         importance: candidate.importance ?? 0,
         allowWarnings: true,
+        ...(edited ? { allowAuditRevisionOverride: true, reason: revisionReason } : {}),
       });
       await loadAuditedCandidates();
     });
@@ -608,14 +639,17 @@ function candidateItem(candidate, index) {
   const risks = Array.isArray(candidate.audit?.riskCodes) && candidate.audit.riskCodes.length
     ? ` · 위험 ${candidate.audit.riskCodes.join(', ')}`
     : '';
+  const provider = candidate.audit?.metadata?.provider || '미실행';
+  const model = candidate.audit?.metadata?.model || '';
+  const mutable = candidate.disposition === 'pending';
   return `<article class="item">
-    <header><span class="item-title"><input type="checkbox" data-candidate-select="${index}" aria-label="후보 선택" /><strong>${escapeHtml(candidate.key)}</strong></span><span class="muted">${escapeHtml(action)} · ${escapeHtml(decision)}</span></header>
+    <header><span class="item-title"><input type="checkbox" data-candidate-select="${index}" aria-label="후보 선택" ${mutable ? '' : 'disabled'} /><strong>${escapeHtml(candidate.key)}</strong></span><span class="muted">${escapeHtml(candidate.disposition)} · ${escapeHtml(candidate.auditState)} · ${escapeHtml(action)} · ${escapeHtml(decision)}</span></header>
     <p>${escapeHtml(candidate.content.slice(0, 220))}</p>
-    <p class="muted">GPT 감사 후보${escapeHtml(sourceText)} · ${escapeHtml(candidate.category || 'note')} · ${escapeHtml(candidate.auditReason || candidate.whyDurable || '')}${escapeHtml(risks)}</p>
+    <p class="muted">${escapeHtml(provider)}${model ? `/${escapeHtml(model)}` : ''}${escapeHtml(sourceText)} · ${escapeHtml(candidate.category || 'note')} · ${escapeHtml(candidate.auditReason || candidate.whyDurable || '')}${escapeHtml(risks)}</p>
     <div class="actions">
       <button data-candidate="${index}">상세</button>
-      <button data-promote="${index}" ${candidate.recommendedAction === 'promote' ? '' : 'disabled'}>승격</button>
-      <button class="danger" data-reject="${index}">거절</button>
+      <button data-promote="${index}" ${mutable && candidate.recommendedAction === 'promote' ? '' : 'disabled'}>승격</button>
+      <button class="danger" data-reject="${index}" ${mutable ? '' : 'disabled'}>거절</button>
     </div>
   </article>`;
 }
@@ -665,6 +699,32 @@ $('#selectAllCandidates').addEventListener('click', (event) => {
 $('#clearCandidateSelection').addEventListener('click', (event) => {
   event.preventDefault();
   setChecked('[data-candidate-select]', false);
+});
+
+$('#nextCandidatePage').addEventListener('click', async (event) => {
+  event.preventDefault();
+  if (state.candidateCursor) await loadAuditedCandidates({ cursor: state.candidateCursor });
+});
+
+$('#auditSelectedCandidates').addEventListener('click', async (event) => {
+  event.preventDefault();
+  const indexes = checkedIndexes('[data-candidate-select]');
+  if (!indexes.length) return;
+  if (indexes.length > 10) {
+    alert('감사 작업은 한 번에 최대 10개 후보만 제출할 수 있습니다.');
+    return;
+  }
+  const candidateIds = indexes.map((index) => state.candidates[index]?.candidateId).filter(Boolean);
+  if (!confirm(`선택한 후보 ${candidateIds.length}개를 durable 감사 작업으로 제출할까요?`)) return;
+  const result = await call('submitAuditJob', {
+    scope: $('#memoryScope').value,
+    scopeKey: $('#memoryScopeKey').value,
+    candidateIds,
+    trigger: 'manual_closeout',
+    limit: candidateIds.length,
+  });
+  alert(`감사 작업 ${result.jobId} · ${result.status}`);
+  await loadAuditedCandidates();
 });
 
 $('#rejectSelectedCandidates').addEventListener('click', async (event) => {

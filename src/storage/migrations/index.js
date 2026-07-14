@@ -35,6 +35,20 @@ export const SQLITE_MIGRATIONS = Object.freeze([
       ['embedding_jobs', 'completed_at', 'TEXT'],
     ].map(Object.freeze)),
   }),
+  Object.freeze({
+    version: 20,
+    id: 'v20-memory-candidate-lifecycle',
+    columns: Object.freeze([
+      ['memory_candidate_index', 'audit_state', "TEXT NOT NULL DEFAULT 'unaudited'"],
+      ['memory_candidate_index', 'audit_decision', 'TEXT'],
+      ['memory_candidate_index', 'audit_content_hash', 'TEXT'],
+      ['memory_candidate_index', 'latest_audit_attempt_id', 'TEXT'],
+      ['memory_candidate_index', 'snoozed_until', 'TEXT'],
+      ['memory_candidate_index', 'snooze_reason', 'TEXT'],
+      ['memory_candidate_index', 'snoozed_by', 'TEXT'],
+      ['memory_candidate_index', 'wake_up_status', 'TEXT'],
+    ].map(Object.freeze)),
+  }),
 ]);
 
 export function applySqliteMigrations({ supportedVersion, ensureColumn }) {
