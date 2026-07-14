@@ -268,6 +268,11 @@ scripts/install-agent-router-service.sh \
   승격하기 전에 어느 agent가 만든 후보인지 확인할 수 있다.
 
 `ingestAgentRoutedSessions --watch`는 기본 단일 router watcher로 쓸 수 있다.
+`--adapters`를 생략하면 각 adapter의 root directory 또는 DB 존재 여부를 보고
+설치된 것만 자동 활성화한다. 없는 런타임은 non-existent tree를 계속 걷지 않고
+`inactiveAdapters`에 남긴다. `--adapters cursor_cli`처럼 명시한 adapter가 없으면
+스캔하지 않고 결과에 `missing_root`로 표시한다. JSONL 기반 adapter는 공통
+incremental byte cursor를 쓰고, OpenCode는 설정된 SQLite DB가 있을 때만 읽는다.
 
 후보 lifecycle을 무인 운영할 때는 별도 supervised worker를 설치한다. 이
 worker는 registry의 각 canonical repo scope에서 snooze wake-up, idle audit
@@ -284,11 +289,15 @@ CLI의 `candidateLifecycleWorker` one-shot 기본값은 dry-run이다. installer
 실제 수렴을 위해 `--dryRun false`를 명시하며, 관찰 전용 canary에는
 `--dry-run true`를 사용한다. audit job claim은 registry의 같은 scope로
 fencing되어 다른 scope의 queued job을 가져오지 않는다.
-`--adapters`를 생략하면 각 adapter의 root directory 또는 DB 존재 여부를 보고
-설치된 것만 자동 활성화한다. 없는 런타임은 non-existent tree를 계속 걷지 않고
-`inactiveAdapters`에 남긴다. `--adapters cursor_cli`처럼 명시한 adapter가 없으면
-스캔하지 않고 결과에 `missing_root`로 표시한다. JSONL 기반 adapter는 공통
-incremental byte cursor를 쓰고, OpenCode는 설정된 SQLite DB가 있을 때만 읽는다.
+
+Packaged service는 scope당 due session `1개`, 해당 session의 candidate `2개`, audit
+job `1개`를 한 iteration에 처리하고 remote timeout을 `300000ms`로
+설정한다. Limit을 늘리면 최악의 sequential provider wall-clock보다
+remote timeout을 길게 잡아야 한다. Installer가 생성한 `0600` authority env
+file은 token env 뒤에 로드되어 remote storage mode와 URL을 강제하고,
+URL은 process command line에 노출하지 않는다. 세부 운영 contract와
+timeout 조정 기준은 [Memory candidate lifecycle](memory-candidate-lifecycle.md)과
+[Operations](operations.md)를 따른다.
 
 ## 빠른 시작
 

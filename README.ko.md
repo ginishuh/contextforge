@@ -106,6 +106,7 @@ node src/server.js
 ```
 
 - [Runtime mode](docs/runtime-modes.md)
+- [Memory candidate lifecycle](docs/memory-candidate-lifecycle.md)
 - [Readiness·metrics·backup·restore](docs/operations.md)
 - [Capability·scope authorization](docs/api-token-authorization.md)
 - [MCP profile·context budget](docs/mcp-surface-budget.md)
