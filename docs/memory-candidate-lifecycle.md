@@ -90,7 +90,7 @@ claim fenced to that same canonical scope. One failed scope does not prevent
 other configured scopes from progressing. The one-shot CLI defaults to dry-run;
 the packaged systemd installer passes `dryRun=false` explicitly.
 
-The packaged service uses conservative per-scope iteration defaults of one idle
+The packaged service uses conservative per-scope iteration defaults of one due
 session, two candidates from that session, and one audit job. Its generated
 `0600` authority environment file is loaded after the token environment file,
 forces remote storage mode and the configured URL, and keeps that URL out of the
