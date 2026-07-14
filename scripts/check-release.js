@@ -5,7 +5,7 @@ import path from 'node:path';
 
 const root = process.cwd();
 const reportFile = path.resolve(process.env.CONTEXTFORGE_RELEASE_REPORT || 'artifacts/release/package-report.json');
-const budgets = Object.freeze({ packedBytes: 400_000, unpackedBytes: 1_750_000, entryCount: 100 });
+const budgets = Object.freeze({ packedBytes: 600_000, unpackedBytes: 2_500_000, entryCount: 150 });
 const publishedScripts = Object.freeze([
   'scripts/benchmark-retrieval.js',
   'scripts/check-release.js',
@@ -75,8 +75,24 @@ async function inspectMarkdown(packageManifest) {
   let packageScriptReferences = 0;
   const localTargets = [];
   const commandTargets = [];
+  const releaseBudgetChecks = {
+    packedBytes: false,
+    unpackedBytes: false,
+    entryCount: false,
+  };
   for (const file of files) {
     const content = await fs.readFile(path.join(root, file), 'utf8');
+    if (file === 'docs/releases.md') {
+      releaseBudgetChecks.packedBytes = content.includes(
+        `- packed tarball: at most ${budgets.packedBytes.toLocaleString('en-US')} bytes;`,
+      );
+      releaseBudgetChecks.unpackedBytes = content.includes(
+        `- unpacked package: at most ${budgets.unpackedBytes.toLocaleString('en-US')} bytes;`,
+      );
+      releaseBudgetChecks.entryCount = content.includes(
+        `- package entries: at most ${budgets.entryCount.toLocaleString('en-US')}.`,
+      );
+    }
     for (const rawTarget of markdownTargets(content)) {
       const target = localTarget(rawTarget);
       if (!target) continue;
@@ -118,6 +134,7 @@ async function inspectMarkdown(packageManifest) {
     brokenLinks,
     missingCommandFiles,
     missingPackageScripts,
+    releaseBudgetChecks,
     localTargets,
     commandTargets,
   };
@@ -257,7 +274,8 @@ try {
   const markdownPassed =
     markdown.brokenLinks.length === 0 &&
     markdown.missingCommandFiles.length === 0 &&
-    markdown.missingPackageScripts.length === 0;
+    markdown.missingPackageScripts.length === 0 &&
+    Object.values(markdown.releaseBudgetChecks).every(Boolean);
   report = {
     kind: 'release_hygiene_report',
     passed: markdownPassed && publishedMarkdown.passed && versions.passed && packageResult.passed,

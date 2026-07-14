@@ -36,9 +36,12 @@ and unpacked size budgets. It writes the full inventory to
 
 Current budgets:
 
-- packed tarball: at most 400,000 bytes;
-- unpacked package: at most 1,500,000 bytes;
-- package entries: at most 90.
+- packed tarball: at most 600,000 bytes;
+- unpacked package: at most 2,500,000 bytes;
+- package entries: at most 150.
 
 Budget increases require an explicit review explaining which published files
-grew and why. Do not raise a limit only to turn CI green.
+grew and why. The July 2026 increase gives the lifecycle worker and packaged
+service installers reasonable growth headroom after the distribution reached
+about 348,000 packed bytes, 1,536,000 unpacked bytes, and 92 entries. Do not
+raise a limit only to turn CI green.

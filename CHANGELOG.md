@@ -9,10 +9,10 @@
   and transient-promotion rates, provider/model/prompt quality slices, and the
   share of active durable memories actually returned by retrieval. Retrieval
   usage stores only per-memory counters and timestamps, not queries. The npm
-  unpacked-size budget increased from 1.5 MB to 1.75 MB for the extracted
-  readiness, operational snapshot, lifecycle-quality modules, and bounded
-  follow-up growth. The entry-count budget is now 100 for the supervised
-  candidate lifecycle worker and installer; the packed-size budget is unchanged.
+  package budgets are now 600 KB packed, 2.5 MB unpacked, and 150 entries for
+  the extracted readiness and lifecycle-quality modules, the supervised
+  candidate lifecycle worker, packaged service installers, and bounded
+  follow-up growth.
 - Added a supervised candidate lifecycle worker that walks an explicit repo
   registry, wakes expired snoozes, queues idle small-session audits, applies
   bounded stale SLA transitions, and processes audit jobs within each canonical
