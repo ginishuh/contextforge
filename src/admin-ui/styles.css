@@ -107,6 +107,11 @@ fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 0 0 12px; 
 legend { color: var(--muted); }
 .provider-section[hidden] { display: none; }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.action-guidance {
+  align-self: center;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
 button {
   border: 1px solid var(--line);
   border-radius: 6px;
