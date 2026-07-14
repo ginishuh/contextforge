@@ -190,6 +190,7 @@ function inspectPackage() {
     'docs/runtime-modes.md',
     'docs/operations.md',
     'docs/skills/contextforge-memory/SKILL.md',
+    'docs/skills/contextforge-memory/agents/openai.yaml',
     ...publishedScripts,
   ];
   const forbiddenPatterns = [

@@ -10,8 +10,12 @@ only exist inside the ContextForge repo.
 The ContextForge repo packages the skill from:
 
 ```text
-docs/skills/contextforge-memory/SKILL.md
+docs/skills/contextforge-memory/
 ```
+
+Runtime installation copies `SKILL.md` and the UI metadata in
+`agents/openai.yaml`. `INSTALL.md` is public installation documentation, not a
+runtime skill file.
 
 When the skill changes, update the installed skill through the runtime's normal
 skill installation or update mechanism.
@@ -27,9 +31,8 @@ $contextforge-memory
 ```
 
 The installed skill should resolve as `contextforge-memory` in Codex's skill
-list. The source file in this repo is the package content to install or update
-from; it is not the path downstream `AGENTS.md` files should tell agents to
-read.
+list. The source package in this repo is the content to install or update from;
+it is not the path downstream `AGENTS.md` files should tell agents to read.
 
 ## Runtime Installation
 
@@ -54,6 +57,7 @@ For full ContextForge MCP workflow rules, use the installed
 After installing or updating the skill:
 
 1. Confirm the runtime lists or recognizes `contextforge-memory`.
+   Its default prompt should explicitly invoke `$contextforge-memory`.
 2. Start a fresh agent session.
 3. Ask the agent to use `$contextforge-memory` or invoke the skill by name.
 4. Confirm the skill guidance covers bootstrap, storage authority, session IDs,
