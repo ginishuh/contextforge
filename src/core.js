@@ -11,6 +11,7 @@ import { createEmbeddingProvider } from './embeddings/index.js';
 import { normalizeAgentAdapterIds } from './ingest/agents.js';
 import { submitMemoryCandidateAuditJob } from './memory/candidate_audit_jobs.js';
 import { buildMemoryCandidateBacklog } from './memory/candidate_backlog.js';
+import { candidateBacklogAuditPlanMethods } from './memory/candidate_backlog_audit_plan.js';
 import { candidateDispositionMethods } from './memory/candidate_dispositions.js';
 import { memoryCandidateRevisionHash } from './memory/candidate_revision.js';
 import { candidateStaleSlaMethods } from './memory/candidate_stale_sla.js';
@@ -3997,6 +3998,11 @@ export function createContextForge(options = {}) {
     config,
     ...candidateDispositionMethods({ config, useStore }),
     ...candidateStaleSlaMethods({ config, useStore }),
+    ...candidateBacklogAuditPlanMethods({
+      config, useStore, getEffectiveRuntime, getAutoPromoteAuditor, normalizeAllowedCategories,
+      auditCategories: AUDIT_CANDIDATE_CATEGORIES, auditCandidateWarnings, scorePromotionCandidate,
+      auditSkipWarnings: AUDIT_CANDIDATE_SKIP_WARNING_CODES,
+    }),
 
     close() {
       if (sharedStore) {

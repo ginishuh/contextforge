@@ -131,6 +131,28 @@ reason and appends actor, reason, queue, anchor, and policy provenance to
 `pending` without discarding that history, so stale remains a review
 disposition rather than a hard delete.
 
+## Deterministic backlog audit planning
+
+`planMemoryCandidateBacklogAudit` is a provider-free, read-only review
+operation. It scans at most 500 pending candidates in one canonical scope and
+uses the same deterministic safety warnings and prompt builder as the real
+candidate audit path. The plan reports:
+
+- candidates excluded by audit state or deterministic policy;
+- exact candidate groups and exact matches to active durable memory;
+- weak-evidence candidates old enough for a reversible stale suggestion;
+- the high-signal candidate ids selected for the next provider batch;
+- actual prompt characters plus estimated input/output tokens;
+- estimated USD only when both input and output per-million-token rates are
+  supplied by the caller.
+
+The planner never changes candidate state, creates a job, or invokes a
+provider. It does not hardcode model pricing. `asOf` can be fixed for a
+repeatable age calculation, explicit `candidateIds` are bounded at 500, and
+the executable audit batch remains bounded at 10 calls. Exact candidate
+grouping selects one stable representative; the other candidates remain
+unchanged until a later reviewed disposition step.
+
 ## Immutable audit provenance
 
 Every provider result is appended to `memory_candidate_audit_attempts`. The

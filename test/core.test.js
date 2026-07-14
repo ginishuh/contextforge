@@ -989,7 +989,7 @@ test('MCP tool profiles have exact bounded surfaces and reject invalid configura
   assert.deepEqual(MCP_TOOL_PROFILES['agent-core'], expectedAgentCore);
   assert.deepEqual(
     Object.fromEntries(Object.entries(MCP_TOOL_PROFILES).map(([name, tools]) => [name, tools.length])),
-    { 'agent-core': 24, review: 43, operator: 65, 'workspace-admin': 11, all: 71 },
+    { 'agent-core': 24, review: 44, operator: 66, 'workspace-admin': 11, all: 72 },
   );
   assert.deepEqual(MCP_TOOL_PROFILES.all, ALL_MCP_TOOL_NAMES);
 
@@ -1034,7 +1034,7 @@ test('MCP default profile stays within the context budget without requiring an i
     const surface = getContextForgeMcpSurfaceInfo(defaultServer);
     const allSurface = getContextForgeMcpSurfaceInfo(allServer);
     assert.equal(surface.toolCount, 24);
-    assert.equal(allSurface.toolCount, 71);
+    assert.equal(allSurface.toolCount, 72);
     assert.ok(surface.instructionsBytes <= 1600, `instructions=${surface.instructionsBytes}`);
     assert.ok(surface.toolSchemaBytes <= 26000, `schema=${surface.toolSchemaBytes}`);
     assert.ok(surface.estimatedInitialTokens <= 6700, `tokens=${surface.estimatedInitialTokens}`);
@@ -15122,7 +15122,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
       'list_preference_occurrences',
       'list_workspaces',
       'llm_usage_rollup',
-      'migrate_scope',
+      'migrate_scope', 'plan_memory_candidate_backlog_audit',
       'process_consolidations', 'process_due_candidate_audits', 'process_due_candidate_stale_transitions', 'process_due_candidate_wakeups',
       'process_due_distills',
       'process_embedding_jobs',
@@ -15179,6 +15179,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.ok(submitDistillJobTool.description.includes('return immediately'));
     const submitAuditJobTool = toolList.tools.find((tool) => tool.name === 'submit_audit_job');
     assert.ok(submitAuditJobTool.description.includes('once per selected candidate'));
+    const backlogPlanTool = toolList.tools.find((tool) => tool.name === 'plan_memory_candidate_backlog_audit'); assert.ok(backlogPlanTool.inputSchema.properties.maxProviderCalls); assert.ok(backlogPlanTool.inputSchema.properties.inputUsdPerMillionTokens); assert.equal(backlogPlanTool.annotations.readOnlyHint, true);
     const processJobsTool = toolList.tools.find((tool) => tool.name === 'process_jobs');
     assert.ok(processJobsTool.inputSchema.properties.leaseMs);
     assert.equal(processJobsTool.annotations.readOnlyHint, false);

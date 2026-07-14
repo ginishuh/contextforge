@@ -762,6 +762,34 @@ $('#nextCandidatePage').addEventListener('click', async (event) => {
   if (state.candidateCursor) await loadAuditedCandidates({ cursor: state.candidateCursor });
 });
 
+$('#planCandidateAudit').addEventListener('click', async (event) => {
+  event.preventDefault();
+  const indexes = checkedIndexes('[data-candidate-select]');
+  const candidateIds = indexes.map((index) => state.candidates[index]?.candidateId).filter(Boolean);
+  const result = await call('planMemoryCandidateBacklogAudit', {
+    scope: $('#memoryScope').value,
+    scopeKey: $('#memoryScopeKey').value,
+    ...(candidateIds.length ? { candidateIds, limit: candidateIds.length } : { limit: 100 }),
+    ...($('#candidateAuditState').value ? { auditState: $('#candidateAuditState').value } : {}),
+    maxProviderCalls: 10,
+  });
+  const planned = result.costEstimate?.plannedBatch || {};
+  const inventory = result.inventory || {};
+  $('#candidateAuditPlan').textContent = [
+    `기준 ${result.asOf}`,
+    `스캔 ${inventory.scannedCount || 0}`,
+    `provider 대상 ${inventory.providerEligibleCount || 0}`,
+    `이번 batch 호출 ${planned.providerCalls || 0}`,
+    `예상 입력 ${planned.estimatedInputTokens || 0} tokens`,
+    `예상 출력 ${planned.estimatedOutputTokens || 0} tokens`,
+    `deterministic triage ${inventory.byClassification?.deterministic_triage || 0}`,
+    `exact duplicate ${Number(inventory.byClassification?.exact_candidate_duplicate || 0) + Number(inventory.byClassification?.exact_durable_duplicate || 0)}`,
+    `stale 제안 ${inventory.staleSuggestedCount || 0}`,
+    planned.estimatedUsd == null ? '비용 단가 미입력' : `예상 비용 $${planned.estimatedUsd}`,
+    '이 dry-run은 candidate 상태를 바꾸거나 provider를 호출하지 않습니다.',
+  ].join('\n');
+});
+
 $('#auditSelectedCandidates').addEventListener('click', async (event) => {
   event.preventDefault();
   const indexes = checkedIndexes('[data-candidate-select]');

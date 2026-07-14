@@ -166,6 +166,8 @@ function toCoreOptions(options) {
     operation: options.operation,
     status: options.status,
     candidateType: options.candidateType,
+    auditState: options.auditState,
+    sourceAgent: options.sourceAgent,
     promotionRecommendation: options.promotionRecommendation,
     trigger: options.trigger,
     dryRun: cliBooleanOption(options.dryRun, 'dryRun'),
@@ -233,6 +235,21 @@ function toCoreOptions(options) {
     idleMs: options.idleMs == null ? undefined : Number(options.idleMs),
     activeRunMaxAgeMs: options.activeRunMaxAgeMs == null ? undefined : Number(options.activeRunMaxAgeMs),
     charsPerToken: options.charsPerToken == null ? undefined : Number(options.charsPerToken),
+    candidateIds: options.candidateIds
+      ? String(options.candidateIds)
+          .split(',')
+          .map((item) => item.trim())
+          .filter(Boolean)
+      : undefined,
+    maxProviderCalls: options.maxProviderCalls == null ? undefined : Number(options.maxProviderCalls),
+    estimatedOutputTokensPerCall:
+      options.estimatedOutputTokensPerCall == null ? undefined : Number(options.estimatedOutputTokensPerCall),
+    inputUsdPerMillionTokens:
+      options.inputUsdPerMillionTokens == null ? undefined : Number(options.inputUsdPerMillionTokens),
+    outputUsdPerMillionTokens:
+      options.outputUsdPerMillionTokens == null ? undefined : Number(options.outputUsdPerMillionTokens),
+    asOf: options.asOf,
+    includeCandidates: cliBooleanOption(options.includeCandidates, 'includeCandidates'),
     rawTailLimit: options.rawTailLimit == null ? undefined : Number(options.rawTailLimit),
     latestCheckpointLimit: options.latestCheckpointLimit == null ? undefined : Number(options.latestCheckpointLimit),
     relatedScopeKeys: options.relatedScopeKeys
@@ -383,6 +400,8 @@ async function main() {
       app.listMemoryEvents(preserveCoreLimitDefault(coreOptions, rawOptions)),
     listMemoryCandidates: (app, coreOptions, rawOptions) =>
       app.listMemoryCandidates(preserveCoreLimitDefault(coreOptions, rawOptions)),
+    planMemoryCandidateBacklogAudit: (app, coreOptions, rawOptions) =>
+      app.planMemoryCandidateBacklogAudit(preserveCoreLimitDefault(coreOptions, rawOptions)),
     listPreferenceOccurrences: (app, coreOptions, rawOptions) =>
       app.listPreferenceOccurrences(preserveCoreLimitDefault(coreOptions, rawOptions)),
     listMemoryUpdateCandidates: (app, coreOptions, rawOptions) =>
