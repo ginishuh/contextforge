@@ -190,11 +190,7 @@ test('candidate lifecycle service installer writes a remote bounded worker unit'
     path.join(home, '.config', 'systemd', 'user', 'contextforge-candidate-lifecycle-test.service'),
     'utf8',
   );
-  assert.match(unit, /Environment=CONTEXTFORGE_STORAGE_MODE=remote/);
-  assert.ok(
-    unit.indexOf('EnvironmentFile=') < unit.indexOf('Environment=CONTEXTFORGE_STORAGE_MODE=remote'),
-    'remote storage mode must override conflicting values from the token env file',
-  );
+  assert.match(unit, /ExecStart="[^"]*env" "CONTEXTFORGE_STORAGE_MODE=remote" "CONTEXTFORGE_REMOTE_URL=http:\/\/127\.0\.0\.1:8766"/);
   assert.match(unit, /candidateLifecycleWorker/);
   assert.match(unit, /--watch --dryRun "false"/);
   assert.match(unit, /--auditLimit "3"/);
@@ -214,10 +210,7 @@ test('candidate lifecycle service installer writes a remote bounded worker unit'
     path.join(home, '.config', 'systemd', 'user', 'contextforge-agent-router-router-test.service'),
     'utf8',
   );
-  assert.ok(
-    routerUnit.indexOf('EnvironmentFile=') < routerUnit.indexOf('Environment=CONTEXTFORGE_STORAGE_MODE=remote'),
-    'router remote storage mode must override conflicting values from the token env file',
-  );
+  assert.match(routerUnit, /ExecStart="[^"]*env" "CONTEXTFORGE_STORAGE_MODE=remote" "CONTEXTFORGE_REMOTE_URL=http:\/\/127\.0\.0\.1:8766"/);
 });
 
 test('lifecycle scope resolver rejects non-canonical and empty registries', async () => {
@@ -230,7 +223,7 @@ test('lifecycle scope resolver rejects non-canonical and empty registries', asyn
   await assert.rejects(resolveCandidateLifecycleScopes({ repoRegistry: empty }), /no enabled canonical scopes/);
 });
 
-test('all packaged remote watcher installers force remote mode after token env loading', async () => {
+test('all packaged remote watcher installers force remote mode in ExecStart', async () => {
   for (const file of [
     'scripts/install-agent-router-service.sh',
     'scripts/install-candidate-lifecycle-worker-service.sh',
@@ -239,9 +232,6 @@ test('all packaged remote watcher installers force remote mode after token env l
     'scripts/install-codex-watch-service.sh',
   ]) {
     const source = await fs.readFile(file, 'utf8');
-    assert.ok(
-      source.indexOf('EnvironmentFile=') < source.indexOf('Environment=CONTEXTFORGE_STORAGE_MODE=remote'),
-      `${file} must force remote storage mode after loading its token env file`,
-    );
+    assert.match(source, /ExecStart=.*CONTEXTFORGE_STORAGE_MODE=remote.*CONTEXTFORGE_REMOTE_URL=/);
   }
 });

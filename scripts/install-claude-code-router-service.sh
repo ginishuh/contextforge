@@ -10,6 +10,7 @@ interval_ms="${CONTEXTFORGE_CLAUDE_CODE_WATCH_INTERVAL_MS:-30000}"
 since_minutes="${CONTEXTFORGE_CLAUDE_CODE_WATCH_SINCE_MINUTES:-1440}"
 distill="${CONTEXTFORGE_CLAUDE_CODE_WATCH_DISTILL:-auto}"
 node_bin="${NODE:-node}"
+env_bin="${CONTEXTFORGE_ENV_BIN:-$(command -v env)}"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -85,10 +86,8 @@ After=network-online.target
 Type=simple
 WorkingDirectory=${repo_root}
 EnvironmentFile=-${token_env_file}
-Environment=CONTEXTFORGE_STORAGE_MODE=remote
-Environment=CONTEXTFORGE_REMOTE_URL=${remote_url}
 Environment=CONTEXTFORGE_WATCH_STATE_DIR=%h/.local/state/contextforge/watch
-ExecStart=${node_bin} ${repo_root}/src/cli.js ingestClaudeCodeRoutedSessions --projectsDir ${projects_dir} --repoRegistry ${repo_registry} --sinceMinutes ${since_minutes} --distill ${distill} --watch --intervalMs ${interval_ms}
+ExecStart=${env_bin} CONTEXTFORGE_STORAGE_MODE=remote CONTEXTFORGE_REMOTE_URL=${remote_url} ${node_bin} ${repo_root}/src/cli.js ingestClaudeCodeRoutedSessions --projectsDir ${projects_dir} --repoRegistry ${repo_registry} --sinceMinutes ${since_minutes} --distill ${distill} --watch --intervalMs ${interval_ms}
 Restart=always
 RestartSec=10
 
