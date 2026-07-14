@@ -1683,6 +1683,22 @@ checkpoint or its candidates does not restart that clock.
 Quiet-time inference is reported as `sourceSignal: "inferred_idle"`; it is not
 an adapter terminal signal.
 
+Run all bounded candidate lifecycle stages continuously with an explicit repo
+registry:
+
+```bash
+node src/cli.js candidateLifecycleWorker \
+  --repoRegistry /srv/contextforge/repos.json \
+  --watch \
+  --dryRun false \
+  --intervalMs 60000
+```
+
+The one-shot command defaults to dry-run. The watch loop handles each canonical
+scope independently and fences audit-job claims to that scope. Use
+`scripts/install-candidate-lifecycle-worker-service.sh` to install the equivalent
+remote-backed systemd user unit.
+
 Snooze a pending candidate only with a finite review deadline:
 
 ```bash

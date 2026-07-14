@@ -83,6 +83,13 @@ The default inferred-idle grace period is ten minutes and can be changed with
 not stored as an adapter terminal signal. Explicit terminal detection remains
 adapter-specific and must not be inferred from a quiet period.
 
+For unattended convergence, run `candidateLifecycleWorker` against an explicit
+scope or repo registry. Each iteration wakes due snoozes, enqueues bounded idle
+audits, applies bounded stale-SLA transitions, and processes audit jobs with a
+claim fenced to that same canonical scope. One failed scope does not prevent
+other configured scopes from progressing. The one-shot CLI defaults to dry-run;
+the packaged systemd installer passes `dryRun=false` explicitly.
+
 ## Snooze and wake-up SLA
 
 `snoozeMemoryCandidate` moves one `pending` candidate to `snoozed`. It requires

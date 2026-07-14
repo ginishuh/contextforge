@@ -75,6 +75,47 @@ average and reported as clock-skew anomalies.
 
 Every HTTP response includes `X-Request-Id`. A supplied `X-Request-Id` is
 preserved (bounded to 128 characters); otherwise the server generates one.
+
+## Candidate lifecycle worker
+
+The lifecycle APIs are bounded and safe to call independently, but unattended
+convergence requires a supervised caller. Preview one pass with no mutations:
+
+```bash
+node src/cli.js candidateLifecycleWorker \
+  --repoRegistry /srv/contextforge/repos.json
+```
+
+Apply one pass only after reviewing that output:
+
+```bash
+node src/cli.js candidateLifecycleWorker \
+  --repoRegistry /srv/contextforge/repos.json \
+  --dryRun false
+```
+
+Each enabled registry entry is a separate canonical repo scope. The worker
+wakes expired snoozes, queues idle-session audits, applies stale-SLA transitions,
+and claims audit jobs in that same scope. Defaults are 5 due sessions, 5
+candidates per session, 25 wake-ups, 25 stale transitions, and 5 audit jobs per
+scope per iteration. A failure is isolated to its scope and reported in the
+iteration summary.
+
+Install the remote-backed systemd user service:
+
+```bash
+scripts/install-candidate-lifecycle-worker-service.sh \
+  --name all-repos \
+  --repo-registry /srv/contextforge/repos.json \
+  --remote-url https://memory.example.com
+```
+
+The installer writes a mutating worker unit with `--dryRun false`; use
+`--dry-run true` for an observation-only canary. Its token environment file must
+grant review and operator capabilities for every configured scope. Queue work
+then appears in `/readyz` operation-worker freshness and `/metrics`. The unit
+loads the token file before forcing remote storage mode, so a server-owned env
+file cannot accidentally switch the worker to direct-local access.
 Durable distill/audit submissions over HTTP JSON or HTTP MCP persist that
 request id with the existing job, session, and checkpoint identifiers.
 

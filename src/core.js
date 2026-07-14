@@ -4952,8 +4952,16 @@ export function createContextForge(options = {}) {
       if (operations?.some((operation) => !allowedOperations.has(operation))) {
         throw new Error('operation must be distill_checkpoint or audit_memory_candidates.');
       }
+      const shouldNarrowScope = Boolean(
+        options.scope || options.scopeType || options.scopeKey || options.cwd || options.repoPath,
+      );
+      const jobScope = shouldNarrowScope ? normalizeScopeOptions(options, config) : null;
       const claimed = useStore((store) =>
-        store.claimOperationJobs({ workerId, limit, leaseMs, operations }),
+        store.claimOperationJobs({
+          workerId, limit, leaseMs, operations,
+          scopeType: jobScope?.scopeType || null,
+          scopeKey: jobScope?.scopeKey || null,
+        }),
       );
       const result = {
         kind: 'operation_job_batch',

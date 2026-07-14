@@ -533,8 +533,7 @@ export function createContextForgeMcpServer({
       title: 'Bootstrap Context',
       description:
         'Resolve scoped ContextForge memory for startup/resume/compaction recovery in one call. Includes query-independent latest checkpoint handoff (default 1, max 3) before search results, plus a compact memoryMap for progressive durable-memory navigation. Pass workspaceKey to add a separate bounded workspace federation block; workspace profiles define which existing scopes are consulted together and do not change storage mode. Pass consultReason to distinguish startup/resume/compaction_recovery/agent_switch from active_session, targeted_search, or live_state_check. During active work, prefer search for file/API/error/domain lookups and live sources for mutable state. Does not create a session; pass a known Codex/Claude/ContextForge sessionId to load session working state. rawTailLimit defaults to 0; set a positive value to include raw tail.',
-      inputSchema: {
-        ...scopedSchema,
+      inputSchema: { ...scopedSchema,
         query: z.string(),
         consultReason: consultReasonSchema.optional(),
         sessionId: z.string().optional(),
@@ -759,8 +758,9 @@ export function createContextForgeMcpServer({
     {
       title: 'Process Operation Jobs',
       description:
-        'Claim and execute one bounded durable job batch as an operator worker. Expired leases are recovered before claims. This call waits for claimed provider work to finish.',
+        'Claim and execute one bounded durable job batch as an operator worker, optionally fenced to one scope. Expired leases are recovered only within that fence before claims. This call waits for claimed provider work to finish.',
       inputSchema: {
+        ...scopedSchema,
         operation: z.enum(['distill_checkpoint', 'audit_memory_candidates']).optional(),
         operations: z.array(z.enum(['distill_checkpoint', 'audit_memory_candidates'])).optional(),
         limit: z.number().int().positive().max(25).optional(),
