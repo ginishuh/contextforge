@@ -175,6 +175,71 @@ test('candidate stale SLA inventory is bounded and transitions with queue and an
   app.close();
 });
 
+test('candidate stale SLA inventory preserves every queue threshold mapping', async () => {
+  const dataDir = await makeTempDir();
+  const env = { CONTEXTFORGE_DATA_DIR: dataDir };
+  const thresholds = {
+    unaudited: ['UNAUDITED', 1000],
+    triagedNoAudit: ['TRIAGED_NO_AUDIT', 2000],
+    failedRetryable: ['FAILED_RETRYABLE', 3000],
+    failedTerminal: ['FAILED_TERMINAL', 4000],
+    legacyUnknown: ['LEGACY_UNKNOWN', 5000],
+    approvedAwaitingPromotion: ['APPROVED', 6000],
+    needsReview: ['NEEDS_REVIEW', 7000],
+    rejectRecommended: ['REJECT_RECOMMENDED', 8000],
+    auditedUnknown: ['AUDITED_UNKNOWN', 9000],
+  };
+  for (const [, [envName, slaMs]] of Object.entries(thresholds)) {
+    env[`CONTEXTFORGE_CANDIDATE_SLA_${envName}_MS`] = String(slaMs);
+  }
+  const store = new ContextForgeStore({ dataDir });
+  const app = createContextForge({ env, cwd: process.cwd(), store });
+  const scope = { scope: 'repo', scopeType: 'repo', scopeKey: 'stale-sla-queue-map' };
+  const sessionId = 'codex:stale-sla-queue-map';
+  const raw = app.appendRaw({ ...scope, sessionId, role: 'assistant', content: 'Create every SLA queue.' });
+  store.insertCheckpoint({
+    ...scope,
+    sessionId,
+    summaryShort: 'Every stale SLA queue.',
+    summaryText: 'Synthetic candidates for table-driven SLA routing.',
+    provider: 'synthetic_provider',
+    coversFrom: raw.createdAt,
+    coversTo: raw.createdAt,
+    sourceEventCount: 1,
+    metadata: {
+      sourceRawEventIds: [raw.id],
+      memoryCandidates: Object.keys(thresholds).map(memoryCandidate),
+    },
+  });
+  const byKey = new Map(app.listMemoryCandidates({ ...scope, status: 'pending' })
+    .map((candidate) => [candidate.candidate.key, candidate]));
+  const oldAt = new Date(Date.now() - 60000).toISOString();
+  store.db.prepare('UPDATE memory_candidate_index SET created_at = ? WHERE scope_type = ? AND scope_key = ?')
+    .run(oldAt, scope.scopeType, scope.scopeKey);
+  const queueStates = {
+    triagedNoAudit: ['triaged_no_audit', null],
+    failedRetryable: ['failed_retryable', null],
+    failedTerminal: ['failed_terminal', null],
+    legacyUnknown: ['legacy_unknown', null],
+    approvedAwaitingPromotion: ['audited', 'approve'],
+    needsReview: ['audited', 'needs_review'],
+    rejectRecommended: ['audited', 'reject'],
+    auditedUnknown: ['audited', null],
+  };
+  for (const [key, [auditState, auditDecision]] of Object.entries(queueStates)) {
+    store.db.prepare(`
+      UPDATE memory_candidate_index SET audit_state = ?, audit_decision = ?, reviewed_at = ? WHERE id = ?
+    `).run(auditState, auditDecision, oldAt, byKey.get(key).id);
+  }
+  const inventory = app.listDueCandidateStaleTransitions({ ...scope, limit: 20 });
+  assert.equal(inventory.totalDueCount, 9);
+  assert.deepEqual(
+    Object.fromEntries(inventory.candidates.map((item) => [item.queue, item.slaMs])),
+    Object.fromEntries(Object.entries(thresholds).map(([queue, [, slaMs]]) => [queue, slaMs])),
+  );
+  app.close();
+});
+
 test('candidate stale SLA operations have scoped review and operator contracts', async () => {
   assert.deepEqual(
     ['listDueCandidateStaleTransitions', 'reopenStaleMemoryCandidate'].map((name) => ({
