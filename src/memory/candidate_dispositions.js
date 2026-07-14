@@ -19,10 +19,13 @@ function boundedLimit(value, fallback = 50, max = 500) {
   return parsed;
 }
 
-function normalizedFutureIso(value, nowMs) {
+function normalizedFutureIso(value, nowMs, maxSnoozeMs = 90 * 24 * 60 * 60 * 1000) {
   const parsed = Date.parse(String(value || ''));
   if (!Number.isFinite(parsed)) throw new Error('snoozedUntil must be a valid date-time.');
   if (parsed <= nowMs) throw new Error('snoozedUntil must be in the future.');
+  if (parsed - nowMs > maxSnoozeMs) {
+    throw new Error(`snoozedUntil must be no more than ${maxSnoozeMs}ms in the future.`);
+  }
   return new Date(parsed).toISOString();
 }
 
@@ -47,7 +50,7 @@ export function snoozeCandidate(store, scope, options = {}) {
   requireOption(options.reason, 'reason');
   requireOption(options.actor, 'actor');
   const now = new Date();
-  const snoozedUntil = normalizedFutureIso(options.snoozedUntil, now.getTime());
+  const snoozedUntil = normalizedFutureIso(options.snoozedUntil, now.getTime(), options.maxSnoozeMs);
   const wakeUpStatus = options.wakeUpStatus || 'pending';
   if (wakeUpStatus !== 'pending') throw new Error('wakeUpStatus must be pending.');
   return store.withTransaction(() => {
@@ -74,11 +77,11 @@ export function snoozeCandidate(store, scope, options = {}) {
     const updated = store.db.prepare(`
       UPDATE memory_candidate_index
       SET status = 'snoozed', snoozed_until = ?, snooze_reason = ?, snoozed_by = ?, wake_up_status = ?,
-          reviewed_at = ?, review_reason = ?, review_metadata_json = ?
+          review_metadata_json = ?
       WHERE scope_type = ? AND scope_key = ? AND id = ? AND status = 'pending'
         AND audit_state NOT IN ('queued', 'running')
     `).run(
-      snoozedUntil, options.reason, options.actor, wakeUpStatus, at, options.reason, JSON.stringify(metadata),
+      snoozedUntil, options.reason, options.actor, wakeUpStatus, JSON.stringify(metadata),
       scope.scopeType, scope.scopeKey, candidate.id,
     );
     if (updated.changes !== 1) {
@@ -126,10 +129,10 @@ export function wakeCandidate(store, scope, options = {}) {
     const updated = store.db.prepare(`
       UPDATE memory_candidate_index
       SET status = ?, snoozed_until = NULL, snooze_reason = NULL, snoozed_by = NULL, wake_up_status = NULL,
-          reviewed_at = ?, review_reason = ?, review_metadata_json = ?
+          review_metadata_json = ?
       WHERE scope_type = ? AND scope_key = ? AND id = ? AND status = 'snoozed' AND snoozed_until = ?
     `).run(
-      wakeUpStatus, at, options.reason, JSON.stringify(metadata), scope.scopeType, scope.scopeKey,
+      wakeUpStatus, JSON.stringify(metadata), scope.scopeType, scope.scopeKey,
       candidate.id, candidate.snoozedUntil,
     );
     if (updated.changes !== 1) {
@@ -197,7 +200,7 @@ export function candidateDispositionMethods({ config, useStore }) {
   return {
     snoozeMemoryCandidate(options = {}) {
       const scope = normalizeScopeOptions(options, config);
-      return useStore((store) => snoozeCandidate(store, scope, options));
+      return useStore((store) => snoozeCandidate(store, scope, { ...options, maxSnoozeMs: config.candidateSnooze.maxMs }));
     },
     wakeMemoryCandidate(options = {}) {
       const scope = normalizeScopeOptions(options, config);
@@ -208,7 +211,7 @@ export function candidateDispositionMethods({ config, useStore }) {
       return useStore((store) => listDueCandidateWakeups(store, scope, options));
     },
     processDueCandidateWakeups(options = {}) {
-      if (!options.scope && !options.scopeType && !options.scopeKey && !options.cwd && !options.repoPath) {
+      if (!((options.scope || options.scopeType) && options.scopeKey) && !options.cwd && !options.repoPath) {
         throw new Error('processDueCandidateWakeups requires one explicit canonical scope.');
       }
       const scope = normalizeScopeOptions(options, config);

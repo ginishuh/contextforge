@@ -87,7 +87,9 @@ adapter-specific and must not be inferred from a quiet period.
 
 `snoozeMemoryCandidate` moves one `pending` candidate to `snoozed`. It requires
 a finite future `snoozedUntil`, a reason, an actor, and the wake-up target
-`pending`. Permanent snooze is not accepted. Candidates with a `queued` or
+`pending`. The default maximum is 90 days and can be changed with
+`CONTEXTFORGE_CANDIDATE_SNOOZE_MAX_MS`; permanent or over-limit snooze is not
+accepted. Candidates with a `queued` or
 `running` audit cannot be snoozed because that would race the immutable job
 selection.
 

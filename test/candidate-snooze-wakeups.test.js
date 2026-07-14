@@ -28,7 +28,10 @@ test('candidate snooze requires a finite epoch and expired wake-up is bounded an
   const dataDirPromise = makeTempDir();
   return dataDirPromise.then((dataDir) => {
     const store = new ContextForgeStore({ dataDir });
-    const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd(), store });
+    const app = createContextForge({
+      env: { CONTEXTFORGE_DATA_DIR: dataDir, CONTEXTFORGE_CANDIDATE_SNOOZE_MAX_MS: '120000' },
+      cwd: process.cwd(), store,
+    });
     const scope = { scope: 'repo', scopeType: 'repo', scopeKey: 'snooze-repo' };
     const sessionId = 'codex:snooze-session';
     const raw = app.appendRaw({ ...scope, sessionId, role: 'assistant', content: 'Create snooze candidates.' });
@@ -45,6 +48,13 @@ test('candidate snooze requires a finite epoch and expired wake-up is bounded an
         reason: 'Invalid past snooze.', actor: 'reviewer-1',
       }),
       /must be in the future/,
+    );
+    assert.throws(
+      () => app.snoozeMemoryCandidate({
+        ...scope, candidateId: first.id, snoozedUntil: new Date(Date.now() + 121000).toISOString(),
+        reason: 'Invalid excessive snooze.', actor: 'reviewer-1',
+      }),
+      /no more than 120000ms/,
     );
     store.db.prepare("UPDATE memory_candidate_index SET audit_state = 'queued' WHERE id = ?").run(second.id);
     assert.throws(
@@ -107,6 +117,8 @@ test('candidate snooze requires a finite epoch and expired wake-up is bounded an
     assert.equal(woken.snoozeReason, null);
     assert.equal(woken.snoozedBy, null);
     assert.equal(woken.wakeUpStatus, null);
+    assert.equal(woken.reviewedAt, null);
+    assert.equal(woken.reviewReason, null);
     assert.deepEqual(woken.reviewMetadata.lifecycleEvents.map((event) => event.type), ['snoozed', 'woken']);
     assert.equal(woken.reviewMetadata.lifecycleEvents[1].snoozedUntil, expiredAt);
     assert.equal(app.processDueCandidateWakeups({ ...scope }).dueCount, 0);
@@ -130,7 +142,7 @@ test('candidate snooze requires a finite epoch and expired wake-up is bounded an
   });
 });
 
-test('candidate snooze operations have scoped review and operator contracts', () => {
+test('candidate snooze operations have scoped review and operator contracts', async () => {
   assert.deepEqual(
     ['snoozeMemoryCandidate', 'wakeMemoryCandidate', 'listDueCandidateWakeups'].map((name) => ({
       name, capability: operationByName(name).capability, scopeMode: operationByName(name).scopeMode,
@@ -145,4 +157,8 @@ test('candidate snooze operations have scoped review and operator contracts', ()
     { capability: operationByName('processDueCandidateWakeups').capability, scopeMode: operationByName('processDueCandidateWakeups').scopeMode },
     { capability: 'operator', scopeMode: 'scoped' },
   );
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+  assert.throws(() => app.processDueCandidateWakeups({ scope: 'repo' }), /explicit canonical scope/);
+  app.close();
 });

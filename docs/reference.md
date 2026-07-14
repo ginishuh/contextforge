@@ -1699,7 +1699,9 @@ candidate-status plus snooze-epoch CAS before reopening to `pending`. Manual
 `wakeMemoryCandidate` can reopen early. Snooze is rejected while an audit is
 `queued` or `running`, and every transition retains actor/reason provenance in
 the candidate lifecycle history. To extend a snooze, wake the current epoch and
-create a new finite snooze rather than changing its deadline in place.
+create a new finite snooze rather than changing its deadline in place. The
+default maximum is 90 days; set `CONTEXTFORGE_CANDIDATE_SNOOZE_MAX_MS` to an
+explicit positive millisecond limit when a different policy is required.
 
 Queue provider work durably when it must outlive the submitting request:
 
