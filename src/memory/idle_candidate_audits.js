@@ -18,10 +18,6 @@ function truthy(value) {
   return value === true || value === 'true' || value === '1' || value === 1;
 }
 
-function latestIso(...values) {
-  return values.filter(Boolean).sort().at(-1) || null;
-}
-
 function errorSummary(error) {
   return {
     name: error?.name || 'Error',
@@ -84,11 +80,15 @@ export function listIdleCandidateAudits({
       continue;
     }
     const raw = store.getRawEventFingerprint({ ...candidateScope, sessionId: candidate.sessionId });
-    const latestActivityAt = latestIso(raw.lastRawEventAt, candidate.latestCandidateAt, latestCheckpoint.createdAt);
-    const latestActivityMs = Date.parse(latestActivityAt || '');
-    const idleElapsedMs = Number.isFinite(latestActivityMs) ? Math.max(0, nowMs - latestActivityMs) : null;
-    if (idleElapsedMs != null && idleElapsedMs < idleMs) {
-      skipped.push({ ...candidate, latestActivityAt, idleElapsedMs, reason: 'idle_window' });
+    const lastRawEventAt = raw.lastRawEventAt || null;
+    const lastRawEventMs = Date.parse(lastRawEventAt || '');
+    if (!Number.isFinite(lastRawEventMs)) {
+      skipped.push({ ...candidate, reason: 'missing_raw_event' });
+      continue;
+    }
+    const idleElapsedMs = Math.max(0, nowMs - lastRawEventMs);
+    if (idleElapsedMs < idleMs) {
+      skipped.push({ ...candidate, lastRawEventAt, idleElapsedMs, reason: 'idle_window' });
       continue;
     }
     const sourceWatermark = candidateAuditSourceWatermark({
@@ -99,7 +99,7 @@ export function listIdleCandidateAudits({
     });
     sessions.push({
       ...candidate,
-      latestActivityAt,
+      lastRawEventAt,
       idleElapsedMs,
       latestCheckpointId: latestCheckpoint.id,
       latestCheckpointAt: latestCheckpoint.createdAt,

@@ -8680,6 +8680,11 @@ test('durable distill jobs deduplicate submission and persist result provenance'
   assert.equal(first.status, 'queued');
   assert.equal(first.jobId, duplicate.jobId);
   assert.equal(duplicate.deduplicated, true);
+  assert.deepEqual(Object.keys(first.job.metadata.sourceFingerprint).sort(), [
+    'lastRawEventId',
+    'latestCheckpointId',
+    'rawEventCount',
+  ]);
   assert.equal(JSON.stringify(first.job).includes('must-not-persist'), false);
   assert.equal(invocations, 0);
   assert.equal(app.dbInfo().tables.operationJobs, 1);

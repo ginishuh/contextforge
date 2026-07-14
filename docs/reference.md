@@ -1678,6 +1678,8 @@ raw-event fingerprint plus checkpoint `coversTo`, and enqueue revalidates that
 watermark transactionally. A late event therefore becomes a later audit epoch
 instead of silently changing the source selected by the queued job. The default
 idle grace is ten minutes (`CONTEXTFORGE_AUTO_PROMOTE_AUDIT_IDLE_CLOSEOUT_MS`).
+The grace period is measured from the last raw event; creating the required
+checkpoint or its candidates does not restart that clock.
 Quiet-time inference is reported as `sourceSignal: "inferred_idle"`; it is not
 an adapter terminal signal.
 

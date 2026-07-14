@@ -79,6 +79,14 @@ test('idle candidate audits fence late events and queue small sessions without t
   assert.equal(active.dueCount, 0);
   assert.deepEqual(active.skipReasonCounts, { idle_window: 2 });
 
+  const oldRawAt = new Date(Date.now() - 60000).toISOString();
+  store.db.prepare('UPDATE raw_events SET created_at = ? WHERE session_id = ?').run(oldRawAt, 'codex:small-1');
+  const rawIdle = app.listDueCandidateAudits({ ...repo, idleMs: 30000 });
+  assert.equal(rawIdle.dueCount, 1);
+  assert.equal(rawIdle.sessions[0].sessionId, 'codex:small-1');
+  assert.equal(rawIdle.sessions[0].lastRawEventAt, oldRawAt);
+  assert.ok(Date.parse(rawIdle.sessions[0].latestCheckpointAt) > Date.parse(oldRawAt));
+
   const due = app.listDueCandidateAudits({ ...repo, idleMs: 0 });
   assert.equal(due.dueCount, 2);
   assert.ok(due.sessions.every((session) => session.eligibleCandidateCount === 1));

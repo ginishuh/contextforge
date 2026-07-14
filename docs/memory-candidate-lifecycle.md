@@ -64,6 +64,10 @@ queues a bounded `session` audit job; it does not call the provider itself.
 The mutating process call requires one explicit canonical scope; it never
 creates a workspace-wide or mixed-scope batch.
 
+Quiet time is measured from the last raw event. A later checkpoint or candidate
+creation time does not restart the grace period; checkpoint existence remains a
+separate eligibility condition.
+
 Every idle inventory row freezes a source watermark with the raw-event count,
 last raw-event id/time, raw fingerprint, latest checkpoint id, and `coversTo`.
 The enqueue transaction compares that watermark with current storage. A late
