@@ -68,6 +68,9 @@ const AGENT_CORE_TOOLS = Object.freeze([
 const REVIEW_EXTRA_TOOLS = Object.freeze([
   'submit_audit_job',
   'list_due_candidate_audits',
+  'list_due_candidate_wakeups',
+  'snooze_memory_candidate',
+  'wake_memory_candidate',
   'list_memory_events',
   'list_preference_occurrences',
   'list_memory_update_candidates',
@@ -894,6 +897,32 @@ export function createContextForgeMcpServer({
     async (args) => jsonResult(await app.processDueCandidateAudits(args)),
   );
 
+  registerTool(
+    'list_due_candidate_wakeups',
+    {
+      title: 'List Due Candidate Wake-ups',
+      description: 'List a bounded provider-free inventory of snoozed candidates whose finite snooze period expired.',
+      inputSchema: { ...scopedSchema, limit: z.number().int().positive().max(500).optional(), order: z.enum(['asc', 'desc']).optional() },
+      annotations: { title: 'List Due Candidate Wake-ups', idempotentHint: true },
+    },
+    async (args) => jsonResult(await app.listDueCandidateWakeups(args)),
+  );
+
+  registerTool(
+    'process_due_candidate_wakeups',
+    {
+      title: 'Process Due Candidate Wake-ups',
+      description: 'Reactivate a bounded canonical-scope batch of expired snoozes with per-candidate CAS results.',
+      inputSchema: {
+        ...scopedSchema, limit: z.number().int().positive().max(500).optional(),
+        order: z.enum(['asc', 'desc']).optional(), dryRun: z.boolean().optional(),
+        actor: z.string().optional(), reason: z.string().optional(),
+      },
+      annotations: { title: 'Process Due Candidate Wake-ups', idempotentHint: true },
+    },
+    async (args) => jsonResult(await app.processDueCandidateWakeups(args)),
+  );
+
   const consolidationSchema = {
     ...scopedSchema,
     sessionId: z.string().optional(),
@@ -1708,6 +1737,31 @@ export function createContextForgeMcpServer({
       },
     },
     async (args) => jsonResult(await app.rejectMemoryCandidate(args)),
+  );
+
+  registerTool(
+    'snooze_memory_candidate',
+    {
+      title: 'Snooze Memory Candidate',
+      description: 'Snooze one pending candidate until a required finite future time while preserving actor and reason.',
+      inputSchema: {
+        ...scopedSchema, candidateId: z.string(), snoozedUntil: z.string(), reason: z.string(),
+        actor: z.string(), wakeUpStatus: z.literal('pending').optional(),
+      },
+      annotations: { title: 'Snooze Memory Candidate', idempotentHint: true },
+    },
+    async (args) => jsonResult(await app.snoozeMemoryCandidate(args)),
+  );
+
+  registerTool(
+    'wake_memory_candidate',
+    {
+      title: 'Wake Memory Candidate',
+      description: 'Explicitly reopen one snoozed candidate before or after expiry and record actor and reason.',
+      inputSchema: { ...scopedSchema, candidateId: z.string(), reason: z.string(), actor: z.string() },
+      annotations: { title: 'Wake Memory Candidate', idempotentHint: true },
+    },
+    async (args) => jsonResult(await app.wakeMemoryCandidate(args)),
   );
 
   registerTool(

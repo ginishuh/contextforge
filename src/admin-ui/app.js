@@ -566,6 +566,10 @@ async function loadAuditedCandidates({ cursor = null } = {}) {
     audit: item.reviewMetadata?.audit || null,
     auditReason: item.reviewReason,
     reviewedAt: item.reviewedAt,
+    snoozedUntil: item.snoozedUntil,
+    snoozeReason: item.snoozeReason,
+    snoozedBy: item.snoozedBy,
+    wakeUpStatus: item.wakeUpStatus,
     evidence: {
       checkpointId: item.checkpointId,
       sessionId: item.sessionId,
@@ -591,6 +595,7 @@ async function loadAuditedCandidates({ cursor = null } = {}) {
       `승인 후 대기 ${summary.approvedAwaitingPromotionCount || 0}`,
       `사람 검토 ${summary.pendingNeedsReviewCount || 0}`,
       `거절 권고 ${summary.pendingRejectRecommendedCount || 0}`,
+      `snoozed ${summary.byStatus?.snoozed || 0}`,
       `oldest ${summary.oldestPendingAt || '-'}`,
     ].join(' · ');
   }
@@ -633,6 +638,31 @@ async function loadAuditedCandidates({ cursor = null } = {}) {
       await loadAuditedCandidates();
     });
   });
+  document.querySelectorAll('[data-snooze]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const candidate = state.candidates[Number(button.dataset.snooze)];
+      const defaultUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+      const snoozedUntil = prompt('재검토 시각을 ISO date-time으로 입력하세요.', defaultUntil);
+      if (!snoozedUntil) return;
+      const reason = prompt('후보를 잠시 미루는 이유를 입력하세요.');
+      if (!reason) return;
+      await call('snoozeMemoryCandidate', {
+        scope, scopeKey, candidateId: candidate.candidateId, snoozedUntil, reason, actor: 'admin-ui',
+      });
+      await loadAuditedCandidates();
+    });
+  });
+  document.querySelectorAll('[data-wake]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const candidate = state.candidates[Number(button.dataset.wake)];
+      const reason = prompt('후보를 다시 pending으로 여는 이유를 입력하세요.', 'Manual review resumed.');
+      if (!reason) return;
+      await call('wakeMemoryCandidate', {
+        scope, scopeKey, candidateId: candidate.candidateId, reason, actor: 'admin-ui',
+      });
+      await loadAuditedCandidates();
+    });
+  });
 }
 
 $('#loadCandidates').addEventListener('click', async (event) => {
@@ -651,13 +681,17 @@ function candidateItem(candidate, index) {
   const provider = candidate.audit?.metadata?.provider || '미실행';
   const model = candidate.audit?.metadata?.model || '';
   const mutable = candidate.disposition === 'pending';
+  const wakeable = candidate.disposition === 'snoozed';
+  const snoozeText = wakeable ? ` · 재검토 ${candidate.snoozedUntil || '미지정'}` : '';
   return `<article class="item">
     <header><span class="item-title"><input type="checkbox" data-candidate-select="${index}" aria-label="후보 선택" ${mutable ? '' : 'disabled'} /><strong>${escapeHtml(candidate.key)}</strong></span><span class="muted">${escapeHtml(candidate.disposition)} · ${escapeHtml(candidate.auditState)} · ${escapeHtml(action)} · ${escapeHtml(decision)}</span></header>
     <p>${escapeHtml(candidate.content.slice(0, 220))}</p>
-    <p class="muted">${escapeHtml(provider)}${model ? `/${escapeHtml(model)}` : ''}${escapeHtml(sourceText)} · ${escapeHtml(candidate.category || 'note')} · ${escapeHtml(candidate.auditReason || candidate.whyDurable || '')}${escapeHtml(risks)}</p>
+    <p class="muted">${escapeHtml(provider)}${model ? `/${escapeHtml(model)}` : ''}${escapeHtml(sourceText)} · ${escapeHtml(candidate.category || 'note')} · ${escapeHtml(candidate.auditReason || candidate.whyDurable || '')}${escapeHtml(risks)}${escapeHtml(snoozeText)}</p>
     <div class="actions">
       <button data-candidate="${index}">상세</button>
       <button data-promote="${index}" ${mutable && candidate.recommendedAction === 'promote' ? '' : 'disabled'}>승격</button>
+      <button data-snooze="${index}" ${mutable ? '' : 'disabled'}>미루기</button>
+      <button data-wake="${index}" ${wakeable ? '' : 'disabled'}>다시 열기</button>
       <button class="danger" data-reject="${index}" ${mutable ? '' : 'disabled'}>거절</button>
     </div>
   </article>`;
