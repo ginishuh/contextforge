@@ -200,6 +200,7 @@ test('routing persistence failure does not erase a successful immutable audit', 
   const checkpoint = await app.distillCheckpoint(source);
   const result = await app.auditMemoryCandidates({ ...source, checkpointId: checkpoint.id, trigger: 'manual_closeout' });
   assert.match(result.proposals[0].promotionRoutingError?.message || JSON.stringify(result.proposals[0]), /synthetic routing write failure/);
+  assert.equal(result.proposals[0].recommendedAction, 'route_before_promote');
   const [candidate] = app.listMemoryCandidates({ ...source, checkpointId: checkpoint.id, status: 'pending' });
   assert.equal(candidate.auditState, 'audited');
   assert.equal(candidate.auditDecision, 'approve');

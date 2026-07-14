@@ -3996,7 +3996,7 @@ export function createContextForge(options = {}) {
     ...candidateBacklogAuditPlanMethods({
       config, useStore, getEffectiveRuntime, getAutoPromoteAuditor, normalizeAllowedCategories,
       auditCategories: AUDIT_CANDIDATE_CATEGORIES, auditCandidateWarnings, scorePromotionCandidate,
-      auditSkipWarnings: new Set([...AUDIT_CANDIDATE_SKIP_WARNING_CODES, 'existing_key_conflict', 'candidate_refinement_requires_update', 'candidate_supersedes_requires_update', 'candidate_conflict_requires_update']),
+      auditSkipWarnings: AUDIT_CANDIDATE_SKIP_WARNING_CODES,
     }),
 
     close() {
