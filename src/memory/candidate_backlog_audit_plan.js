@@ -144,6 +144,7 @@ export function buildMemoryCandidateBacklogAuditPlan({
     ? Array.from(new Set(options.candidateIds.map(String)))
     : [];
   if (candidateIds.length > 500) throw new Error('candidateIds supports at most 500 items.');
+  const effectiveScanLimit = candidateIds.length || scanLimit;
   const candidates = store.listMemoryCandidates({
     ...scope,
     status: 'pending',
@@ -154,7 +155,7 @@ export function buildMemoryCandidateBacklogAuditPlan({
     category: options.category || null,
     sourceAgent: options.sourceAgent || null,
     sort: options.order === 'desc' ? null : 'oldest',
-    limit: candidateIds.length || scanLimit,
+    limit: effectiveScanLimit,
   });
   const foundIds = new Set(candidates.map((candidate) => candidate.id));
   const missingCandidateIds = candidateIds.filter((candidateId) => !foundIds.has(candidateId));
@@ -268,7 +269,8 @@ export function buildMemoryCandidateBacklogAuditPlan({
     readOnly: true,
     providerInvoked: false,
     policy: {
-      scanLimit,
+      scanLimit: effectiveScanLimit,
+      requestedScanLimit: scanLimit,
       order: options.order === 'desc' ? 'desc' : 'asc',
       maxProviderCalls,
       staleAfterMs,

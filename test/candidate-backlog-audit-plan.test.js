@@ -191,6 +191,8 @@ test('candidate backlog audit plan reports missing explicit ids and has a scoped
   });
   assert.deepEqual(plan.inventory.missingCandidateIds, ['missing-candidate']);
   assert.equal(plan.inventory.scannedCount, 0);
+  assert.equal(plan.policy.scanLimit, 1);
+  assert.equal(plan.policy.requestedScanLimit, 100);
   assert.equal(plan.costEstimate.plannedBatch.providerCalls, 0);
   app.close();
 });
