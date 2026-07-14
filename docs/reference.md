@@ -1732,6 +1732,31 @@ settings:
 - `CONTEXTFORGE_CANDIDATE_SLA_REJECT_RECOMMENDED_MS`
 - `CONTEXTFORGE_CANDIDATE_SLA_AUDITED_UNKNOWN_MS`
 
+Plan deterministic triage and provider cost before submitting any backlog
+audit job:
+
+```bash
+node src/cli.js planMemoryCandidateBacklogAudit \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --limit 100 \
+  --maxProviderCalls 10 \
+  --charsPerToken 4 \
+  --estimatedOutputTokensPerCall 250 \
+  --inputUsdPerMillionTokens 2 \
+  --outputUsdPerMillionTokens 8
+```
+
+This review-capability operation is provider-free and read-only. It reuses the
+real audit safety rules and prompt builder, groups exact candidate duplicates,
+detects exact active durable-memory matches, marks weak old candidates as stale
+suggestions, excludes those stale suggestions from paid audit selection, and
+reports both the next bounded batch and the full eligible
+inventory. Omit the two price inputs when only call and token estimates are
+needed; ContextForge does not hardcode model pricing. Supplying one price
+without the other is rejected. Admin UI exposes the same plan as `감사 비용
+dry-run` and does not mutate candidates.
+
 Queue provider work durably when it must outlive the submitting request:
 
 ```bash

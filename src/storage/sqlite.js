@@ -3453,9 +3453,10 @@ export class ContextForgeStore {
       values.push(...candidateIds);
     }
     if (after) {
+      const comparison = sort === 'oldest' ? '>' : '<';
       conditions.push(`(
-        memory_candidate_index.created_at < ? OR
-        (memory_candidate_index.created_at = ? AND memory_candidate_index.id < ?)
+        memory_candidate_index.created_at ${comparison} ? OR
+        (memory_candidate_index.created_at = ? AND memory_candidate_index.id ${comparison} ?)
       )`);
       values.push(after[0], after[0], after[1]);
     }
@@ -3478,8 +3479,8 @@ export class ContextForgeStore {
           memory_candidate_index.stability DESC,
           memory_candidate_index.created_at DESC,
           memory_candidate_index.id DESC`
-        : 'memory_candidate_index.created_at DESC, memory_candidate_index.id DESC';
-
+        : sort === 'oldest' ? 'memory_candidate_index.created_at ASC, memory_candidate_index.id ASC'
+          : 'memory_candidate_index.created_at DESC, memory_candidate_index.id DESC';
     return this.db
       .prepare(`
         SELECT
@@ -3498,7 +3499,6 @@ export class ContextForgeStore {
       .all(...values)
       .map(hydrateMemoryCandidate);
   }
-
   memoryLifecycleSummary(options) {
     return summarizeMemoryLifecycle(this, options);
   }
