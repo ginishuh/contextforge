@@ -8,7 +8,9 @@
   review/operator surfaces from the specialized Admin UI and HTTP/core backlog
   aggregate. The MCP audit submission schema now exposes the core's explicit
   bounded `candidateIds` backlog source, and regression tests guard both the
-  tool schema and packaged-skill lifecycle contract.
+  tool schema and packaged-skill lifecycle contract. Packaged Codex UI metadata
+  now ships with an explicit `$contextforge-memory` prompt and candidate-review
+  description so runtime installations do not drift from the skill body.
 - Added operation-worker freshness to `/readyz` with a bounded startup grace
   period and an explicit `operation_worker_stale` reason. Operational metrics
   now include candidate throughput/latency, audit decision and routing

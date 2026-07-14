@@ -53,6 +53,7 @@ test('release hygiene validates docs, versions, and the npm package boundary', a
 
 test('packaged memory skill covers the candidate backlog lifecycle', async () => {
   const skill = await fs.readFile('docs/skills/contextforge-memory/SKILL.md', 'utf8');
+  const metadata = await fs.readFile('docs/skills/contextforge-memory/agents/openai.yaml', 'utf8');
   for (const contract of [
     'list_memory_candidates',
     'memoryCandidateBacklog',
@@ -71,4 +72,6 @@ test('packaged memory skill covers the candidate backlog lifecycle', async () =>
   ]) {
     assert.ok(skill.includes(contract), `missing candidate lifecycle skill contract: ${contract}`);
   }
+  assert.match(metadata, /short_description: "Scoped memory, distillation, and candidate review"/);
+  assert.match(metadata, /default_prompt: "Use \$contextforge-memory /);
 });
