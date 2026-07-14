@@ -49,6 +49,13 @@ export const SQLITE_MIGRATIONS = Object.freeze([
       ['memory_candidate_index', 'wake_up_status', 'TEXT'],
     ].map(Object.freeze)),
   }),
+  Object.freeze({
+    version: 21,
+    id: 'v21-operation-worker-freshness',
+    columns: Object.freeze([
+      ['operation_jobs', 'worker_observed_at', 'TEXT'],
+    ].map(Object.freeze)),
+  }),
 ]);
 
 export function applySqliteMigrations({ supportedVersion, ensureColumn }) {

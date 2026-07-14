@@ -85,9 +85,19 @@ function renderPrometheusMetrics(snapshot, serverMetrics) {
   for (const [status, count] of Object.entries(snapshot.queues.operationJobs)) {
     lines.push(`contextforge_operation_jobs{status="${prometheusLabel(status)}"} ${count}`);
   }
+  for (const [operation, worker] of Object.entries(snapshot.queues.operationWorkers)) {
+    lines.push(
+      `contextforge_operation_worker_active_leases_by_operation{operation="${prometheusLabel(operation)}"} ${worker.activeLeases}`,
+      `contextforge_operation_worker_last_activity_age_ms_by_operation{operation="${prometheusLabel(operation)}"} ${worker.lastActivityAgeMs ?? -1}`,
+      `contextforge_operation_worker_observed_by_operation{operation="${prometheusLabel(operation)}"} ${worker.lastActivityAt ? 1 : 0}`,
+    );
+  }
   lines.push(
     `contextforge_operation_job_oldest_wait_ms ${snapshot.queues.oldestQueuedWaitMs}`,
     `contextforge_operation_jobs_stale_running ${snapshot.queues.staleRunningJobs}`,
+    `contextforge_operation_worker_active_leases ${snapshot.queues.operationWorker.activeLeases}`,
+    `contextforge_operation_worker_last_activity_age_ms ${snapshot.queues.operationWorker.lastActivityAgeMs ?? -1}`,
+    `contextforge_operation_worker_observed ${snapshot.queues.operationWorker.lastActivityAt ? 1 : 0}`,
     '# TYPE contextforge_embedding_jobs gauge',
   );
   for (const [status, count] of Object.entries(snapshot.queues.embeddingJobs)) {
@@ -106,11 +116,47 @@ function renderPrometheusMetrics(snapshot, serverMetrics) {
       `contextforge_llm_operation_duration_ms_average{operation="${prometheusLabel(item.operation)}",status="${prometheusLabel(item.status)}"} ${item.averageElapsedMs || 0}`,
     );
   }
+  for (const [status, count] of Object.entries(snapshot.memoryLifecycle.candidates.byStatus)) {
+    lines.push(`contextforge_memory_candidates{status="${prometheusLabel(status)}"} ${count}`);
+  }
+  for (const [decision, count] of Object.entries(snapshot.memoryLifecycle.candidates.byAuditDecision)) {
+    lines.push(`contextforge_memory_candidate_audit_decisions{decision="${prometheusLabel(decision)}"} ${count}`);
+  }
+  for (const [event, count] of Object.entries(snapshot.memoryLifecycle.candidates.last24h)) {
+    lines.push(`contextforge_memory_candidate_events_24h{event="${prometheusLabel(event)}"} ${count}`);
+  }
+  for (const [classification, count] of Object.entries(snapshot.memoryLifecycle.routingClassifications)) {
+    lines.push(`contextforge_memory_candidate_routing{classification="${prometheusLabel(classification)}"} ${count}`);
+  }
+  for (const item of snapshot.memoryLifecycle.auditVariants) {
+    const labels = `provider="${prometheusLabel(item.provider)}",model="${prometheusLabel(item.model || '')}",prompt_version="${prometheusLabel(item.promptVersion || '')}"`;
+    lines.push(
+      `contextforge_memory_audit_attempts{${labels}} ${item.attempts}`,
+      `contextforge_memory_audit_approval_rate{${labels}} ${item.approvalRate || 0}`,
+      `contextforge_memory_audit_rejection_rate{${labels}} ${item.rejectionRate || 0}`,
+      `contextforge_memory_audit_correction_rate{${labels}} ${item.correctionRate || 0}`,
+      `contextforge_memory_audit_correction_eligible_promotions{${labels}} ${item.eligiblePromotions30d}`,
+    );
+  }
   lines.push(
     `contextforge_llm_usage_events_total ${snapshot.providers.usage.events}`,
     `contextforge_llm_tokens_total ${snapshot.providers.usage.totalTokens}`,
     `contextforge_llm_failures_total ${snapshot.providers.usage.failures}`,
     `contextforge_provider_timeouts_total ${snapshot.providers.usage.timeouts}`,
+    `contextforge_memory_candidate_oldest_pending_age_ms ${snapshot.memoryLifecycle.latest.oldestPendingAgeMs}`,
+    `contextforge_memory_candidate_conversion_rate ${snapshot.memoryLifecycle.candidates.conversionRate || 0}`,
+    `contextforge_memory_candidate_conversion_rate_24h ${snapshot.memoryLifecycle.candidates.last24h.conversionRate || 0}`,
+    `contextforge_memory_closeout_to_audit_average_ms ${snapshot.memoryLifecycle.latency.closeoutToAuditAverageMs || 0}`,
+    `contextforge_memory_audit_to_promotion_average_ms ${snapshot.memoryLifecycle.latency.auditToPromotionAverageMs || 0}`,
+    `contextforge_memory_audit_to_promotion_clock_skew_total ${snapshot.memoryLifecycle.latency.auditToPromotionClockSkewCount}`,
+    `contextforge_memory_promotion_quality_eligible_7d ${snapshot.memoryLifecycle.promotionQuality.eligiblePromotions7d}`,
+    `contextforge_memory_promotion_quality_eligible_30d ${snapshot.memoryLifecycle.promotionQuality.eligiblePromotions30d}`,
+    `contextforge_memory_corrected_or_deactivated_within_7d_rate ${snapshot.memoryLifecycle.promotionQuality.correctedOrDeactivatedWithin7dRate || 0}`,
+    `contextforge_memory_corrected_or_deactivated_within_30d_rate ${snapshot.memoryLifecycle.promotionQuality.correctedOrDeactivatedWithin30dRate || 0}`,
+    `contextforge_memory_duplicate_active_rate ${snapshot.memoryLifecycle.promotionQuality.duplicateActiveMemoryRate || 0}`,
+    `contextforge_memory_transient_promotion_rate ${snapshot.memoryLifecycle.promotionQuality.transientPromotionRate || 0}`,
+    `contextforge_memory_retrieved_active_rate ${snapshot.memoryLifecycle.retrievalUsage.retrievedActiveMemoryRate || 0}`,
+    `contextforge_memory_retrieval_counter_write_failures_total ${snapshot.memoryLifecycle.retrievalUsage.counterWriteFailures}`,
     `contextforge_disk_available_bytes ${snapshot.disk.availableBytes}`,
     `contextforge_provider_active ${snapshot.providerExecution.active.length}`,
     `contextforge_runtime_child_processes ${runtimeChildSnapshot().active}`,

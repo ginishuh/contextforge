@@ -349,6 +349,11 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
         'CONTEXTFORGE_READINESS_MAX_QUEUED_JOBS',
         1000,
       ),
+      readinessWorkerStaleAfterMs: parsePositiveInteger(
+        env.CONTEXTFORGE_READINESS_WORKER_STALE_AFTER_MS,
+        'CONTEXTFORGE_READINESS_WORKER_STALE_AFTER_MS',
+        5 * 60 * 1000,
+      ),
       shutdownTimeoutMs: parsePositiveInteger(
         env.CONTEXTFORGE_SHUTDOWN_TIMEOUT_MS,
         'CONTEXTFORGE_SHUTDOWN_TIMEOUT_MS',

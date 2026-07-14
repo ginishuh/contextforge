@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Added operation-worker freshness to `/readyz` with a bounded startup grace
+  period and an explicit `operation_worker_stale` reason. Operational metrics
+  now include candidate throughput/latency, audit decision and routing
+  distributions, 7/30-day correction or deactivation rates, active duplicate
+  and transient-promotion rates, provider/model/prompt quality slices, and the
+  share of active durable memories actually returned by retrieval. Retrieval
+  usage stores only per-memory counters and timestamps, not queries. The npm
+  unpacked-size budget increased from 1.5 MB to 1.75 MB for the extracted
+  readiness, operational snapshot, lifecycle-quality modules, and bounded
+  follow-up growth; the packed-size and entry-count budgets remain unchanged.
+
 ## 0.5.1 - 2026-07-10
 
 - Reworked the English and Korean READMEs into synchronized quick-start entry

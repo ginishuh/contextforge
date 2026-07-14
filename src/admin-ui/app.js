@@ -9,6 +9,8 @@ const state = {
   candidateSummary: null,
   candidateAsOf: null,
   runs: [],
+  readiness: null,
+  metrics: null,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -154,14 +156,18 @@ function showDistillDetail(bundle) {
 }
 
 async function refreshRuntime() {
-  const [runtime, db, scopeKeys] = await Promise.all([
+  const [runtime, db, scopeKeys, readiness, metrics] = await Promise.all([
     call('getRuntimeSettings'),
     call('dbInfo'),
     call('listScopeKeys', { limit: 500 }),
+    call('readiness'),
+    call('operationalMetrics').catch(() => null),
   ]);
   state.runtime = runtime;
   state.db = db;
   state.scopeKeys = scopeKeys;
+  state.readiness = readiness;
+  state.metrics = metrics;
   $('#connection').textContent = `${db.connection.summary} · ${db.storageMode} · schema ${db.schemaVersion}`;
   const effective = runtime.effective;
   const runtimeRows = [
@@ -195,6 +201,29 @@ async function refreshRuntime() {
     $('#policySummary'),
     Object.entries(effective.distillPolicy).map(([key, value]) => [DISTILL_POLICY_LABELS[key] || key, value]),
   );
+  const worker = readiness.checks.operationWorker;
+  const requiredWorkers = Object.entries(worker.operations || {})
+    .filter(([, operationWorker]) => operationWorker.required)
+    .map(([operation, operationWorker]) => {
+      const age = operationWorker.lastActivityAgeMs == null ? '관측 없음' : `${operationWorker.lastActivityAgeMs}ms 전`;
+      return `${operation}: lease ${operationWorker.activeLeases}, ${age}, ${operationWorker.ok ? '정상' : 'stale'}`;
+    });
+  dl($('#readinessSummary'), [
+    ['상태', readiness.ready ? '준비됨' : '점검 필요'],
+    ['대기 작업', readiness.checks.operationQueue.queued],
+    ['활성 worker lease', worker.activeLeases],
+    ['마지막 worker 활동', worker.lastActivityAt || '기록 없음'],
+    ['작업 종류별 worker', requiredWorkers.length > 0 ? requiredWorkers.join('\n') : '대기 작업 없음'],
+    ['worker 판정', worker.ok ? '정상' : `${worker.reason || '비정상'}: ${(worker.staleOperations || []).join(', ')}`],
+  ]);
+  const quality = metrics?.memoryLifecycle;
+  dl($('#qualitySummary'), quality ? [
+    ['후보 → durable 전환율', quality.candidates.conversionRate == null ? '표본 없음' : `${(quality.candidates.conversionRate * 100).toFixed(2)}%`],
+    ['7일 내 정정/비활성화', quality.promotionQuality.correctedOrDeactivatedWithin7dRate == null ? '표본 없음' : `${(quality.promotionQuality.correctedOrDeactivatedWithin7dRate * 100).toFixed(2)}%`],
+    ['활성 중복률', quality.promotionQuality.duplicateActiveMemoryRate == null ? '표본 없음' : `${(quality.promotionQuality.duplicateActiveMemoryRate * 100).toFixed(2)}%`],
+    ['transient 오승격률', quality.promotionQuality.transientPromotionRate == null ? '표본 없음' : `${(quality.promotionQuality.transientPromotionRate * 100).toFixed(2)}%`],
+    ['retrieval 사용 memory', `${quality.retrievalUsage.retrievedActiveMemoryCount}/${quality.retrievalUsage.activeMemoryCount}`],
+  ] : [['상태', 'operator 권한이 있어야 품질 지표를 볼 수 있습니다.']]);
   fillSettingsForm();
   fillScopeKeySelects();
 }

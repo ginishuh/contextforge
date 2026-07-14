@@ -18,6 +18,7 @@ import { candidateStaleSlaMethods } from './memory/candidate_stale_sla.js';
 import { assertMemoryUpdateTarget, buildAuditedPromotionProposal, durableMemoryRevisionHash, finalizeRoutedSourceCandidate, persistApprovedAuditRouting, promotionRoutingResult, routeAuditedMemoryCandidates } from './memory/audited_candidate_routing.js';
 import { dueDistillSessionSummary, listIdleCandidateAudits, processIdleCandidateAudits } from './memory/idle_candidate_audits.js';
 import { createRemoteContextForge } from './remote/client.js';
+import { buildOperationalReadiness } from './operations/readiness.js';
 import { searchMemories } from './retrieval/search.js';
 import {
   assertProviderTimeoutFitsClient,
@@ -3201,6 +3202,7 @@ export function createContextForge(options = {}) {
     return withStore(config, fn);
   };
   let lastRawPruneAt = 0;
+  const retrievalUsageTelemetry = { counterWriteFailures: 0, lastCounterWriteFailureAt: null };
   const providerConcurrencyLimit = config.providerExecution.concurrencyLimit;
 
   function operationKey(operation, scope, source) {
@@ -3662,7 +3664,7 @@ export function createContextForge(options = {}) {
   }
 
   function searchStoreWithScope(store, scope, options, queryEmbedding = null) {
-    return searchMemories(store, {
+    const results = searchMemories(store, {
       ...scope,
       query: options.query,
       limit: options.limit,
@@ -3672,6 +3674,15 @@ export function createContextForge(options = {}) {
       sharedScopeKey: options.sharedScopeKey || config.defaultSharedScopeKey,
       queryEmbedding,
     });
+    try {
+      store.recordMemoryRetrievals(
+        results.filter((result) => result.type === 'memory' && result.memory?.id).map((result) => result.memory.id),
+      );
+    } catch {
+      retrievalUsageTelemetry.counterWriteFailures += 1;
+      retrievalUsageTelemetry.lastCounterWriteFailureAt = new Date().toISOString();
+    }
+    return results;
   }
 
   function searchWithScope(scope, options) {
@@ -4010,68 +4021,32 @@ export function createContextForge(options = {}) {
     },
 
     readiness() {
+      return useStore((store) => buildOperationalReadiness({
+        snapshot: store.operationalSnapshot(),
+        dbState: buildDbInfo(store),
+        config,
+        embeddingEnabled: Boolean(embeddingProvider),
+      }));
+    },
+    operationalMetrics() {
       return useStore((store) => {
-        const snapshot = store.operationalSnapshot();
-        const dbState = buildDbInfo(store);
-        const embeddingState = dbState.embeddings;
-        const checks = {
-          database: {
-            ok:
-              snapshot.database.queryOk &&
-              snapshot.database.writable &&
-              snapshot.database.schemaVersion === snapshot.database.supportedSchemaVersion,
-            schemaVersion: snapshot.database.schemaVersion,
-            supportedSchemaVersion: snapshot.database.supportedSchemaVersion,
-            writable: snapshot.database.writable,
-          },
-          disk: {
-            ok: snapshot.disk.availableBytes >= config.operations.readinessMinFreeBytes,
-            availableBytes: snapshot.disk.availableBytes,
-            minimumBytes: config.operations.readinessMinFreeBytes,
-          },
-          operationQueue: {
-            ok:
-              snapshot.queues.operationJobs.queued <= config.operations.readinessMaxQueuedJobs &&
-              snapshot.queues.staleRunningJobs === 0,
-            queued: snapshot.queues.operationJobs.queued,
-            running: snapshot.queues.operationJobs.running,
-            staleRunning: snapshot.queues.staleRunningJobs,
-            maximumQueued: config.operations.readinessMaxQueuedJobs,
-          },
-          embeddings: {
-            ok:
-              !embeddingProvider ||
-              (dbState.vector.sqliteVecAvailable && snapshot.queues.embeddingJobs.failed === 0),
-            enabled: Boolean(embeddingProvider),
-            degraded: embeddingState.degraded,
-            vectorAvailable: dbState.vector.sqliteVecAvailable,
-            pending: snapshot.queues.embeddingJobs.pending,
-            processing: snapshot.queues.embeddingJobs.processing,
-            failed: snapshot.queues.embeddingJobs.failed,
-            staleSources: embeddingState.coverage?.staleSources || 0,
-          },
+        const memoryLifecycle = store.memoryLifecycleQualitySnapshot({
+          transientCategories: Array.from(AUTO_TRANSIENT_CATEGORIES),
+        });
+        memoryLifecycle.retrievalUsage = {
+          ...memoryLifecycle.retrievalUsage,
+          ...retrievalUsageTelemetry,
         };
-        const ready = checks.database.ok && checks.disk.ok && checks.operationQueue.ok && checks.embeddings.ok;
         return {
-          kind: 'contextforge_readiness',
-          ready,
-          status: ready ? 'ready' : 'not_ready',
-          observedAt: snapshot.observedAt,
-          checks,
-          sqlite: snapshot.database.sqlite,
+          kind: 'contextforge_operational_metrics',
+          ...store.operationalSnapshot(),
+          memoryLifecycle,
+          providerExecution: {
+            concurrencyLimit: providerConcurrencyLimit,
+            active: providerExecutionSnapshot(),
+          },
         };
       });
-    },
-
-    operationalMetrics() {
-      return useStore((store) => ({
-        kind: 'contextforge_operational_metrics',
-        ...store.operationalSnapshot(),
-        providerExecution: {
-          concurrencyLimit: providerConcurrencyLimit,
-          active: providerExecutionSnapshot(),
-        },
-      }));
     },
 
     migrateScope(options = {}) {

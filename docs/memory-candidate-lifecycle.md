@@ -221,3 +221,20 @@ link, and embedding job enqueue commit in the same transaction.
 Ordinary closeout remains session/checkpoint scoped. Scope-wide review is only
 available through an explicit `backlog_batch`; there is no implicit scope
 fallback.
+
+## Operational quality signals
+
+Authenticated operational metrics report candidate creation, audit, promotion,
+rejection, and stale throughput over the latest 24 hours; oldest pending age;
+closeout-to-audit and audit-to-promotion latency; audit decisions; durable-write
+routing classifications; and candidate-to-durable conversion.
+
+Promotion quality is measured only from candidate-linked `promote` events, so a
+reviewed refinement applied as a `correct_memory` action is not mislabeled as a
+bad new-memory promotion. The snapshot reports corrections and deactivations
+within 7 and 30 days, active same-scope exact-content duplicates, transient
+category promotions, and bounded provider/model/prompt decision and correction
+rates. The 7/30-day rate denominators include only promotions whose complete
+observation window has elapsed, so recent promotions do not dilute the result.
+Retrieval-use coverage comes from aggregate per-memory counters; raw queries are
+never retained.
