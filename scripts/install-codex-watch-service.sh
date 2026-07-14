@@ -5,6 +5,7 @@ name="contextforge"
 repo_path=""
 scope_key=""
 remote_url="${CONTEXTFORGE_REMOTE_URL:-}"
+remote_timeout_ms="${CONTEXTFORGE_REMOTE_TIMEOUT_MS:-180000}"
 token_env_file="${CONTEXTFORGE_TOKEN_ENV_FILE:-$HOME/.config/contextforge/server.env}"
 sessions_dir="${CONTEXTFORGE_CODEX_SESSIONS_DIR:-$HOME/.codex/sessions}"
 interval_ms="${CONTEXTFORGE_CODEX_WATCH_INTERVAL_MS:-30000}"
@@ -28,6 +29,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --remote-url)
       remote_url="$2"
+      shift 2
+      ;;
+    --remote-timeout-ms)
+      remote_timeout_ms="$2"
       shift 2
       ;;
     --token-env-file)
@@ -70,6 +75,10 @@ if [ -z "$remote_url" ]; then
   echo "--remote-url or CONTEXTFORGE_REMOTE_URL is required." >&2
   exit 2
 fi
+if ! [[ "$remote_timeout_ms" =~ ^[1-9][0-9]*$ ]]; then
+  echo "--remote-timeout-ms must be a positive integer." >&2
+  exit 2
+fi
 
 if [ -n "$scope_key" ] && [[ ! "$scope_key" =~ ^[A-Za-z0-9._/@:-]+$ ]]; then
   echo "--scope-key must be a canonical key containing only letters, numbers, '.', '_', '/', '@', ':', or '-'." >&2
@@ -106,6 +115,7 @@ umask 077
 cat >"$authority_env_path" <<EOF
 CONTEXTFORGE_STORAGE_MODE=remote
 CONTEXTFORGE_REMOTE_URL='$remote_url'
+CONTEXTFORGE_REMOTE_TIMEOUT_MS=$remote_timeout_ms
 EOF
 umask "$previous_umask"
 chmod 600 "$authority_env_path"

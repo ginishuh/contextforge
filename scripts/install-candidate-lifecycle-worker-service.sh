@@ -4,13 +4,14 @@ set -euo pipefail
 name="lifecycle"
 repo_registry=""
 remote_url="${CONTEXTFORGE_REMOTE_URL:-}"
+remote_timeout_ms="${CONTEXTFORGE_REMOTE_TIMEOUT_MS:-300000}"
 token_env_file="${CONTEXTFORGE_TOKEN_ENV_FILE:-$HOME/.config/contextforge/server.env}"
 interval_ms="${CONTEXTFORGE_CANDIDATE_LIFECYCLE_INTERVAL_MS:-60000}"
-audit_limit="${CONTEXTFORGE_CANDIDATE_LIFECYCLE_AUDIT_LIMIT:-5}"
-audit_batch_limit="${CONTEXTFORGE_CANDIDATE_LIFECYCLE_AUDIT_BATCH_LIMIT:-5}"
+audit_limit="${CONTEXTFORGE_CANDIDATE_LIFECYCLE_AUDIT_LIMIT:-1}"
+audit_batch_limit="${CONTEXTFORGE_CANDIDATE_LIFECYCLE_AUDIT_BATCH_LIMIT:-2}"
 wake_limit="${CONTEXTFORGE_CANDIDATE_LIFECYCLE_WAKE_LIMIT:-25}"
 stale_limit="${CONTEXTFORGE_CANDIDATE_LIFECYCLE_STALE_LIMIT:-25}"
-job_limit="${CONTEXTFORGE_CANDIDATE_LIFECYCLE_JOB_LIMIT:-5}"
+job_limit="${CONTEXTFORGE_CANDIDATE_LIFECYCLE_JOB_LIMIT:-1}"
 lease_ms="${CONTEXTFORGE_CANDIDATE_LIFECYCLE_LEASE_MS:-600000}"
 dry_run="false"
 node_bin="${NODE:-node}"
@@ -28,6 +29,7 @@ while [ "$#" -gt 0 ]; do
     --name) name="$2"; shift 2 ;;
     --repo-registry|--repoRegistry) repo_registry="$2"; shift 2 ;;
     --remote-url) remote_url="$2"; shift 2 ;;
+    --remote-timeout-ms) remote_timeout_ms="$2"; shift 2 ;;
     --token-env-file) token_env_file="$2"; shift 2 ;;
     --interval-ms) interval_ms="$2"; shift 2 ;;
     --audit-limit) audit_limit="$2"; shift 2 ;;
@@ -48,6 +50,10 @@ if [ -z "$repo_registry" ]; then
 fi
 if [ -z "$remote_url" ]; then
   echo "--remote-url or CONTEXTFORGE_REMOTE_URL is required." >&2
+  exit 2
+fi
+if ! [[ "$remote_timeout_ms" =~ ^[1-9][0-9]*$ ]]; then
+  echo "--remote-timeout-ms must be a positive integer." >&2
   exit 2
 fi
 if [ "$dry_run" != "true" ] && [ "$dry_run" != "false" ]; then
@@ -75,6 +81,7 @@ umask 077
 cat >"$authority_env_path" <<EOF
 CONTEXTFORGE_STORAGE_MODE=remote
 CONTEXTFORGE_REMOTE_URL='$remote_url'
+CONTEXTFORGE_REMOTE_TIMEOUT_MS=$remote_timeout_ms
 EOF
 umask "$previous_umask"
 chmod 600 "$authority_env_path"

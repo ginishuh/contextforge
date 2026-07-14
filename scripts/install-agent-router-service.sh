@@ -4,6 +4,7 @@ set -euo pipefail
 name="agent-router"
 repo_registry=""
 remote_url="${CONTEXTFORGE_REMOTE_URL:-}"
+remote_timeout_ms="${CONTEXTFORGE_REMOTE_TIMEOUT_MS:-180000}"
 token_env_file="${CONTEXTFORGE_TOKEN_ENV_FILE:-$HOME/.config/contextforge/server.env}"
 adapters="${CONTEXTFORGE_AGENT_ROUTER_ADAPTERS:-}"
 codex_sessions_dir="${CONTEXTFORGE_CODEX_SESSIONS_DIR:-$HOME/.codex/sessions}"
@@ -36,6 +37,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --remote-url)
       remote_url="$2"
+      shift 2
+      ;;
+    --remote-timeout-ms)
+      remote_timeout_ms="$2"
       shift 2
       ;;
     --token-env-file)
@@ -98,6 +103,10 @@ if [ -z "$remote_url" ]; then
   echo "--remote-url or CONTEXTFORGE_REMOTE_URL is required." >&2
   exit 2
 fi
+if ! [[ "$remote_timeout_ms" =~ ^[1-9][0-9]*$ ]]; then
+  echo "--remote-timeout-ms must be a positive integer." >&2
+  exit 2
+fi
 
 safe_name="$(printf '%s' "$name" | tr -c 'A-Za-z0-9_.@-' '-')"
 unit_dir="$HOME/.config/systemd/user"
@@ -126,6 +135,7 @@ umask 077
 cat >"$authority_env_path" <<EOF
 CONTEXTFORGE_STORAGE_MODE=remote
 CONTEXTFORGE_REMOTE_URL='$remote_url'
+CONTEXTFORGE_REMOTE_TIMEOUT_MS=$remote_timeout_ms
 EOF
 umask "$previous_umask"
 chmod 600 "$authority_env_path"
