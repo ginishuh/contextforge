@@ -20,6 +20,37 @@ function truthy(value) {
   return value === true || value === 'true' || value === '1' || value === 1;
 }
 
+export function candidateAuditSourceWatermark({ store, scope, sessionId, checkpoint = null, latestCheckpoint = null }) {
+  if (checkpoint) {
+    return {
+      version: 'candidate-audit-source.v1',
+      checkpointId: checkpoint.id,
+      coversTo: checkpoint.coversTo || null,
+    };
+  }
+  const currentCheckpoint = latestCheckpoint || store.getLatestCheckpoint({ ...scope, sessionId, level: 0 });
+  const raw = store.getRawEventFingerprint({ ...scope, sessionId });
+  return {
+    version: 'candidate-audit-source.v1',
+    rawEventFingerprint: raw.fingerprint,
+    rawEventCount: raw.rawEventCount,
+    lastRawEventId: raw.lastRawEventId,
+    lastRawEventAt: raw.lastRawEventAt,
+    checkpointId: currentCheckpoint?.id || null,
+    coversTo: currentCheckpoint?.coversTo || null,
+  };
+}
+
+function assertExpectedSourceWatermark(expected, actual) {
+  if (!expected || JSON.stringify(stable(expected)) === JSON.stringify(stable(actual))) return;
+  const error = new Error('The candidate audit source changed after the idle epoch was selected.');
+  error.name = 'CandidateAuditSourceWatermarkChangedError';
+  error.code = 'CONTEXTFORGE_AUDIT_SOURCE_WATERMARK_CHANGED';
+  error.expectedSourceWatermark = expected;
+  error.currentSourceWatermark = actual;
+  throw error;
+}
+
 function publicPayload(options, scope) {
   const keys = [
     'sessionId', 'checkpointId', 'trigger', 'limit', 'scanLimit', 'minConfidence', 'minStability',
@@ -33,7 +64,7 @@ function publicPayload(options, scope) {
   };
 }
 
-export function submitMemoryCandidateAuditJob({ store, scope, options, auditor }) {
+function submitMemoryCandidateAuditJobInTransaction({ store, scope, options, auditor }) {
   const requestedIds = Array.isArray(options.candidateIds)
     ? Array.from(new Set(options.candidateIds.map(String)))
     : [];
@@ -58,6 +89,10 @@ export function submitMemoryCandidateAuditJob({ store, scope, options, auditor }
     payload.checkpointId = checkpoint.id;
   }
   const sourceMode = requestedIds.length > 0 ? 'backlog_batch' : checkpoint ? 'checkpoint' : 'session';
+  const sourceWatermark = sourceMode === 'backlog_batch'
+    ? null
+    : candidateAuditSourceWatermark({ store, scope, sessionId: checkpoint?.sessionId || options.sessionId, checkpoint });
+  assertExpectedSourceWatermark(options._expectedSourceWatermark, sourceWatermark);
   const scanned = requestedIds.length > 0
     ? store.listMemoryCandidates({ ...scope, status: 'pending', candidateIds: requestedIds, limit: requestedIds.length })
     : store.listMemoryCandidates({
@@ -74,7 +109,11 @@ export function submitMemoryCandidateAuditJob({ store, scope, options, auditor }
   const candidates = scanned.filter((candidate) =>
     truthy(options.force) || ['unaudited', 'failed_retryable', 'legacy_unknown'].includes(candidate.auditState),
   ).slice(0, requestedLimit);
-  if (candidates.length === 0) throw new Error('No eligible pending memory candidates matched the requested audit source.');
+  if (candidates.length === 0) {
+    const error = new Error('No eligible pending memory candidates matched the requested audit source.');
+    error.code = 'CONTEXTFORGE_NO_ELIGIBLE_CANDIDATES';
+    throw error;
+  }
   const configuration = {
     provider: auditor?.metadata?.provider || 'none',
     model: auditor?.metadata?.model || null,
@@ -83,13 +122,14 @@ export function submitMemoryCandidateAuditJob({ store, scope, options, auditor }
     outputSchemaVersion: auditor?.metadata?.outputSchemaVersion || null,
   };
   payload.sourceMode = sourceMode;
+  payload.sourceWatermark = sourceWatermark;
   payload.candidateIds = candidates.map((candidate) => candidate.id);
   payload.limit = candidates.length;
   payload.scanLimit = candidates.length;
   payload.expectedAuditConfiguration = configuration;
-  const sourceFingerprint = { sourceMode, candidateIds: payload.candidateIds };
+  const sourceFingerprint = { sourceMode, sourceWatermark, candidateIds: payload.candidateIds };
   const { scope: _scope, scopeType: _scopeType, scopeKey: _scopeKey, sessionId: _sessionId,
-    checkpointId: _checkpointId, ...policy } = payload;
+    checkpointId: _checkpointId, sourceWatermark: _sourceWatermark, ...policy } = payload;
   const source = sourceMode === 'backlog_batch'
     ? { sourceMode, candidateIds: payload.candidateIds }
     : checkpoint
@@ -157,4 +197,8 @@ export function submitMemoryCandidateAuditJob({ store, scope, options, auditor }
     },
     job: { ...queued.job, candidates: jobCandidates },
   };
+}
+
+export function submitMemoryCandidateAuditJob(args) {
+  return args.store.withTransaction(() => submitMemoryCandidateAuditJobInTransaction(args));
 }

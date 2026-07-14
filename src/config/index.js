@@ -389,6 +389,11 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
           'CONTEXTFORGE_AUTO_PROMOTE_AUDIT_BATCH_LIMIT',
           5,
         ),
+        idleCloseoutMs: parsePositiveInteger(
+          env.CONTEXTFORGE_AUTO_PROMOTE_AUDIT_IDLE_CLOSEOUT_MS,
+          'CONTEXTFORGE_AUTO_PROMOTE_AUDIT_IDLE_CLOSEOUT_MS',
+          600000,
+        ),
       },
     },
     codexExec: {

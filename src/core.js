@@ -12,6 +12,7 @@ import { normalizeAgentAdapterIds } from './ingest/agents.js';
 import { submitMemoryCandidateAuditJob } from './memory/candidate_audit_jobs.js';
 import { buildMemoryCandidateBacklog } from './memory/candidate_backlog.js';
 import { memoryCandidateRevisionHash } from './memory/candidate_revision.js';
+import { dueDistillSessionSummary, listIdleCandidateAudits, processIdleCandidateAudits } from './memory/idle_candidate_audits.js';
 import { createRemoteContextForge } from './remote/client.js';
 import { searchMemories } from './retrieval/search.js';
 import {
@@ -1953,6 +1954,7 @@ const CLOSEOUT_TRIGGERS = new Set([
   'user_merged_then_synced',
   'user_declared_work_done',
   'manual_closeout',
+  'idle_closeout',
 ]);
 
 function missingCloseoutSourceWarning(toolName) {
@@ -2989,25 +2991,6 @@ function buildSessionStatus({ scope, sessionId, rawEvents, latestCheckpoint, pol
     distillWindow: distillWindow.metadata,
     shouldDistill: reasons.some((reason) => reason !== 'no_raw_events'),
     reasons,
-  };
-}
-
-function dueDistillSessionSummary(candidate, status, idleElapsedMs) {
-  return {
-    scopeType: candidate.scopeType,
-    scopeKey: candidate.scopeKey,
-    sessionId: candidate.sessionId,
-    latestCheckpointAt: candidate.latestCheckpointAt || null,
-    firstRawAfterCheckpointAt: candidate.firstRawAfterCheckpointAt || null,
-    latestRawAt: candidate.latestRawAt || null,
-    idleElapsedMs,
-    latestRunStatus: candidate.latestRunStatus || null,
-    latestRunAt: candidate.latestRunAt || null,
-    latestRunCompletedAt: candidate.latestRunCompletedAt || null,
-    eventsSinceLastCheckpoint: status.eventsSinceLastCheckpoint,
-    charsSinceLastCheckpoint: status.charsSinceLastCheckpoint,
-    distillWindow: status.distillWindow,
-    reasons: status.reasons,
   };
 }
 
@@ -5287,6 +5270,19 @@ export function createContextForge(options = {}) {
       }
       return result;
     },
+    listDueCandidateAudits(options = {}) {
+      const narrowed = Boolean(options.scope || options.scopeType || options.scopeKey || options.cwd || options.repoPath);
+      const scope = narrowed ? normalizeScopeOptions(options, config) : null;
+      return useStore((store) => {
+        const audit = getEffectiveRuntime(store).autoPromoteAudit || {};
+        return listIdleCandidateAudits({
+          store, scope, options,
+          defaultIdleMs: Number(audit.idleCloseoutMs || 600000),
+          defaultBatchLimit: Number(audit.batchLimit || 5),
+        });
+      });
+    },
+    processDueCandidateAudits(options = {}) { return processIdleCandidateAudits({ app: this, options }); },
 
     remember(options) {
       const scope = normalizeScopeOptions(options, config);
@@ -6176,10 +6172,12 @@ export function createContextForge(options = {}) {
             ...scope,
             candidateId: item.candidate.id,
             reason,
+            leaseOwner: options._jobLeaseOwner || null, leaseAttempt: options._jobLeaseAttempt ?? null,
             metadata: {
               trigger,
               sourceMode,
               operationJobId: options.jobId || null,
+              sourceWatermark: options.sourceWatermark || null,
               warnings: item.warnings,
             },
           });
@@ -6242,6 +6240,7 @@ export function createContextForge(options = {}) {
                   checkpointId,
                   sessionId: options.sessionId || null,
                   operationJobId: options.jobId || null,
+                  sourceWatermark: options.sourceWatermark || null,
                   leaseAttempt: options._jobLeaseAttempt ?? null,
                   startedAt: auditStartedAt,
                   policyVersion: 'candidate-audit.v1',
@@ -6285,6 +6284,7 @@ export function createContextForge(options = {}) {
                   checkpointId,
                   sessionId: options.sessionId || null,
                   operationJobId: options.jobId || null,
+                  sourceWatermark: options.sourceWatermark || null,
                   leaseAttempt: options._jobLeaseAttempt ?? null,
                   startedAt: auditStartedAt,
                   policyVersion: 'candidate-audit.v1',

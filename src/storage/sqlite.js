@@ -6,6 +6,7 @@ import * as sqliteVec from 'sqlite-vec';
 import {
   backfillMemoryCandidateAuditStateOnce as backfillCandidateAuditState,
   hydrateMemoryCandidateAuditAttempt,
+  listCandidateAuditSessions as listAuditCandidateSessions,
   listMemoryCandidateAuditAttempts as listCandidateAuditAttempts,
   listOperationJobCandidates as listAuditJobCandidates,
   markMemoryCandidateReviewed as markCandidateReviewed,
@@ -3055,15 +3056,23 @@ export class ContextForgeStore {
             WHERE scope_type = ? AND scope_key = ? AND session_id = ?
             ORDER BY created_at DESC, id DESC
             LIMIT 1
-          ) AS last_raw_event_id
+          ) AS last_raw_event_id,
+          (
+            SELECT created_at FROM raw_events
+            WHERE scope_type = ? AND scope_key = ? AND session_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+          ) AS last_raw_event_at
         FROM raw_events
         WHERE scope_type = ? AND scope_key = ? AND session_id = ?
       `)
-      .get(scopeType, scopeKey, sessionId, scopeType, scopeKey, sessionId);
-    return {
+      .get(scopeType, scopeKey, sessionId, scopeType, scopeKey, sessionId, scopeType, scopeKey, sessionId);
+    const fingerprint = {
       rawEventCount: Number(row?.raw_event_count || 0),
       lastRawEventId: row?.last_raw_event_id || null,
+      lastRawEventAt: row?.last_raw_event_at || null,
     };
+    return { ...fingerprint, fingerprint: createHash('sha256').update(json(fingerprint, {})).digest('hex') };
   }
 
   listRecentRawEvents({ scopeType, scopeKey, sessionId, limit = 5 }) {
@@ -3492,6 +3501,10 @@ export class ContextForgeStore {
 
   memoryLifecycleSummary(options) {
     return summarizeMemoryLifecycle(this, options);
+  }
+
+  listCandidateAuditSessions(options) {
+    return listAuditCandidateSessions(this, options);
   }
 
   getPreferenceOccurrence({ scopeType, scopeKey, mergeKey = null, candidateId = null }) {

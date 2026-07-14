@@ -1663,6 +1663,24 @@ node src/cli.js processDueDistills --dryRun true --limit 5
 oldest-first batch, defaults to `--limit 5`, and respects the same normal
 distillation thresholds plus the default idle window.
 
+Inspect and queue small-session candidate audits independently of distillation
+thresholds:
+
+```bash
+node src/cli.js listDueCandidateAudits --scope repo --scopeKey github.com/example/contextforge --limit 20
+node src/cli.js processDueCandidateAudits --scope repo --scopeKey github.com/example/contextforge --dryRun true --limit 5
+node src/cli.js processDueCandidateAudits --scope repo --scopeKey github.com/example/contextforge --limit 5
+```
+
+The list call is provider-free. The process call only enqueues bounded durable
+`session` audit jobs; `processJobs` performs provider work. Each row carries a
+raw-event fingerprint plus checkpoint `coversTo`, and enqueue revalidates that
+watermark transactionally. A late event therefore becomes a later audit epoch
+instead of silently changing the source selected by the queued job. The default
+idle grace is ten minutes (`CONTEXTFORGE_AUTO_PROMOTE_AUDIT_IDLE_CLOSEOUT_MS`).
+Quiet-time inference is reported as `sourceSignal: "inferred_idle"`; it is not
+an adapter terminal signal.
+
 Queue provider work durably when it must outlive the submitting request:
 
 ```bash

@@ -223,6 +223,7 @@ function toCoreOptions(options) {
     maxContentChars: options.maxContentChars == null ? undefined : Number(options.maxContentChars),
     sinceMinutes: options.sinceMinutes == null ? undefined : Number(options.sinceMinutes),
     scanLimit: options.scanLimit == null ? undefined : Number(options.scanLimit),
+    batchLimit: options.batchLimit == null ? undefined : Number(options.batchLimit),
     watch: options.watch === true || options.watch === 'true',
     watchFullScan: options.watchFullScan === true || options.watchFullScan === 'true',
     watchVerbose: options.watchVerbose === true || options.watchVerbose === 'true',
@@ -355,6 +356,10 @@ async function main() {
       app.listDueDistillSessions(preserveCoreLimitDefault(coreOptions, rawOptions)),
     processDueDistills: (app, coreOptions, rawOptions) =>
       app.processDueDistills(preserveCoreLimitDefault(coreOptions, rawOptions)),
+    listDueCandidateAudits: (app, coreOptions, rawOptions) =>
+      app.listDueCandidateAudits(preserveCoreLimitDefault(coreOptions, rawOptions)),
+    processDueCandidateAudits: (app, coreOptions, rawOptions) =>
+      app.processDueCandidateAudits(preserveCoreLimitDefault(coreOptions, rawOptions)),
     listDueConsolidations: (app, coreOptions) => app.listDueConsolidations(coreOptions),
     processConsolidations: (app, coreOptions) => app.processConsolidations(coreOptions),
     remember: (app, coreOptions) => app.remember(coreOptions),

@@ -54,6 +54,31 @@ Successful candidates are not called again when another candidate causes a job
 retry. Cancellation, lease expiry, and terminal job failure release or settle
 candidate audit states so a row does not remain falsely `queued` forever.
 
+## Idle audit epochs
+
+Small sessions do not need to reach the active-session batch threshold before
+they become auditable. `listDueCandidateAudits` is a provider-free inventory of
+sessions that have eligible candidates and have been quiet for the configured
+grace period. `processDueCandidateAudits` revalidates each inventory row and
+queues a bounded `session` audit job; it does not call the provider itself.
+The mutating process call requires one explicit canonical scope; it never
+creates a workspace-wide or mixed-scope batch.
+
+Every idle inventory row freezes a source watermark with the raw-event count,
+last raw-event id/time, raw fingerprint, latest checkpoint id, and `coversTo`.
+The enqueue transaction compares that watermark with current storage. A late
+event fails the old selection with
+`CONTEXTFORGE_AUDIT_SOURCE_WATERMARK_CHANGED`; the next scan creates a new
+epoch. Once queued, the candidate-id set and watermark are immutable job and
+audit-attempt provenance. This lets a running audit finish its old epoch while
+a resumed session later distills and audits a distinct epoch.
+
+The default inferred-idle grace period is ten minutes and can be changed with
+`CONTEXTFORGE_AUTO_PROMOTE_AUDIT_IDLE_CLOSEOUT_MS` or the
+`autoPromoteAudit.idleCloseoutMs` runtime setting. An inferred idle signal is
+not stored as an adapter terminal signal. Explicit terminal detection remains
+adapter-specific and must not be inferred from a quiet period.
+
 ## Immutable audit provenance
 
 Every provider result is appended to `memory_candidate_audit_attempts`. The
@@ -61,6 +86,7 @@ record binds the result to:
 
 - candidate revision hash;
 - source mode, session/checkpoint, job id, and lease attempt;
+- the source watermark for an idle/session audit epoch when present;
 - provider/model/reasoning/prompt/schema metadata;
 - decision, reason, risk codes, usage, and failure metadata;
 - start and completion timestamps.
