@@ -4853,8 +4853,7 @@ export function createContextForge(options = {}) {
         const rawFingerprint = store.getRawEventFingerprint({ ...scope, sessionId: options.sessionId });
         const latestCheckpoint = store.getLatestCheckpoint({ ...scope, sessionId: options.sessionId, level: 0 });
         const sourceFingerprint = {
-          rawEventCount: rawFingerprint.rawEventCount,
-          lastRawEventId: rawFingerprint.lastRawEventId,
+          rawEventCount: rawFingerprint.rawEventCount, lastRawEventId: rawFingerprint.lastRawEventId,
           latestCheckpointId: latestCheckpoint?.id || null,
         };
         const idempotencyKey =

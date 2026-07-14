@@ -128,6 +128,12 @@ test('idle candidate audits fence late events and queue small sessions without t
   assert.equal(job.payload.sourceMode, 'session');
   assert.equal(job.payload.sourceWatermark.rawEventCount, 2);
   assert.deepEqual(job.metadata.sourceFingerprint.sourceWatermark, job.payload.sourceWatermark);
+  const distillJob = app.submitDistillJob({ ...repo, sessionId: selected.sessionId });
+  assert.deepEqual(Object.keys(distillJob.job.metadata.sourceFingerprint).sort(), [
+    'lastRawEventId',
+    'latestCheckpointId',
+    'rawEventCount',
+  ]);
 
   const processed = await app.processJobs({ operation: 'audit_memory_candidates', workerId: 'idle-audit-worker' });
   assert.equal(processed.succeeded, 1);
