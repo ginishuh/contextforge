@@ -115,17 +115,24 @@ The installer writes a mutating worker unit with `--dryRun false`; use
 `--dry-run true` for an observation-only canary. Its token environment file must
 grant review and operator capabilities for every configured scope. Queue work
 then appears in `/readyz` operation-worker freshness and `/metrics`. The unit
-loads a generated `0600` authority environment file after the token environment
-file to force remote storage mode and the configured URL. Systemd environment
-files override unit-level `Environment=` values, and later environment files
-override earlier ones. The remote URL therefore stays out of the process command
-line while the last-file-wins order provides the storage-authority boundary.
-The same authority file sets `CONTEXTFORGE_REMOTE_TIMEOUT_MS=180000` by default,
-which is longer than the default 120-second provider timeout. Override it with
-`--remote-timeout-ms` or `CONTEXTFORGE_REMOTE_TIMEOUT_MS`, but keep the remote
-timeout strictly greater than every provider timeout the watcher can invoke.
-This prevents a client disconnect from abandoning a provider call that the
-canonical server is still completing.
+uses conservative service defaults of one due session, two candidates in that
+session, and one audit job per scope per iteration. It sets the remote timeout
+to 300 seconds, covering two sequential default 120-second provider calls plus
+bounded overhead. If you raise the audit or job limits, scale the remote timeout
+for the worst-case provider-call count and configured provider concurrency. The
+unit loads a generated `0600` authority environment file after the token
+environment file to force remote storage mode and the configured URL. Systemd
+environment files override unit-level `Environment=` values, and later
+environment files override earlier ones. The remote URL therefore stays out of
+the process command line while the last-file-wins order provides the
+storage-authority boundary.
+Other packaged ingest watchers set `CONTEXTFORGE_REMOTE_TIMEOUT_MS=180000` by
+default, which is longer than one default 120-second provider call. Override it
+with `--remote-timeout-ms` or `CONTEXTFORGE_REMOTE_TIMEOUT_MS`, but keep the
+remote timeout strictly greater than the full bounded provider wall-clock the
+watcher can invoke, not merely one provider timeout. This prevents a client
+disconnect from abandoning a provider call that the canonical server is still
+completing.
 
 The registry must cover every repo scope this worker owns. Keep a separate
 distill-job worker (or an explicitly authorized all-scope operation worker) for

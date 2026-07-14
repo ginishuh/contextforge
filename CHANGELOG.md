@@ -21,9 +21,11 @@
   boundaries, and every packaged remote watcher now loads a private generated
   authority environment file after its token file to force remote mode without
   exposing the remote URL in the process command line. Packaged remote watchers
-  also use a 180-second remote timeout by default, and durable job workers pass
-  that client deadline into nested provider execution so timeout mismatches fail
-  before a client can abandon server-side work.
+  use bounded remote timeouts by default (300 seconds for the conservative
+  one-session/two-candidate/one-job lifecycle worker, 180 seconds for ingest
+  watchers), and durable job workers pass that client deadline into nested
+  provider execution so timeout mismatches fail before a client can abandon
+  server-side work.
 
 ## 0.5.1 - 2026-07-10
 

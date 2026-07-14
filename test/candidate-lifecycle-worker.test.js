@@ -243,6 +243,43 @@ test('durable audit workers propagate the remote client timeout before provider 
   assert.equal(failed.candidates[0].status, 'failed_terminal');
 });
 
+test('durable distill workers propagate the remote client timeout before provider execution', async () => {
+  const dataDir = await makeTempDir();
+  let providerInvocations = 0;
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_DISTILL_PROVIDER: 'codex_exec',
+      CONTEXTFORGE_CODEX_EXEC_TIMEOUT_MS: '1000',
+    },
+    cwd: process.cwd(),
+    codexExecRunner: async () => {
+      providerInvocations += 1;
+      throw new Error('provider must not execute when the client timeout contract is invalid');
+    },
+  });
+  const source = { scope: 'repo', scopeKey: 'distill-timeout-contract-repo', sessionId: 'distill-timeout-contract-session' };
+  app.appendRaw({ ...source, role: 'assistant', content: 'Keep this raw evidence when the timeout contract fails.' });
+  const submitted = app.submitDistillJob(source);
+
+  const processed = await app.processJobs({
+    workerId: 'distill-timeout-contract-worker',
+    operation: 'distill_checkpoint',
+    _clientTimeoutMs: 1000,
+  });
+
+  assert.equal(processed.claimed, 1);
+  assert.equal(processed.succeeded, 0);
+  assert.equal(processed.failed, 1);
+  assert.equal(providerInvocations, 0);
+  const failed = app.getJob({ jobId: submitted.jobId });
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.error.code, 'CONTEXTFORGE_PROVIDER_TIMEOUT_EXCEEDS_CLIENT_TIMEOUT');
+  assert.equal(failed.error.retryable, false);
+  assert.equal(app.listRawEvents(source).length, 1);
+  assert.equal(app.listCheckpoints(source).length, 0);
+});
+
 test('candidate lifecycle service installer writes a remote bounded worker unit', async () => {
   const home = await makeTempDir();
   const binDir = path.join(home, 'bin');
@@ -258,10 +295,7 @@ test('candidate lifecycle service installer writes a remote bounded worker unit'
     '--name', 'test',
     '--repo-registry', registry,
     '--remote-url', 'http://127.0.0.1:8766',
-    '--remote-timeout-ms', '240000',
     '--interval-ms', '30000',
-    '--audit-limit', '3',
-    '--job-limit', '2',
   ], {
     cwd: process.cwd(),
     env: { ...process.env, HOME: home, PATH: `${binDir}:${process.env.PATH}` },
@@ -272,13 +306,38 @@ test('candidate lifecycle service installer writes a remote bounded worker unit'
     unitName: 'contextforge-candidate-lifecycle-test.service',
     authorityName: 'contextforge-candidate-lifecycle-test.authority.env',
     remoteUrl: 'http://127.0.0.1:8766',
-    remoteTimeoutMs: 240000,
+    remoteTimeoutMs: 300000,
   });
   assert.match(unit, /candidateLifecycleWorker/);
   assert.match(unit, /--watch --dryRun "false"/);
-  assert.match(unit, /--auditLimit "3"/);
-  assert.match(unit, /--jobLimit "2"/);
+  assert.match(unit, /--auditLimit "1"/);
+  assert.match(unit, /--auditBatchLimit "2"/);
+  assert.match(unit, /--jobLimit "1"/);
   assert.match(unit, /Restart=always/);
+
+  await execFileAsync('bash', [
+    'scripts/install-candidate-lifecycle-worker-service.sh',
+    '--name', 'override-test',
+    '--repo-registry', registry,
+    '--remote-url', 'http://127.0.0.1:8766',
+    '--remote-timeout-ms', '420000',
+    '--audit-limit', '3',
+    '--audit-batch-limit', '4',
+    '--job-limit', '2',
+  ], {
+    cwd: process.cwd(),
+    env: { ...process.env, HOME: home, PATH: `${binDir}:${process.env.PATH}` },
+  });
+  const overrideUnit = await assertPrivateAuthorityFile({
+    home,
+    unitName: 'contextforge-candidate-lifecycle-override-test.service',
+    authorityName: 'contextforge-candidate-lifecycle-override-test.authority.env',
+    remoteUrl: 'http://127.0.0.1:8766',
+    remoteTimeoutMs: 420000,
+  });
+  assert.match(overrideUnit, /--auditLimit "3"/);
+  assert.match(overrideUnit, /--auditBatchLimit "4"/);
+  assert.match(overrideUnit, /--jobLimit "2"/);
 
   await execFileAsync('bash', [
     'scripts/install-agent-router-service.sh',
@@ -360,11 +419,28 @@ test('watcher installer rejects authority environment file injection', async () 
       (error) => error.code === 2 && /line break or single quote/.test(error.stderr),
     );
   }
-  await assert.rejects(
-    execFileAsync('bash', [
-      'scripts/install-candidate-lifecycle-worker-service.sh',
-      '--repo-registry', registry, '--remote-url', 'https://memory.example.com', '--remote-timeout-ms', '0',
-    ], { cwd: process.cwd(), env: { ...process.env, HOME: home } }),
-    (error) => error.code === 2 && /positive integer/.test(error.stderr),
-  );
+});
+
+test('all packaged watcher installers reject an invalid remote timeout', async () => {
+  const home = await makeTempDir();
+  const registry = path.join(home, 'repos.json');
+  await fs.writeFile(registry, JSON.stringify({ repos: [{ scopeKey: 'github.com/example/contextforge' }] }));
+  const specs = [
+    ['scripts/install-agent-router-service.sh', '--repo-registry', registry],
+    ['scripts/install-candidate-lifecycle-worker-service.sh', '--repo-registry', registry],
+    ['scripts/install-claude-code-router-service.sh', '--repo-registry', registry],
+    ['scripts/install-codex-router-service.sh', '--repo-registry', registry],
+    [
+      'scripts/install-codex-watch-service.sh', '--repo-path', process.cwd(),
+      '--scope-key', 'github.com/example/contextforge',
+    ],
+  ];
+  for (const [script, ...args] of specs) {
+    await assert.rejects(
+      execFileAsync('bash', [
+        script, ...args, '--remote-url', 'https://memory.example.com', '--remote-timeout-ms', '0',
+      ], { cwd: process.cwd(), env: { ...process.env, HOME: home } }),
+      (error) => error.code === 2 && /positive integer/.test(error.stderr),
+    );
+  }
 });
