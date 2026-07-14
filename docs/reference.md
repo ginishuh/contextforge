@@ -1698,7 +1698,8 @@ The process call requires one canonical scope, invokes no provider, and uses a
 candidate-status plus snooze-epoch CAS before reopening to `pending`. Manual
 `wakeMemoryCandidate` can reopen early. Snooze is rejected while an audit is
 `queued` or `running`, and every transition retains actor/reason provenance in
-the candidate lifecycle history.
+the candidate lifecycle history. To extend a snooze, wake the current epoch and
+create a new finite snooze rather than changing its deadline in place.
 
 Queue provider work durably when it must outlive the submitting request:
 

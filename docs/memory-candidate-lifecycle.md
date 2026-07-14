@@ -100,7 +100,9 @@ epoch. `dryRun` returns the same bounded selection without mutation.
 Manual `wakeMemoryCandidate` may reopen a candidate before its deadline. Both
 snooze and wake transitions append actor, reason, time, request id, prior
 deadline, and status movement to `reviewMetadata.lifecycleEvents`. Wake-up
-clears the active snooze columns but keeps this transition history.
+clears the active snooze columns but keeps this transition history. To extend a
+snooze, wake the current epoch and create a new finite snooze rather than
+changing its deadline in place.
 
 ## Immutable audit provenance
 

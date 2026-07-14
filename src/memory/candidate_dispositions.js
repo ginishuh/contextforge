@@ -76,6 +76,7 @@ export function snoozeCandidate(store, scope, options = {}) {
       SET status = 'snoozed', snoozed_until = ?, snooze_reason = ?, snoozed_by = ?, wake_up_status = ?,
           reviewed_at = ?, review_reason = ?, review_metadata_json = ?
       WHERE scope_type = ? AND scope_key = ? AND id = ? AND status = 'pending'
+        AND audit_state NOT IN ('queued', 'running')
     `).run(
       snoozedUntil, options.reason, options.actor, wakeUpStatus, at, options.reason, JSON.stringify(metadata),
       scope.scopeType, scope.scopeKey, candidate.id,
@@ -180,7 +181,7 @@ export function processDueCandidateWakeups(store, scope, options = {}) {
       result.results.push({ candidateId: candidate.id, status, candidate: woken.candidate });
     } catch (error) {
       if (['CONTEXTFORGE_CANDIDATE_NOT_SNOOZED', 'CONTEXTFORGE_CANDIDATE_SNOOZE_EPOCH_CHANGED',
-        'CONTEXTFORGE_CANDIDATE_SNOOZE_NOT_DUE'].includes(error.code)) {
+        'CONTEXTFORGE_CANDIDATE_SNOOZE_NOT_DUE', 'CONTEXTFORGE_CANDIDATE_TRANSITION_RACE'].includes(error.code)) {
         result.skipped += 1;
         result.results.push({ candidateId: candidate.id, status: 'skipped', code: error.code });
       } else {

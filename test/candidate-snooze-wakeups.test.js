@@ -54,6 +54,24 @@ test('candidate snooze requires a finite epoch and expired wake-up is bounded an
       }),
       (error) => error.code === 'CONTEXTFORGE_CANDIDATE_AUDIT_ACTIVE',
     );
+    const getMemoryCandidate = store.getMemoryCandidate.bind(store);
+    let staleRead = true;
+    store.getMemoryCandidate = (options) => {
+      const candidate = getMemoryCandidate(options);
+      if (staleRead && candidate?.id === second.id) {
+        staleRead = false;
+        return { ...candidate, auditState: 'unaudited' };
+      }
+      return candidate;
+    };
+    assert.throws(
+      () => app.snoozeMemoryCandidate({
+        ...scope, candidateId: second.id, snoozedUntil: new Date(Date.now() + 60000).toISOString(),
+        reason: 'Fence a stale audit-state read.', actor: 'reviewer-1',
+      }),
+      (error) => error.code === 'CONTEXTFORGE_CANDIDATE_TRANSITION_RACE',
+    );
+    store.getMemoryCandidate = getMemoryCandidate;
 
     const future = new Date(Date.now() + 60000).toISOString();
     const snoozed = app.snoozeMemoryCandidate({
