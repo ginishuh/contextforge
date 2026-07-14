@@ -11,7 +11,6 @@ interval_ms="${CONTEXTFORGE_CODEX_WATCH_INTERVAL_MS:-30000}"
 since_minutes="${CONTEXTFORGE_CODEX_WATCH_SINCE_MINUTES:-1440}"
 distill="${CONTEXTFORGE_CODEX_WATCH_DISTILL:-auto}"
 node_bin="${NODE:-node}"
-env_bin="${CONTEXTFORGE_ENV_BIN:-$(command -v env)}"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -81,6 +80,7 @@ safe_name="$(printf '%s' "$name" | tr -c 'A-Za-z0-9_.@-' '-')"
 unit_dir="$HOME/.config/systemd/user"
 unit_name="contextforge-codex-watch-${safe_name}.service"
 unit_path="$unit_dir/$unit_name"
+authority_env_path="$unit_dir/contextforge-codex-watch-${safe_name}.authority.env"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 resolved_scope_key="$scope_key"
 
@@ -96,6 +96,19 @@ fi
 
 mkdir -p "$unit_dir"
 
+if [[ "$remote_url" == *$'\n'* || "$remote_url" == *$'\r'* || "$remote_url" == *"'"* ]]; then
+  echo "Remote URL cannot contain a line break or single quote." >&2
+  exit 2
+fi
+previous_umask="$(umask)"
+umask 077
+cat >"$authority_env_path" <<EOF
+CONTEXTFORGE_STORAGE_MODE=remote
+CONTEXTFORGE_REMOTE_URL='$remote_url'
+EOF
+umask "$previous_umask"
+chmod 600 "$authority_env_path"
+
 cat >"$unit_path" <<EOF
 [Unit]
 Description=ContextForge Codex watch ingest (${name})
@@ -105,8 +118,9 @@ After=network-online.target
 Type=simple
 WorkingDirectory=${repo_root}
 EnvironmentFile=-${token_env_file}
+EnvironmentFile=${authority_env_path}
 Environment=CONTEXTFORGE_WATCH_STATE_DIR=%h/.local/state/contextforge/watch
-ExecStart=${env_bin} CONTEXTFORGE_STORAGE_MODE=remote CONTEXTFORGE_REMOTE_URL=${remote_url} ${node_bin} ${repo_root}/src/cli.js ingestCodexSessions --sessionsDir ${sessions_dir} --scope repo --repoPath ${repo_path} --scopeKey ${resolved_scope_key} --sinceMinutes ${since_minutes} --distill ${distill} --watch --intervalMs ${interval_ms}
+ExecStart=${node_bin} ${repo_root}/src/cli.js ingestCodexSessions --sessionsDir ${sessions_dir} --scope repo --repoPath ${repo_path} --scopeKey ${resolved_scope_key} --sinceMinutes ${since_minutes} --distill ${distill} --watch --intervalMs ${interval_ms}
 Restart=always
 RestartSec=10
 

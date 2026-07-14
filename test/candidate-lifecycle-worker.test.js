@@ -18,6 +18,19 @@ async function makeTempDir() {
   return fs.mkdtemp(path.join(os.tmpdir(), 'contextforge-lifecycle-worker-test-'));
 }
 
+async function assertPrivateAuthorityFile({ home, unitName, authorityName, remoteUrl }) {
+  const unitDir = path.join(home, '.config', 'systemd', 'user');
+  const authorityPath = path.join(unitDir, authorityName);
+  const unit = await fs.readFile(path.join(unitDir, unitName), 'utf8');
+  const authority = await fs.readFile(authorityPath, 'utf8');
+  assert.ok(unit.indexOf('EnvironmentFile=-') < unit.indexOf(`EnvironmentFile=${authorityPath}`));
+  assert.doesNotMatch(unit, /CONTEXTFORGE_REMOTE_URL=/);
+  assert.doesNotMatch(unit, new RegExp(remoteUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.equal(authority, `CONTEXTFORGE_STORAGE_MODE=remote\nCONTEXTFORGE_REMOTE_URL='${remoteUrl}'\n`);
+  assert.equal((await fs.stat(authorityPath)).mode & 0o777, 0o600);
+  return unit;
+}
+
 function fakeLifecycleApp(calls, { failScope = null } = {}) {
   return {
     async processDueCandidateWakeups(options) {
@@ -186,11 +199,12 @@ test('candidate lifecycle service installer writes a remote bounded worker unit'
     env: { ...process.env, HOME: home, PATH: `${binDir}:${process.env.PATH}` },
   });
 
-  const unit = await fs.readFile(
-    path.join(home, '.config', 'systemd', 'user', 'contextforge-candidate-lifecycle-test.service'),
-    'utf8',
-  );
-  assert.match(unit, /ExecStart="[^"]*env" "CONTEXTFORGE_STORAGE_MODE=remote" "CONTEXTFORGE_REMOTE_URL=http:\/\/127\.0\.0\.1:8766"/);
+  const unit = await assertPrivateAuthorityFile({
+    home,
+    unitName: 'contextforge-candidate-lifecycle-test.service',
+    authorityName: 'contextforge-candidate-lifecycle-test.authority.env',
+    remoteUrl: 'http://127.0.0.1:8766',
+  });
   assert.match(unit, /candidateLifecycleWorker/);
   assert.match(unit, /--watch --dryRun "false"/);
   assert.match(unit, /--auditLimit "3"/);
@@ -206,11 +220,12 @@ test('candidate lifecycle service installer writes a remote bounded worker unit'
     cwd: process.cwd(),
     env: { ...process.env, HOME: home, PATH: `${binDir}:${process.env.PATH}` },
   });
-  const routerUnit = await fs.readFile(
-    path.join(home, '.config', 'systemd', 'user', 'contextforge-agent-router-router-test.service'),
-    'utf8',
-  );
-  assert.match(routerUnit, /ExecStart="[^"]*env" "CONTEXTFORGE_STORAGE_MODE=remote" "CONTEXTFORGE_REMOTE_URL=http:\/\/127\.0\.0\.1:8766"/);
+  await assertPrivateAuthorityFile({
+    home,
+    unitName: 'contextforge-agent-router-router-test.service',
+    authorityName: 'contextforge-agent-router-router-test.authority.env',
+    remoteUrl: 'http://127.0.0.1:8766',
+  });
 });
 
 test('lifecycle scope resolver rejects non-canonical and empty registries', async () => {
@@ -223,15 +238,42 @@ test('lifecycle scope resolver rejects non-canonical and empty registries', asyn
   await assert.rejects(resolveCandidateLifecycleScopes({ repoRegistry: empty }), /no enabled canonical scopes/);
 });
 
-test('all packaged remote watcher installers force remote mode in ExecStart', async () => {
-  for (const file of [
-    'scripts/install-agent-router-service.sh',
-    'scripts/install-candidate-lifecycle-worker-service.sh',
-    'scripts/install-claude-code-router-service.sh',
-    'scripts/install-codex-router-service.sh',
-    'scripts/install-codex-watch-service.sh',
-  ]) {
-    const source = await fs.readFile(file, 'utf8');
-    assert.match(source, /ExecStart=.*CONTEXTFORGE_STORAGE_MODE=remote.*CONTEXTFORGE_REMOTE_URL=/);
+test('legacy watcher installers render private last-wins authority files', async () => {
+  const home = await makeTempDir();
+  const binDir = path.join(home, 'bin');
+  await fs.mkdir(binDir, { recursive: true });
+  await fs.writeFile(path.join(binDir, 'systemctl'), '#!/usr/bin/env bash\nexit 0\n', { mode: 0o755 });
+  const registry = path.join(home, 'repos.json');
+  await fs.writeFile(registry, JSON.stringify({ repos: [{ scopeKey: 'github.com/example/contextforge' }] }));
+  const remoteUrl = 'https://memory.example.com/api?token=abc$def%20x';
+  const specs = [
+    {
+      script: 'scripts/install-claude-code-router-service.sh',
+      args: ['--name', 'claude-test', '--repo-registry', registry],
+      unitName: 'contextforge-claude-code-router-claude-test.service',
+      authorityName: 'contextforge-claude-code-router-claude-test.authority.env',
+    },
+    {
+      script: 'scripts/install-codex-router-service.sh',
+      args: ['--name', 'codex-test', '--repo-registry', registry],
+      unitName: 'contextforge-codex-router-codex-test.service',
+      authorityName: 'contextforge-codex-router-codex-test.authority.env',
+    },
+    {
+      script: 'scripts/install-codex-watch-service.sh',
+      args: [
+        '--name', 'watch-test', '--repo-path', process.cwd(),
+        '--scope-key', 'github.com/example/contextforge',
+      ],
+      unitName: 'contextforge-codex-watch-watch-test.service',
+      authorityName: 'contextforge-codex-watch-watch-test.authority.env',
+    },
+  ];
+  for (const spec of specs) {
+    await execFileAsync('bash', [spec.script, ...spec.args, '--remote-url', remoteUrl], {
+      cwd: process.cwd(),
+      env: { ...process.env, HOME: home, PATH: `${binDir}:${process.env.PATH}` },
+    });
+    await assertPrivateAuthorityFile({ home, ...spec, remoteUrl });
   }
 });

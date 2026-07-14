@@ -15,7 +15,6 @@ interval_ms="${CONTEXTFORGE_AGENT_ROUTER_INTERVAL_MS:-30000}"
 since_minutes="${CONTEXTFORGE_AGENT_ROUTER_SINCE_MINUTES:-1440}"
 distill="${CONTEXTFORGE_AGENT_ROUTER_DISTILL:-auto}"
 node_bin="${NODE:-node}"
-env_bin="${CONTEXTFORGE_ENV_BIN:-$(command -v env)}"
 
 systemd_quote() {
   local value="$1"
@@ -104,6 +103,7 @@ safe_name="$(printf '%s' "$name" | tr -c 'A-Za-z0-9_.@-' '-')"
 unit_dir="$HOME/.config/systemd/user"
 unit_name="contextforge-agent-router-${safe_name}.service"
 unit_path="$unit_dir/$unit_name"
+authority_env_path="$unit_dir/contextforge-agent-router-${safe_name}.authority.env"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cli_path="${repo_root}/src/cli.js"
 
@@ -116,6 +116,19 @@ fi
 
 mkdir -p "$unit_dir"
 
+if [[ "$remote_url" == *$'\n'* || "$remote_url" == *$'\r'* || "$remote_url" == *"'"* ]]; then
+  echo "Remote URL cannot contain a line break or single quote." >&2
+  exit 2
+fi
+previous_umask="$(umask)"
+umask 077
+cat >"$authority_env_path" <<EOF
+CONTEXTFORGE_STORAGE_MODE=remote
+CONTEXTFORGE_REMOTE_URL='$remote_url'
+EOF
+umask "$previous_umask"
+chmod 600 "$authority_env_path"
+
 cat >"$unit_path" <<EOF
 [Unit]
 Description=ContextForge unified agent ingest router (${name})
@@ -125,8 +138,9 @@ After=network-online.target
 Type=simple
 WorkingDirectory=$repo_root
 EnvironmentFile=-$token_env_file
+EnvironmentFile=$authority_env_path
 Environment=CONTEXTFORGE_WATCH_STATE_DIR=%h/.local/state/contextforge/watch
-ExecStart=$(systemd_quote "$env_bin") $(systemd_quote "CONTEXTFORGE_STORAGE_MODE=remote") $(systemd_quote "CONTEXTFORGE_REMOTE_URL=$remote_url") $(systemd_quote "$node_bin") $(systemd_quote "$cli_path") ingestAgentRoutedSessions${adapter_args} --codexSessionsDir $(systemd_quote "$codex_sessions_dir") --claudeCodeProjectsDir $(systemd_quote "$claude_code_projects_dir") --opencodeDb $(systemd_quote "$opencode_db") --grokSessionsDir $(systemd_quote "$grok_sessions_dir") --cursorProjectsDir $(systemd_quote "$cursor_projects_dir") --repoRegistry $(systemd_quote "$repo_registry") --sinceMinutes $(systemd_quote "$since_minutes") --distill $(systemd_quote "$distill") --watch --intervalMs $(systemd_quote "$interval_ms")
+ExecStart=$(systemd_quote "$node_bin") $(systemd_quote "$cli_path") ingestAgentRoutedSessions${adapter_args} --codexSessionsDir $(systemd_quote "$codex_sessions_dir") --claudeCodeProjectsDir $(systemd_quote "$claude_code_projects_dir") --opencodeDb $(systemd_quote "$opencode_db") --grokSessionsDir $(systemd_quote "$grok_sessions_dir") --cursorProjectsDir $(systemd_quote "$cursor_projects_dir") --repoRegistry $(systemd_quote "$repo_registry") --sinceMinutes $(systemd_quote "$since_minutes") --distill $(systemd_quote "$distill") --watch --intervalMs $(systemd_quote "$interval_ms")
 Restart=always
 RestartSec=10
 

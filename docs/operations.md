@@ -115,10 +115,11 @@ The installer writes a mutating worker unit with `--dryRun false`; use
 `--dry-run true` for an observation-only canary. Its token environment file must
 grant review and operator capabilities for every configured scope. Queue work
 then appears in `/readyz` operation-worker freshness and `/metrics`. The unit
-uses `/usr/bin/env`-style assignments in `ExecStart` to force remote storage
-mode after systemd loads the token environment file. `EnvironmentFile=` values
-override unit-level `Environment=` values regardless of their textual order, so
-line ordering alone is not a storage-authority boundary.
+loads a generated `0600` authority environment file after the token environment
+file to force remote storage mode and the configured URL. Systemd environment
+files override unit-level `Environment=` values, and later environment files
+override earlier ones. The remote URL therefore stays out of the process command
+line while the last-file-wins order provides the storage-authority boundary.
 
 The registry must cover every repo scope this worker owns. Keep a separate
 distill-job worker (or an explicitly authorized all-scope operation worker) for
