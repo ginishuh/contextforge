@@ -83,6 +83,7 @@ export function promotionRoutingForIndexedCandidate({
   const updateCandidate = persist && updateDraft ? store.createMemoryUpdateCandidate(updateDraft) : updateDraft;
   return {
     version: 'audited-candidate-routing.v1',
+    auditAttemptId: indexedCandidate.latestAuditAttemptId,
     classification: assessment.classification,
     recommendedAction: assessment.recommendedAction,
     action: routingAction(assessment.classification),
@@ -101,8 +102,10 @@ export function persistPromotionRouting({ store, scope, indexedCandidate, assess
     ...scope,
     candidateId: indexedCandidate.id,
     expectedAuditContentHash: indexedCandidate.auditContentHash,
+    expectedAuditAttemptId: indexedCandidate.latestAuditAttemptId,
     routing: {
       version: routing.version,
+      auditAttemptId: routing.auditAttemptId,
       classification: routing.classification,
       recommendedAction: routing.recommendedAction,
       action: routing.action,
@@ -134,6 +137,7 @@ export function promotionRoutingResult(routing, formatUpdateCandidate) {
   if (!routing) return null;
   return {
     version: routing.version,
+    auditAttemptId: routing.auditAttemptId,
     classification: routing.classification,
     recommendedAction: routing.recommendedAction,
     action: routing.action,
@@ -144,6 +148,30 @@ export function promotionRoutingResult(routing, formatUpdateCandidate) {
       : null,
     promotionAssessment: routing.assessment,
   };
+}
+
+export function assertCurrentPromotionRouting(indexedCandidate, expectedAuditAttemptId = null) {
+  if (!indexedCandidate || ['unaudited', 'legacy_unknown'].includes(indexedCandidate.auditState)) return;
+  const routing = indexedCandidate.reviewMetadata?.promotionRouting || null;
+  const currentApprovedRoute =
+    indexedCandidate.auditState === 'audited' &&
+    indexedCandidate.auditDecision === 'approve' &&
+    Boolean(indexedCandidate.latestAuditAttemptId) &&
+    routing?.action === 'promote_as_new_memory' &&
+    routing.auditAttemptId === indexedCandidate.latestAuditAttemptId;
+  const expectedAttemptMatches = !expectedAuditAttemptId ||
+    expectedAuditAttemptId === indexedCandidate.latestAuditAttemptId;
+  if (currentApprovedRoute && expectedAttemptMatches) return;
+  const error = new Error(
+    'Audited candidates require a current approved audit and promote_as_new_memory routing before promotion.',
+  );
+  error.name = 'MemoryCandidatePromotionRoutingRequiredError';
+  error.code = 'CONTEXTFORGE_CANDIDATE_PROMOTION_ROUTING_REQUIRED';
+  error.auditState = indexedCandidate.auditState;
+  error.auditDecision = indexedCandidate.auditDecision;
+  error.latestAuditAttemptId = indexedCandidate.latestAuditAttemptId;
+  error.routedAuditAttemptId = routing?.auditAttemptId || null;
+  throw error;
 }
 
 export function finalizeRoutedSourceCandidate(store, scope, updateCandidate, { outcome, reason, memory = null }) {

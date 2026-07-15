@@ -88,6 +88,14 @@ test('audited candidate routing is dry-run by default, idempotent, and closes ap
     scope: 'repo', scopeKey: scope.scopeKey, limit: 10, dryRun: false,
   });
   assert.equal(applied.policy.mutatesDurableMemory, false);
+  for (const result of applied.results) {
+    if (result.status !== 'routed') continue;
+    const candidate = app.listMemoryCandidates({
+      scope: 'repo', scopeKey: scope.scopeKey, status: 'pending', limit: 10,
+    }).find((item) => item.id === result.candidateId);
+    assert.equal(result.routing.auditAttemptId, candidate.latestAuditAttemptId);
+    assert.equal(candidate.reviewMetadata.promotionRouting.auditAttemptId, candidate.latestAuditAttemptId);
+  }
   assert.equal(applied.results.find((item) => item.routing.classification === 'duplicate').routing.updateCandidate, null);
   assert.equal(applied.results.find((item) => item.routing.classification === 'too_specific').routing.action, 'keep_as_checkpoint_context');
   const updates = app.listMemoryUpdateCandidates({ scope: 'repo', scopeKey: scope.scopeKey, status: 'pending' });
@@ -167,6 +175,65 @@ test('approved refinement audit creates a review-only update candidate without d
   const [update] = app.listMemoryUpdateCandidates({ ...source, status: 'pending' });
   assert.equal(update.sourceCandidateId, audit.proposals[0].candidateId);
   assert.equal(app.getMemory({ ...source, key: 'audited.refinement' }).content, 'Use the first version.');
+});
+
+test('promotion rejects a stale route while a forced re-audit is queued and after rejection', async () => {
+  const dataDir = await makeTempDir();
+  let auditDecision = 'approve';
+  const auditor = async () => ({
+    approved: auditDecision === 'approve',
+    decision: auditDecision,
+    reason: `Synthetic ${auditDecision} decision.`,
+    riskCodes: [],
+    metadata: { provider: 'synthetic-reviewer', model: 'synthetic-model' },
+  });
+  auditor.metadata = { provider: 'synthetic-reviewer', model: 'synthetic-model' };
+  const app = createContextForge({
+    env: { CONTEXTFORGE_DATA_DIR: dataDir, CONTEXTFORGE_DISTILL_PROVIDER: 'stale-route-provider' },
+    cwd: process.cwd(),
+    autoPromoteAuditor: auditor,
+    distillProviders: {
+      'stale-route-provider': async () => ({
+        summaryShort: 'Stale route.', summaryText: 'A forced re-audit must invalidate the prior route.',
+        decisions: [], todos: [], openQuestions: [],
+        memoryCandidates: [{
+          key: 'routing.stale', content: 'Use the reviewed durable route.', category: 'runbook',
+          candidateType: 'runbook', promotionRecommendation: 'promote', confidence: 0.96, stability: 0.96,
+          sensitivity: 'low',
+        }],
+      }),
+    },
+  });
+  const source = { scope: 'repo', scopeKey: 'stale-routing-repo', sessionId: 'stale-routing-session' };
+  app.appendRaw({ ...source, role: 'assistant', content: 'Create a candidate for forced re-audit.' });
+  const checkpoint = await app.distillCheckpoint(source);
+  await app.auditMemoryCandidates({ ...source, checkpointId: checkpoint.id, trigger: 'manual_closeout' });
+  const [approved] = app.listMemoryCandidates({ ...source, status: 'pending' });
+  assert.equal(approved.reviewMetadata.promotionRouting.action, 'promote_as_new_memory');
+  assert.equal(approved.reviewMetadata.promotionRouting.auditAttemptId, approved.latestAuditAttemptId);
+
+  auditDecision = 'reject';
+  app.submitAuditJob({
+    scope: source.scope, scopeKey: source.scopeKey, candidateIds: [approved.id],
+    trigger: 'manual_closeout', limit: 1, force: true,
+  });
+  const [queued] = app.listMemoryCandidates({ ...source, status: 'pending' });
+  assert.equal(queued.auditState, 'queued');
+  assert.throws(
+    () => app.promoteMemoryCandidate({ ...source, candidateId: queued.id }),
+    (error) => error.code === 'CONTEXTFORGE_CANDIDATE_PROMOTION_ROUTING_REQUIRED',
+  );
+
+  await app.processJobs({ workerId: 'stale-route-review-worker', operation: 'audit_memory_candidates' });
+  const [rejected] = app.listMemoryCandidates({ ...source, status: 'pending' });
+  assert.equal(rejected.auditState, 'audited');
+  assert.equal(rejected.auditDecision, 'reject');
+  assert.notEqual(rejected.latestAuditAttemptId, approved.latestAuditAttemptId);
+  assert.equal(rejected.reviewMetadata.promotionRouting.auditAttemptId, approved.latestAuditAttemptId);
+  assert.throws(
+    () => app.promoteMemoryCandidate({ ...source, candidateId: rejected.id }),
+    (error) => error.code === 'CONTEXTFORGE_CANDIDATE_PROMOTION_ROUTING_REQUIRED',
+  );
 });
 
 test('routing persistence failure does not erase a successful immutable audit', async () => {

@@ -15,7 +15,7 @@ import { candidateBacklogAuditPlanMethods } from './memory/candidate_backlog_aud
 import { candidateDispositionMethods } from './memory/candidate_dispositions.js';
 import { memoryCandidateRevisionHash } from './memory/candidate_revision.js';
 import { candidateStaleSlaMethods } from './memory/candidate_stale_sla.js';
-import { assertMemoryUpdateTarget, buildAuditedPromotionProposal, durableMemoryRevisionHash, finalizeRoutedSourceCandidate, persistApprovedAuditRouting, promotionRoutingResult, routeAuditedMemoryCandidates } from './memory/audited_candidate_routing.js';
+import { assertCurrentPromotionRouting, assertMemoryUpdateTarget, buildAuditedPromotionProposal, durableMemoryRevisionHash, finalizeRoutedSourceCandidate, persistApprovedAuditRouting, promotionRoutingResult, routeAuditedMemoryCandidates } from './memory/audited_candidate_routing.js';
 import { dueDistillSessionSummary, listIdleCandidateAudits, processIdleCandidateAudits } from './memory/idle_candidate_audits.js';
 import { createRemoteContextForge } from './remote/client.js';
 import { buildOperationalReadiness } from './operations/readiness.js';
@@ -7014,6 +7014,7 @@ export function createContextForge(options = {}) {
             `Memory candidate ${indexedCandidate.id} is ${indexedCandidate.status}; expected pending. Pass allowStatusOverride to change it anyway.`,
           );
         }
+        assertCurrentPromotionRouting(indexedCandidate, options.expectedAuditAttemptId);
         const key = options.key || candidate.key;
         requireOption(key, 'key');
         const content = options.content || candidate.content;
