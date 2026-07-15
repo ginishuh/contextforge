@@ -1,4 +1,9 @@
-import { candidateActionAvailability } from './candidate_actions.js';
+import {
+  candidateActionAvailability,
+  candidateBulkEligibility,
+  candidateRecommendedAction,
+  eligibleCandidateIndexes,
+} from './candidate_actions.js';
 
 const state = {
   runtime: null,
@@ -592,36 +597,33 @@ async function loadAuditedCandidates({ cursor = null } = {}) {
     page: true,
     ...(cursor ? { cursor } : {}),
   });
-  state.candidates = (result.page?.items || []).map((item) => ({
-    ...item.candidate,
-    candidateId: item.id,
-    disposition: item.status,
-    auditState: item.auditState,
-    auditDecision: item.auditDecision,
-    auditContentHash: item.auditContentHash,
-    audit: item.reviewMetadata?.audit || null,
-    promotionRouting: item.reviewMetadata?.promotionRouting || null,
-    auditReason: item.reviewReason,
-    reviewedAt: item.reviewedAt,
-    snoozedUntil: item.snoozedUntil,
-    snoozeReason: item.snoozeReason,
-    snoozedBy: item.snoozedBy,
-    wakeUpStatus: item.wakeUpStatus,
-    evidence: {
-      checkpointId: item.checkpointId,
-      sessionId: item.sessionId,
-      sourceAgent: item.source?.sourceAgent || null,
-      sourceProvenance: item.source?.sourceProvenance || null,
-    },
-    recommendedAction: ['do_not_create_duplicate_memory', 'keep_as_checkpoint_context'].includes(item.reviewMetadata?.promotionRouting?.action)
-      ? 'do_not_promote'
-      : item.reviewMetadata?.promotionRouting?.action === 'review_memory_update_candidate'
-        ? 'review_update_candidate'
-        : item.reviewMetadata?.promotionRouting?.action === 'promote_as_new_memory'
-          ? 'promote'
-          : item.auditDecision === 'approve' ? 'route_before_promote' : 'review',
-    source: item.source,
-  }));
+  state.candidates = (result.page?.items || []).map((item) => {
+    const candidate = {
+      ...item.candidate,
+      candidateId: item.id,
+      disposition: item.status,
+      auditState: item.auditState,
+      auditDecision: item.auditDecision,
+      auditContentHash: item.auditContentHash,
+      latestAuditAttemptId: item.latestAuditAttemptId,
+      audit: item.reviewMetadata?.audit || null,
+      promotionRouting: item.reviewMetadata?.promotionRouting || null,
+      auditReason: item.reviewReason,
+      reviewedAt: item.reviewedAt,
+      snoozedUntil: item.snoozedUntil,
+      snoozeReason: item.snoozeReason,
+      snoozedBy: item.snoozedBy,
+      wakeUpStatus: item.wakeUpStatus,
+      evidence: {
+        checkpointId: item.checkpointId,
+        sessionId: item.sessionId,
+        sourceAgent: item.source?.sourceAgent || null,
+        sourceProvenance: item.source?.sourceProvenance || null,
+      },
+      source: item.source,
+    };
+    return { ...candidate, recommendedAction: candidateRecommendedAction(candidate) };
+  });
   state.candidateCursor = result.page?.page?.nextCursor || null;
   if (result.summary) {
     state.candidateSummary = result.summary;
@@ -644,6 +646,10 @@ async function loadAuditedCandidates({ cursor = null } = {}) {
   }
   $('#nextCandidatePage').hidden = !state.candidateCursor;
   $('#candidates').innerHTML = state.candidates.map(candidateItem).join('') || '<p class="muted">현재 필터에 해당하는 후보가 없습니다.</p>';
+  document.querySelectorAll('[data-candidate-select]').forEach((input) => {
+    input.addEventListener('change', updateCandidateBulkButtons);
+  });
+  updateCandidateBulkButtons();
   document.querySelectorAll('[data-candidate]').forEach((button) => {
     button.addEventListener('click', () => showDetail('감사 후보', state.candidates[Number(button.dataset.candidate)]));
   });
@@ -655,17 +661,14 @@ async function loadAuditedCandidates({ cursor = null } = {}) {
       const content = prompt('메모리 내용', candidate.content);
       if (!content) return;
       const edited = key !== candidate.key || content !== candidate.content;
-      const needsHumanReview = candidate.auditDecision === 'needs_review';
-      const reasonPrompt = [
-        needsHumanReview ? `감사 판단은 needs_review입니다.\n감사의견: ${candidate.auditReason || '없음'}\n그래도 장기기억으로 승격하는 이유를 입력하세요.` : '',
-        edited ? '감사된 원문도 수정됩니다. 수정 및 승격 이유를 함께 기록하세요.' : '',
-      ].filter(Boolean).join('\n\n');
+      const reasonPrompt = edited ? '감사된 원문도 수정됩니다. 수정 및 승격 이유를 함께 기록하세요.' : '';
       const promotionReason = reasonPrompt ? prompt(reasonPrompt) : null;
       if (reasonPrompt && !promotionReason) return;
       const promotionRequest = {
         scope,
         scopeKey,
         candidateId: candidate.candidateId,
+        expectedAuditAttemptId: candidate.latestAuditAttemptId,
         key,
         content,
         category: candidate.category || 'note',
@@ -755,7 +758,7 @@ function candidateItem(candidate, index) {
     : '';
   const provider = candidate.audit?.metadata?.provider || '미실행';
   const model = candidate.audit?.metadata?.model || '';
-  const mutable = candidate.disposition === 'pending';
+  const mutable = candidateBulkEligibility(candidate).select;
   const actionAvailability = candidateActionAvailability(candidate);
   const snoozeText = candidate.disposition === 'snoozed' ? ` · 재검토 ${candidate.snoozedUntil || '미지정'}` : '';
   const routingText = candidate.promotionRouting
@@ -773,7 +776,7 @@ function candidateItem(candidate, index) {
     <p class="muted">${escapeHtml(provider)}${model ? `/${escapeHtml(model)}` : ''}${escapeHtml(sourceText)} · ${escapeHtml(candidate.category || 'note')} · ${escapeHtml(candidate.auditReason || candidate.whyDurable || '')}${escapeHtml(risks)}${escapeHtml(snoozeText)}${escapeHtml(routingText)}</p>
     <div class="actions">
       <button data-candidate="${index}">상세</button>
-      ${actionButton('promote', actionAvailability.promote.requiresReason ? '검토 후 승격' : '승격', actionAvailability.promote)}
+      ${actionButton('promote', '승격', actionAvailability.promote)}
       ${actionButton('snooze', '미루기', actionAvailability.snooze)}
       ${actionButton('wake', '다시 열기', actionAvailability.wake)}
       ${actionButton('reopen-stale', 'stale 해제', actionAvailability.reopenStale)}
@@ -784,13 +787,27 @@ function candidateItem(candidate, index) {
 }
 
 function checkedIndexes(selector) {
-  return [...document.querySelectorAll(`${selector}:checked`)].map((input) => Number(input.dataset.memorySelect ?? input.dataset.candidateSelect));
+  return [...document.querySelectorAll(`${selector}:checked:not(:disabled)`)]
+    .map((input) => Number(input.dataset.memorySelect ?? input.dataset.candidateSelect));
 }
 
 function setChecked(selector, checked) {
   document.querySelectorAll(selector).forEach((input) => {
-    input.checked = checked;
+    input.checked = checked && !input.disabled;
   });
+}
+
+function selectedCandidateIndexesFor(action) {
+  return eligibleCandidateIndexes(state.candidates, checkedIndexes('[data-candidate-select]'), action);
+}
+
+function updateCandidateBulkButtons() {
+  const selectedIndexes = checkedIndexes('[data-candidate-select]');
+  $('#selectAllCandidates').disabled = !state.candidates.some((candidate) => candidateBulkEligibility(candidate).select);
+  $('#planCandidateAudit').disabled = $('#candidateStatus').value !== 'pending';
+  $('#auditSelectedCandidates').disabled = eligibleCandidateIndexes(state.candidates, selectedIndexes, 'audit').length === 0;
+  $('#routeSelectedCandidates').disabled = eligibleCandidateIndexes(state.candidates, selectedIndexes, 'route').length === 0;
+  $('#rejectSelectedCandidates').disabled = eligibleCandidateIndexes(state.candidates, selectedIndexes, 'reject').length === 0;
 }
 
 $('#selectAllMemories').addEventListener('click', (event) => {
@@ -823,11 +840,13 @@ $('#deactivateSelectedMemories').addEventListener('click', async (event) => {
 $('#selectAllCandidates').addEventListener('click', (event) => {
   event.preventDefault();
   setChecked('[data-candidate-select]', true);
+  updateCandidateBulkButtons();
 });
 
 $('#clearCandidateSelection').addEventListener('click', (event) => {
   event.preventDefault();
   setChecked('[data-candidate-select]', false);
+  updateCandidateBulkButtons();
 });
 
 $('#nextCandidatePage').addEventListener('click', async (event) => {
@@ -837,7 +856,7 @@ $('#nextCandidatePage').addEventListener('click', async (event) => {
 
 $('#planCandidateAudit').addEventListener('click', async (event) => {
   event.preventDefault();
-  const indexes = checkedIndexes('[data-candidate-select]');
+  const indexes = selectedCandidateIndexesFor('audit');
   const candidateIds = indexes.map((index) => state.candidates[index]?.candidateId).filter(Boolean);
   const result = await call('planMemoryCandidateBacklogAudit', {
     scope: $('#memoryScope').value,
@@ -865,7 +884,7 @@ $('#planCandidateAudit').addEventListener('click', async (event) => {
 
 $('#auditSelectedCandidates').addEventListener('click', async (event) => {
   event.preventDefault();
-  const indexes = checkedIndexes('[data-candidate-select]');
+  const indexes = selectedCandidateIndexesFor('audit');
   if (!indexes.length) return;
   if (indexes.length > 10) {
     alert('감사 작업은 한 번에 최대 10개 후보만 제출할 수 있습니다.');
@@ -889,7 +908,7 @@ $('#auditSelectedCandidates').addEventListener('click', async (event) => {
 
 $('#routeSelectedCandidates').addEventListener('click', async (event) => {
   event.preventDefault();
-  const indexes = checkedIndexes('[data-candidate-select]');
+  const indexes = selectedCandidateIndexesFor('route');
   const candidateIds = indexes.map((index) => state.candidates[index]?.candidateId).filter(Boolean);
   if (!candidateIds.length) return;
   if (!confirm(`감사 승인 후보 ${candidateIds.length}개의 durable write 경로를 분류할까요? 이 작업은 새 영구 메모리를 만들지 않습니다.`)) return;
@@ -942,7 +961,7 @@ $('#loadMemoryUpdates').addEventListener('click', async (event) => { event.preve
 
 $('#rejectSelectedCandidates').addEventListener('click', async (event) => {
   event.preventDefault();
-  const indexes = checkedIndexes('[data-candidate-select]');
+  const indexes = selectedCandidateIndexesFor('reject');
   if (!indexes.length) return;
   const reason = prompt(`선택한 후보 ${indexes.length}개를 거절하는 이유를 입력하세요.`);
   if (!reason) return;

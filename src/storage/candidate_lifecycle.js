@@ -279,7 +279,7 @@ export function markMemoryCandidateReviewed(store, {
 }
 
 export function markMemoryCandidatePromotionRouted(store, {
-  scopeType, scopeKey, candidateId, expectedAuditContentHash, routing,
+  scopeType, scopeKey, candidateId, expectedAuditContentHash, expectedAuditAttemptId, routing,
 }) {
   const existing = store.getMemoryCandidate({ scopeType, scopeKey, candidateId });
   if (!existing) throw new Error(`Memory candidate not found: ${candidateId}`);
@@ -289,17 +289,28 @@ export function markMemoryCandidatePromotionRouted(store, {
   if (!expectedAuditContentHash || existing.auditContentHash !== expectedAuditContentHash) {
     throw new Error(`Memory candidate ${candidateId} audit revision changed before routing.`);
   }
+  if (!expectedAuditAttemptId || existing.latestAuditAttemptId !== expectedAuditAttemptId) {
+    throw new Error(`Memory candidate ${candidateId} audit attempt changed before routing.`);
+  }
   const routedAt = nowIso();
   const reviewMetadata = {
     ...(existing.reviewMetadata || {}),
-    promotionRouting: { ...routing, routedAt, auditContentHash: expectedAuditContentHash },
+    promotionRouting: {
+      ...routing,
+      routedAt,
+      auditContentHash: expectedAuditContentHash,
+      auditAttemptId: expectedAuditAttemptId,
+    },
   };
   const result = store.db.prepare(`
     UPDATE memory_candidate_index SET review_metadata_json = ?
     WHERE scope_type = ? AND scope_key = ? AND id = ?
       AND status = 'pending' AND audit_state = 'audited' AND audit_decision = 'approve'
-      AND audit_content_hash = ?
-  `).run(json(reviewMetadata, {}), scopeType, scopeKey, candidateId, expectedAuditContentHash);
+      AND audit_content_hash = ? AND latest_audit_attempt_id = ?
+  `).run(
+    json(reviewMetadata, {}), scopeType, scopeKey, candidateId,
+    expectedAuditContentHash, expectedAuditAttemptId,
+  );
   if (result.changes === 0) {
     throw new Error(`Memory candidate ${candidateId} changed before promotion routing could be committed.`);
   }

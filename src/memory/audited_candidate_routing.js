@@ -83,6 +83,7 @@ export function promotionRoutingForIndexedCandidate({
   const updateCandidate = persist && updateDraft ? store.createMemoryUpdateCandidate(updateDraft) : updateDraft;
   return {
     version: 'audited-candidate-routing.v1',
+    auditAttemptId: indexedCandidate.latestAuditAttemptId,
     classification: assessment.classification,
     recommendedAction: assessment.recommendedAction,
     action: routingAction(assessment.classification),
@@ -101,8 +102,10 @@ export function persistPromotionRouting({ store, scope, indexedCandidate, assess
     ...scope,
     candidateId: indexedCandidate.id,
     expectedAuditContentHash: indexedCandidate.auditContentHash,
+    expectedAuditAttemptId: indexedCandidate.latestAuditAttemptId,
     routing: {
       version: routing.version,
+      auditAttemptId: routing.auditAttemptId,
       classification: routing.classification,
       recommendedAction: routing.recommendedAction,
       action: routing.action,
@@ -134,6 +137,7 @@ export function promotionRoutingResult(routing, formatUpdateCandidate) {
   if (!routing) return null;
   return {
     version: routing.version,
+    auditAttemptId: routing.auditAttemptId,
     classification: routing.classification,
     recommendedAction: routing.recommendedAction,
     action: routing.action,

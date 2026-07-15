@@ -93,7 +93,7 @@ test('operational metrics track promotion quality, audit variants, duplicates, t
   });
   const candidates = app.listMemoryCandidates({ ...scope, checkpointId: checkpoint.id, status: 'pending' });
   for (const candidate of candidates) {
-    store.markMemoryCandidateAudited({
+    const audited = store.markMemoryCandidateAudited({
       ...scope,
       candidateId: candidate.id,
       audit: {
@@ -105,6 +105,18 @@ test('operational metrics track promotion quality, audit variants, duplicates, t
       },
       reason: 'Synthetic quality approval.',
       metadata: { sourceMode: 'checkpoint', checkpointId: checkpoint.id },
+    });
+    store.markMemoryCandidatePromotionRouted({
+      ...scope,
+      candidateId: candidate.id,
+      expectedAuditContentHash: audited.auditContentHash,
+      expectedAuditAttemptId: audited.latestAuditAttemptId,
+      routing: {
+        version: 'synthetic-quality-fixture.v1',
+        classification: 'new',
+        recommendedAction: 'promote_as_new_memory',
+        action: 'promote_as_new_memory',
+      },
     });
   }
   const runbook = candidates.find((candidate) => candidate.candidate.key === 'quality.runbook');

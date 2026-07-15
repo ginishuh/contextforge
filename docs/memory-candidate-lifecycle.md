@@ -186,7 +186,10 @@ triage and become `triaged_no_audit`; the duplicate routing branch exists for
 legacy approvals, forced re-audits, and previously audited backlog rows. In all
 cases the Admin UI requires a stored `promote_as_new_memory` route before it
 enables direct promotion. Missing or failed routing never falls back to a
-warning override.
+warning override. Persisted routing is bound to `latestAuditAttemptId`; starting
+or completing a later audit invalidates the older route even when the candidate
+content hash did not change. The promotion backend applies the same gate to
+audited candidates, so stale UI state cannot bypass the current audit decision.
 
 `routeAuditedMemoryCandidates` applies the same provider-free contract to an
 existing approved backlog. It defaults to `dryRun=true`, accepts at most 100
