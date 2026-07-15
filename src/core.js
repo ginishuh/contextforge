@@ -15,7 +15,7 @@ import { candidateBacklogAuditPlanMethods } from './memory/candidate_backlog_aud
 import { candidateDispositionMethods } from './memory/candidate_dispositions.js';
 import { memoryCandidateRevisionHash } from './memory/candidate_revision.js';
 import { candidateStaleSlaMethods } from './memory/candidate_stale_sla.js';
-import { assertMemoryUpdateTarget, buildAuditedPromotionProposal, durableMemoryRevisionHash, finalizeRoutedSourceCandidate, persistApprovedAuditRouting, promotionRoutingResult, routeAuditedMemoryCandidates } from './memory/audited_candidate_routing.js';
+import { assertCurrentPromotionRouting, assertMemoryUpdateTarget, buildAuditedPromotionProposal, durableMemoryRevisionHash, finalizeRoutedSourceCandidate, persistApprovedAuditRouting, promotionRoutingResult, routeAuditedMemoryCandidates } from './memory/audited_candidate_routing.js';
 import { dueDistillSessionSummary, listIdleCandidateAudits, processIdleCandidateAudits } from './memory/idle_candidate_audits.js';
 import { createRemoteContextForge } from './remote/client.js';
 import { buildOperationalReadiness } from './operations/readiness.js';
@@ -7014,29 +7014,7 @@ export function createContextForge(options = {}) {
             `Memory candidate ${indexedCandidate.id} is ${indexedCandidate.status}; expected pending. Pass allowStatusOverride to change it anyway.`,
           );
         }
-        if (indexedCandidate && !['unaudited', 'legacy_unknown'].includes(indexedCandidate.auditState)) {
-          const routing = indexedCandidate.reviewMetadata?.promotionRouting || null;
-          const currentApprovedRoute =
-            indexedCandidate.auditState === 'audited' &&
-            indexedCandidate.auditDecision === 'approve' &&
-            Boolean(indexedCandidate.latestAuditAttemptId) &&
-            routing?.action === 'promote_as_new_memory' &&
-            routing.auditAttemptId === indexedCandidate.latestAuditAttemptId;
-          const expectedAttemptMatches = !options.expectedAuditAttemptId ||
-            options.expectedAuditAttemptId === indexedCandidate.latestAuditAttemptId;
-          if (!currentApprovedRoute || !expectedAttemptMatches) {
-            const error = new Error(
-              'Audited candidates require a current approved audit and promote_as_new_memory routing before promotion.',
-            );
-            error.name = 'MemoryCandidatePromotionRoutingRequiredError';
-            error.code = 'CONTEXTFORGE_CANDIDATE_PROMOTION_ROUTING_REQUIRED';
-            error.auditState = indexedCandidate.auditState;
-            error.auditDecision = indexedCandidate.auditDecision;
-            error.latestAuditAttemptId = indexedCandidate.latestAuditAttemptId;
-            error.routedAuditAttemptId = routing?.auditAttemptId || null;
-            throw error;
-          }
-        }
+        assertCurrentPromotionRouting(indexedCandidate, options.expectedAuditAttemptId);
         const key = options.key || candidate.key;
         requireOption(key, 'key');
         const content = options.content || candidate.content;

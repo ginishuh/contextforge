@@ -150,6 +150,30 @@ export function promotionRoutingResult(routing, formatUpdateCandidate) {
   };
 }
 
+export function assertCurrentPromotionRouting(indexedCandidate, expectedAuditAttemptId = null) {
+  if (!indexedCandidate || ['unaudited', 'legacy_unknown'].includes(indexedCandidate.auditState)) return;
+  const routing = indexedCandidate.reviewMetadata?.promotionRouting || null;
+  const currentApprovedRoute =
+    indexedCandidate.auditState === 'audited' &&
+    indexedCandidate.auditDecision === 'approve' &&
+    Boolean(indexedCandidate.latestAuditAttemptId) &&
+    routing?.action === 'promote_as_new_memory' &&
+    routing.auditAttemptId === indexedCandidate.latestAuditAttemptId;
+  const expectedAttemptMatches = !expectedAuditAttemptId ||
+    expectedAuditAttemptId === indexedCandidate.latestAuditAttemptId;
+  if (currentApprovedRoute && expectedAttemptMatches) return;
+  const error = new Error(
+    'Audited candidates require a current approved audit and promote_as_new_memory routing before promotion.',
+  );
+  error.name = 'MemoryCandidatePromotionRoutingRequiredError';
+  error.code = 'CONTEXTFORGE_CANDIDATE_PROMOTION_ROUTING_REQUIRED';
+  error.auditState = indexedCandidate.auditState;
+  error.auditDecision = indexedCandidate.auditDecision;
+  error.latestAuditAttemptId = indexedCandidate.latestAuditAttemptId;
+  error.routedAuditAttemptId = routing?.auditAttemptId || null;
+  throw error;
+}
+
 export function finalizeRoutedSourceCandidate(store, scope, updateCandidate, { outcome, reason, memory = null }) {
   if (!updateCandidate?.sourceCandidateId) return null;
   const sourceCandidate = store.getMemoryCandidate({ ...scope, candidateId: updateCandidate.sourceCandidateId });
