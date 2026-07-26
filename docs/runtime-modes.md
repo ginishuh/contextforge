@@ -183,6 +183,9 @@ Safety:
   execution is at-least-once, so a lost lease can still incur duplicate provider
   cost; lease-owner plus attempt fencing prevents stale workers from committing
   checkpoint or audit writes.
+  See [Durable distill job worker](operations.md#durable-distill-job-worker)
+  for a systemd service/timer example, timeout requirements, and authoritative
+  readiness verification.
 - Queued jobs can be cancelled. Running provider calls are intentionally not
   force-cancelled; stop accepting new work and let the lease/result settle
   before maintenance when graceful cancellation is required.
