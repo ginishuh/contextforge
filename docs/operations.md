@@ -46,6 +46,96 @@ Pending/stale embedding coverage remains visible in the response and metrics,
 but does not by itself make the process unready; unavailable sqlite-vec or
 failed embedding jobs do.
 
+## Durable distill job worker
+
+Automatic ingest distillation and durable distill jobs are separate execution
+paths:
+
+- an ingest watcher started with `--distill auto` calls `distillCheckpoint`
+  directly when a session crosses its configured threshold;
+- `submitDistillJob` only persists a `distill_checkpoint` operation job and
+  returns immediately.
+
+The second path requires a server-side `processJobs` caller. A healthy ingest
+watcher does not consume that queue. If clients can call `submitDistillJob`,
+deploy the worker with the canonical server instead of depending on a client
+process to remain connected.
+
+For a low-volume deployment, install a systemd user oneshot service:
+
+```ini
+# ~/.config/systemd/user/contextforge-operation-worker.service
+[Unit]
+Description=ContextForge durable distill job worker
+After=network-online.target contextforge-remote.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/contextforge
+EnvironmentFile=/home/contextforge/.config/contextforge/client.env
+ExecStart=/usr/bin/node /srv/contextforge/src/cli.js processJobs --operation distill_checkpoint --workerId vps-distill-worker-1 --limit 2 --leaseMs 600000
+TimeoutStartSec=10min
+```
+
+The environment file must be private and select the canonical remote server:
+
+```text
+CONTEXTFORGE_STORAGE_MODE=remote
+CONTEXTFORGE_REMOTE_URL=http://127.0.0.1:8765
+CONTEXTFORGE_REMOTE_TOKEN=replace-me
+CONTEXTFORGE_REMOTE_TIMEOUT_MS=180000
+```
+
+Keep `CONTEXTFORGE_REMOTE_TIMEOUT_MS` strictly greater than the configured
+distill-provider timeout. The default `codex_exec` provider timeout is 120
+seconds; a 30-second remote timeout makes the server reject the provider call
+before execution and can create repeated failed `distill_runs` rows.
+
+Run the oneshot from a timer. A one-minute interval stays below the default
+five-minute readiness stale boundary while avoiding a resident process for an
+empty queue:
+
+```ini
+# ~/.config/systemd/user/contextforge-operation-worker.timer
+[Unit]
+Description=Run ContextForge durable distill job worker periodically
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=1min
+AccuracySec=10s
+Persistent=true
+Unit=contextforge-operation-worker.service
+
+[Install]
+WantedBy=timers.target
+```
+
+Enable the timer and exercise the intended control flow once:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now contextforge-operation-worker.timer
+systemctl --user start contextforge-operation-worker.service
+systemctl --user status contextforge-operation-worker.timer
+journalctl --user -u contextforge-operation-worker.service -n 50 --no-pager
+curl -fsS http://127.0.0.1:8765/readyz
+```
+
+After a representative durable submission, confirm all of the following:
+
+- the job changes from `queued` to `running` to `succeeded`;
+- the result contains a real `checkpointId`;
+- canonical checkpoint readback returns that identifier;
+- `/readyz` reports `ready: true`, `operationQueue.queued: 0`, and
+  `operationWorker.ok: true`.
+
+If `/healthz` is healthy while `/readyz` reports
+`checks.operationWorker.reason=operation_worker_stale`, the server is alive but
+the durable queue is not operational. Deploy or recover `processJobs`; do not
+mistake a healthy synchronous `distillCheckpoint` call for proof that the
+durable worker path is working.
+
 ## Metrics And Correlation
 
 `GET /metrics` uses Prometheus text format and requires the same bearer token or
