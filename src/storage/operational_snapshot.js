@@ -1,7 +1,53 @@
 import fs from 'node:fs';
 
-export function buildOperationalSnapshot(store, { now = new Date(), supportedSchemaVersion } = {}) {
+function safeDistillFailureReason(errorMessage) {
+  const text = String(errorMessage || '').toLowerCase();
+  if (text.includes('client timeout') && text.includes('not shorter than')) {
+    return {
+      code: 'client_timeout_contract',
+      summary: 'The distillation timeout is not shorter than the remote client timeout.',
+    };
+  }
+  if (text.includes('timeout') || text.includes('timed out')) {
+    return {
+      code: 'provider_timeout',
+      summary: 'The distillation provider timed out.',
+    };
+  }
+  if (text.includes('invalid schema') || text.includes('response_format')) {
+    return {
+      code: 'provider_output_schema_invalid',
+      summary: 'The distillation provider output schema was rejected.',
+    };
+  }
+  if (text.includes('exited with code')) {
+    return {
+      code: 'provider_exit',
+      summary: 'The distillation provider exited unsuccessfully.',
+    };
+  }
+  if (text.includes('parse') || text.includes('invalid json')) {
+    return {
+      code: 'provider_output_invalid',
+      summary: 'The distillation provider returned invalid output.',
+    };
+  }
+  return {
+    code: 'provider_failure',
+    summary: 'The distillation provider failed.',
+  };
+}
+
+export function buildOperationalSnapshot(
+  store,
+  {
+    now = new Date(),
+    supportedSchemaVersion,
+    distillFailureWindowMs = 24 * 60 * 60 * 1000,
+  } = {},
+) {
   const nowIsoText = now.toISOString();
+  const distillFailureWindowStartedAt = new Date(now.getTime() - distillFailureWindowMs).toISOString();
   const operationJobs = { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 };
   for (const row of store.db.prepare('SELECT status, COUNT(*) AS count FROM operation_jobs GROUP BY status').all()) {
     operationJobs[row.status] = row.count;
@@ -96,6 +142,26 @@ export function buildOperationalSnapshot(store, { now = new Date(), supportedSch
          AND (lower(error_message) LIKE '%timeout%' OR lower(error_message) LIKE '%timed out%')`,
     )
     .get().count;
+  const recentDistillFailures = store.db
+    .prepare(
+      `SELECT COUNT(*) AS count
+       FROM distill_runs
+       WHERE status = 'failed'
+         AND COALESCE(completed_at, created_at) >= ?`,
+    )
+    .get(distillFailureWindowStartedAt);
+  const lastDistillFailure = store.db
+    .prepare(
+      `SELECT provider, error_message, COALESCE(completed_at, created_at) AS failed_at
+       FROM distill_runs
+       WHERE status = 'failed'
+       ORDER BY COALESCE(completed_at, created_at) DESC, id DESC
+       LIMIT 1`,
+    )
+    .get();
+  const lastDistillFailureReason = lastDistillFailure
+    ? safeDistillFailureReason(lastDistillFailure.error_message)
+    : null;
   const disk = fs.statfsSync(store.dataDir);
   let writable = true;
   try {
@@ -137,6 +203,15 @@ export function buildOperationalSnapshot(store, { now = new Date(), supportedSch
     },
     providers: {
       distill,
+      distillationHealth: {
+        windowMs: distillFailureWindowMs,
+        windowStartedAt: distillFailureWindowStartedAt,
+        recentFailureCount: Number(recentDistillFailures.count || 0),
+        lastFailureAt: lastDistillFailure?.failed_at || null,
+        lastFailureProvider: lastDistillFailure?.provider || null,
+        lastFailureReasonCode: lastDistillFailureReason?.code || null,
+        lastFailureReason: lastDistillFailureReason?.summary || null,
+      },
       usage: {
         events: usage.events,
         totalTokens: usage.total_tokens,

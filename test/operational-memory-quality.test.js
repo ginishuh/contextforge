@@ -66,6 +66,85 @@ test('readiness degrades only after queued work outlives the operation worker gr
   app.close();
 });
 
+test('readiness exposes bounded recent distill failures without leaking raw provider errors', async () => {
+  const dataDir = await makeTempDir();
+  const store = new ContextForgeStore({ dataDir });
+  const app = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_READINESS_DISTILL_FAILURE_WINDOW_MS: String(24 * 60 * 60 * 1000),
+      CONTEXTFORGE_READINESS_MAX_RECENT_DISTILL_FAILURES: '2',
+    },
+    cwd: process.cwd(),
+    store,
+  });
+  const scope = {
+    scopeType: 'repo',
+    scopeKey: 'distill-readiness-repo',
+    sessionId: 'distill-readiness-session',
+  };
+  const fail = (message, completedAt) => {
+    const run = store.startDistillRun({
+      ...scope,
+      provider: 'codex_exec',
+      sourceEventCount: 1,
+    });
+    store.failDistillRun({ id: run.id, error: new Error(message) });
+    store.db.prepare('UPDATE distill_runs SET completed_at = ? WHERE id = ?').run(completedAt, run.id);
+  };
+
+  const now = Date.now();
+  fail('codex_exec exited with code 1 and secret=first-secret', new Date(now - 3000).toISOString());
+  let readiness = app.readiness();
+  assert.equal(readiness.ready, true, 'one visible failure remains below the configured threshold');
+  assert.equal(readiness.checks.distillation.recentFailureCount, 1);
+
+  fail('provider timed out with secret=second-secret', new Date(now - 2000).toISOString());
+  fail(
+    'provider timeout 120000ms is not shorter than the client timeout 30000ms secret=latest-secret',
+    new Date(now - 1000).toISOString(),
+  );
+  readiness = app.readiness();
+  assert.equal(readiness.ready, false);
+  assert.equal(readiness.checks.distillation.ok, false);
+  assert.equal(readiness.checks.distillation.reason, 'recent_distill_failures');
+  assert.equal(readiness.checks.distillation.recentFailureCount, 3);
+  assert.equal(readiness.checks.distillation.maximumRecentFailures, 2);
+  assert.equal(readiness.checks.distillation.lastFailureProvider, 'codex_exec');
+  assert.equal(readiness.checks.distillation.lastFailureReasonCode, 'client_timeout_contract');
+  assert.match(readiness.checks.distillation.lastFailureReason, /remote client timeout/i);
+  assert.ok(!JSON.stringify(readiness).includes('latest-secret'));
+
+  const remote = await startContextForgeServer({ port: 0, app });
+  try {
+    const response = await fetch(`${remote.url}/readyz`);
+    assert.equal(response.status, 503);
+    const body = await response.json();
+    assert.equal(body.checks.distillation.recentFailureCount, 3);
+    assert.ok(!JSON.stringify(body).includes('latest-secret'));
+    store.db.prepare("UPDATE distill_runs SET completed_at = datetime(completed_at, '-2 days')").run();
+  } finally {
+    await remote.close();
+  }
+
+  const recoveredApp = createContextForge({
+    env: {
+      CONTEXTFORGE_DATA_DIR: dataDir,
+      CONTEXTFORGE_READINESS_DISTILL_FAILURE_WINDOW_MS: String(24 * 60 * 60 * 1000),
+      CONTEXTFORGE_READINESS_MAX_RECENT_DISTILL_FAILURES: '2',
+    },
+    cwd: process.cwd(),
+  });
+  try {
+    const recovered = recoveredApp.readiness();
+    assert.equal(recovered.ready, true);
+    assert.equal(recovered.checks.distillation.recentFailureCount, 0);
+    assert.equal(recovered.checks.distillation.lastFailureReasonCode, 'client_timeout_contract');
+  } finally {
+    recoveredApp.close();
+  }
+});
+
 test('operational metrics track promotion quality, audit variants, duplicates, transient promotions, and retrieval use', async () => {
   const dataDir = await makeTempDir();
   const store = new ContextForgeStore({ dataDir });

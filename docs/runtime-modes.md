@@ -141,8 +141,8 @@ Meaning:
 - If `CONTEXTFORGE_SERVER_STORAGE_MODE` is omitted, the server coerces remote
   client-style configuration into a local server store instead of recursively
   calling another remote.
-- `/healthz` is liveness; `/readyz` is DB/schema/disk/queue and operation-worker
-  freshness readiness.
+- `/healthz` is liveness; `/readyz` is DB/schema/disk/queue, operation-worker
+  freshness, and bounded recent-distillation-failure readiness.
 - `/metrics` is an authenticated Prometheus endpoint.
 - `/mcp` is the Streamable HTTP MCP endpoint.
 - `/v0/*` is the JSON remote API.

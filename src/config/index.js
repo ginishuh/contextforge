@@ -124,6 +124,18 @@ function parseOptionalPositiveInteger(value, name) {
   return parsed;
 }
 
+function parseNonNegativeInteger(value, name, fallback) {
+  if (value == null || value === '') {
+    return fallback;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`${name} must be a non-negative integer.`);
+  }
+  return parsed;
+}
+
 function parseBoolean(value) {
   return value === true || value === 'true' || value === '1' || value === 1;
 }
@@ -353,6 +365,16 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
         env.CONTEXTFORGE_READINESS_WORKER_STALE_AFTER_MS,
         'CONTEXTFORGE_READINESS_WORKER_STALE_AFTER_MS',
         5 * 60 * 1000,
+      ),
+      readinessDistillFailureWindowMs: parsePositiveInteger(
+        env.CONTEXTFORGE_READINESS_DISTILL_FAILURE_WINDOW_MS,
+        'CONTEXTFORGE_READINESS_DISTILL_FAILURE_WINDOW_MS',
+        24 * 60 * 60 * 1000,
+      ),
+      readinessMaxRecentDistillFailures: parseNonNegativeInteger(
+        env.CONTEXTFORGE_READINESS_MAX_RECENT_DISTILL_FAILURES,
+        'CONTEXTFORGE_READINESS_MAX_RECENT_DISTILL_FAILURES',
+        10,
       ),
       shutdownTimeoutMs: parsePositiveInteger(
         env.CONTEXTFORGE_SHUTDOWN_TIMEOUT_MS,
