@@ -21,6 +21,9 @@ export function buildOperationalReadiness({ snapshot, dbState, config, embedding
     .filter(([, state]) => !state.ok)
     .map(([operation]) => operation);
   const workerFresh = staleOperations.length === 0;
+  const distillationHealth = snapshot.providers.distillationHealth;
+  const distillationHealthy =
+    distillationHealth.recentFailureCount <= config.operations.readinessMaxRecentDistillFailures;
   const checks = {
     database: {
       ok:
@@ -56,6 +59,18 @@ export function buildOperationalReadiness({ snapshot, dbState, config, embedding
       reason: workerFresh ? null : 'operation_worker_stale',
       staleOperations,
       operations: workerOperations,
+    },
+    distillation: {
+      ok: distillationHealthy,
+      recentFailureCount: distillationHealth.recentFailureCount,
+      maximumRecentFailures: config.operations.readinessMaxRecentDistillFailures,
+      windowMs: distillationHealth.windowMs,
+      windowStartedAt: distillationHealth.windowStartedAt,
+      lastFailureAt: distillationHealth.lastFailureAt,
+      lastFailureProvider: distillationHealth.lastFailureProvider,
+      lastFailureReasonCode: distillationHealth.lastFailureReasonCode,
+      lastFailureReason: distillationHealth.lastFailureReason,
+      reason: distillationHealthy ? null : 'recent_distill_failures',
     },
     embeddings: {
       ok:

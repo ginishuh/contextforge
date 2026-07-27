@@ -4022,7 +4022,9 @@ export function createContextForge(options = {}) {
 
     readiness() {
       return useStore((store) => buildOperationalReadiness({
-        snapshot: store.operationalSnapshot(),
+        snapshot: store.operationalSnapshot({
+          distillFailureWindowMs: config.operations.readinessDistillFailureWindowMs,
+        }),
         dbState: buildDbInfo(store),
         config,
         embeddingEnabled: Boolean(embeddingProvider),

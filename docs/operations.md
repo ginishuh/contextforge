@@ -19,6 +19,7 @@ required checks pass, otherwise 503. Checks include:
 - available filesystem bytes;
 - queued operation-job threshold and expired running leases;
 - operation-worker freshness when queued work outlives its startup grace;
+- recent distillation failures within a bounded observation window;
 - failed embedding jobs when embeddings are enabled;
 - the effective WAL, synchronous, busy-timeout, and foreign-key policy.
 
@@ -28,6 +29,8 @@ Tune the required thresholds on the server process:
 CONTEXTFORGE_READINESS_MIN_FREE_BYTES=104857600
 CONTEXTFORGE_READINESS_MAX_QUEUED_JOBS=1000
 CONTEXTFORGE_READINESS_WORKER_STALE_AFTER_MS=300000
+CONTEXTFORGE_READINESS_DISTILL_FAILURE_WINDOW_MS=86400000
+CONTEXTFORGE_READINESS_MAX_RECENT_DISTILL_FAILURES=10
 ```
 
 An empty queue does not require a continuously running worker. When work is
@@ -38,6 +41,16 @@ no recent worker-observed timestamp makes `/readyz` return 503 with
 completion, and retry update the worker timestamp. Expired-lease recovery does
 not count as worker activity because a different operation worker may trigger
 that recovery scan.
+
+`checks.distillation` reports the recent failure count, observation window,
+last failure time, provider, and a sanitized reason code/summary. Raw provider
+errors are never returned from the unauthenticated endpoint. When failures in
+the configured window exceed
+`CONTEXTFORGE_READINESS_MAX_RECENT_DISTILL_FAILURES`, `/readyz` returns 503 with
+`checks.distillation.reason=recent_distill_failures`. The defaults allow ten
+one-off failures but detect a repeating one-minute watcher failure within
+eleven minutes; set the maximum to `0` when every recent failure should make
+the process unready.
 
 Provider credentials are never returned or actively exercised by readiness.
 Credential/provider smoke checks remain explicit operator actions so a health
