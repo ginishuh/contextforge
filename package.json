@@ -63,5 +63,8 @@
     "better-sqlite3": "^12.9.0",
     "sqlite-vec": "^0.1.9",
     "zod": "^4.3.6"
+  },
+  "overrides": {
+    "@hono/node-server": "2.0.12"
   }
 }
