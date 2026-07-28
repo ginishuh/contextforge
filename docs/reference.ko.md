@@ -582,6 +582,11 @@ Remote long-running call은 `CONTEXTFORGE_REMOTE_TIMEOUT_MS`를 서버에 전달
 설정된 provider timeout이 client timeout보다 짧지 않으면 provider를 실행하기
 전에 명확한 timeout contract 오류 또는 candidate-audit 상태를 반환한다. Provider timeout 뒤에는 child process가
 `SIGTERM`/`SIGKILL` 후 실제로 close될 때까지 concurrency slot을 해제하지 않는다.
+`submitDistillJob`과 `submitAuditJob`은 queued work만 저장하므로 제출 전용
+client timeout은 provider 실행 시간을 포함할 필요가 없다. 반면 server-side
+`processJobs` worker timeout은 provider 실행 시간을 포함해야 한다. 환경별
+구분은 [운영 문서의 timeout 표](operations.md#timeout-requirements-by-environment)를
+참조한다.
 
 예시:
 

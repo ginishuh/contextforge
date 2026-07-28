@@ -2225,6 +2225,10 @@ the server prevents provider execution and surfaces an explicit timeout-contract
 error or candidate-audit status. Increase
 `CONTEXTFORGE_REMOTE_TIMEOUT_MS` or lower the relevant provider timeout instead
 of allowing a client to abandon a still-running synchronous task.
+`submitDistillJob` and `submitAuditJob` only persist queued work, so a
+submit-only client does not need to cover provider execution. The server-side
+`processJobs` worker does. See the
+[environment-specific timeout table](operations.md#timeout-requirements-by-environment).
 Failed and successful runs include provider prompt/schema version metadata so
 operators can tell which prompt contract produced the result.
 
