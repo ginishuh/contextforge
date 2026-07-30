@@ -74,6 +74,25 @@ watcher does not consume that queue. If clients can call `submitDistillJob`,
 deploy the worker with the canonical server instead of depending on a client
 process to remain connected.
 
+### Timeout requirements by environment
+
+Apply the remote timeout to the process that keeps a remote provider-backed
+request open. Do not copy the same timeout requirement to every client:
+
+| Environment | Primary flow | Provider-bound request? | Timeout requirement |
+| --- | --- | --- | --- |
+| Local or project-local all-in-one | Direct `distillCheckpoint` against its own store | No remote boundary | `CONTEXTFORGE_REMOTE_TIMEOUT_MS` is unused; configure the provider timeout itself. |
+| Canonical HTTP server | Owns the store and executes providers | Not a remote client | Configure server-side provider timeouts; callers still need the appropriate row below. |
+| Server-side durable worker | Remote `processJobs` call to the canonical server | Yes | Set the remote timeout above the full bounded provider wall-clock; `180000ms` covers one default 120-second distill call. |
+| Remote ingest watcher or agent router | Synchronous `distillCheckpoint` through `--distill auto` | Yes | Set the remote timeout above the provider wall-clock; packaged watchers default to `180000ms`. |
+| Durable-submit-only client | `submitDistillJob`, then `getJob` polling | No | It only needs enough time for a queue write/read. It does not need to cover provider execution, so a normal short HTTP timeout is valid. |
+| Mixed remote agent or operator | May call both `submitDistillJob` and synchronous provider tools | Sometimes | Use the long-running value unless its permissions and workflow restrict it to submission and status calls. |
+
+A client timeout such as 30 seconds is therefore not inherently wrong. It is
+wrong for synchronous `distillCheckpoint`, `processJobs`, or another remote
+call that executes a provider whose configured timeout is 120 seconds. It is
+valid for a client that only submits durable work and polls status.
+
 For a low-volume deployment, install a systemd user oneshot service:
 
 ```ini
@@ -90,7 +109,8 @@ ExecStart=/usr/bin/node /srv/contextforge/src/cli.js processJobs --operation dis
 TimeoutStartSec=10min
 ```
 
-The environment file must be private and select the canonical remote server:
+For the server-side durable worker row above, the environment file must be
+private and select the canonical remote server:
 
 ```text
 CONTEXTFORGE_STORAGE_MODE=remote
@@ -99,10 +119,10 @@ CONTEXTFORGE_REMOTE_TOKEN=replace-me
 CONTEXTFORGE_REMOTE_TIMEOUT_MS=180000
 ```
 
-Keep `CONTEXTFORGE_REMOTE_TIMEOUT_MS` strictly greater than the configured
-distill-provider timeout. The default `codex_exec` provider timeout is 120
-seconds; a 30-second remote timeout makes the server reject the provider call
-before execution and can create repeated failed `distill_runs` rows.
+Keep this worker's `CONTEXTFORGE_REMOTE_TIMEOUT_MS` strictly greater than the
+configured distill-provider timeout. The default `codex_exec` provider timeout
+is 120 seconds; a 30-second worker timeout makes the server reject provider
+execution and can create repeated failed `distill_runs` rows.
 
 Run the oneshot from a timer. A one-minute interval stays below the default
 five-minute readiness stale boundary while avoiding a resident process for an
