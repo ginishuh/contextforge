@@ -1,17 +1,9 @@
-import { createHash } from 'node:crypto';
-
-export function durableMemoryRevisionHash(memory) {
-  const revision = {
-    id: memory?.id || null,
-    key: memory?.key || null,
-    category: memory?.category || null,
-    content: memory?.content || null,
-    tags: Array.isArray(memory?.tags) ? memory.tags : [],
-    importance: memory?.importance ?? null,
-    updatedAt: memory?.updatedAt || null,
-  };
-  return createHash('sha256').update(JSON.stringify(revision)).digest('hex');
-}
+import { durableMemoryRevisionHash, memoryCandidateRevisionHash } from './candidate_revision.js';
+import {
+  memoryUpdateCandidateProposal,
+  promotionAssessmentForIndexedCandidate,
+  updateCandidateDraftForPromotionAssessment,
+} from './candidate_promotion.js';
 
 function routingAction(classification) {
   if (classification === 'new') return 'promote_as_new_memory';
@@ -52,34 +44,14 @@ export function auditedCandidateRoutingMcpToolConfig(z, scopedSchema) {
   };
 }
 
-export function buildAuditedPromotionProposal({
-  indexedCandidate, warnings, audit, rank, auditEnabled = true, promotionRouting = null,
-  promotionRoutingError = null, makeProposal,
-}) {
-  const proposal = makeProposal(indexedCandidate, warnings, rank);
-  const approved = auditEnabled && audit?.approved === true;
-  const routing = promotionRouting || indexedCandidate.reviewMetadata?.promotionRouting || null;
-  const routedAction = ['do_not_create_duplicate_memory', 'keep_as_checkpoint_context'].includes(routing?.action)
-    ? 'do_not_promote'
-    : routing?.action === 'review_memory_update_candidate' ? 'review_update_candidate' : null;
-  return {
-    ...proposal, audit, auditReason: audit?.reason || null,
-    recommendedAction: routedAction || (routing?.action === 'promote_as_new_memory' ? 'promote' : approved ? 'route_before_promote' : 'review'),
-    ...(routing ? { promotionRouting: routing } : {}),
-    ...(promotionRoutingError ? { promotionRoutingError } : {}),
-  };
-}
-
 export function promotionRoutingForIndexedCandidate({
   store,
   scope,
   indexedCandidate,
   persist = false,
-  assess,
-  buildUpdateDraft,
 }) {
-  const assessment = assess(store, scope, indexedCandidate);
-  const updateDraft = buildUpdateDraft(scope, indexedCandidate, assessment);
+  const assessment = promotionAssessmentForIndexedCandidate(store, scope, indexedCandidate);
+  const updateDraft = updateCandidateDraftForPromotionAssessment(scope, indexedCandidate, assessment);
   const updateCandidate = persist && updateDraft ? store.createMemoryUpdateCandidate(updateDraft) : updateDraft;
   return {
     version: 'audited-candidate-routing.v1',
@@ -94,9 +66,9 @@ export function promotionRoutingForIndexedCandidate({
   };
 }
 
-export function persistPromotionRouting({ store, scope, indexedCandidate, assess, buildUpdateDraft }) {
+export function persistPromotionRouting({ store, scope, indexedCandidate }) {
   const routing = promotionRoutingForIndexedCandidate({
-    store, scope, indexedCandidate, persist: true, assess, buildUpdateDraft,
+    store, scope, indexedCandidate, persist: true,
   });
   const storedCandidate = store.markMemoryCandidatePromotionRouted({
     ...scope,
@@ -118,13 +90,13 @@ export function persistPromotionRouting({ store, scope, indexedCandidate, assess
 }
 
 export function persistApprovedAuditRouting({
-  store, scope, auditedCandidate, audit, assertLease, assess, buildUpdateDraft, errorSummary,
+  store, scope, auditedCandidate, audit, assertLease, errorSummary,
 }) {
   if (audit.approved !== true) return { candidate: auditedCandidate, routing: null, error: null };
   try {
     const routing = store.withTransaction(() => {
       assertLease();
-      return persistPromotionRouting({ store, scope, indexedCandidate: auditedCandidate, assess, buildUpdateDraft });
+      return persistPromotionRouting({ store, scope, indexedCandidate: auditedCandidate });
     });
     return { candidate: routing.candidate, routing, error: null };
   } catch (error) {
@@ -133,7 +105,7 @@ export function persistApprovedAuditRouting({
   }
 }
 
-export function promotionRoutingResult(routing, formatUpdateCandidate) {
+export function promotionRoutingResult(routing) {
   if (!routing) return null;
   return {
     version: routing.version,
@@ -144,7 +116,7 @@ export function promotionRoutingResult(routing, formatUpdateCandidate) {
     targetMemoryId: routing.targetMemoryId,
     targetMemoryKey: routing.targetMemoryKey,
     updateCandidate: routing.updateCandidate
-      ? formatUpdateCandidate(routing.updateCandidate, routing.assessment)
+      ? memoryUpdateCandidateProposal(routing.updateCandidate, routing.assessment)
       : null,
     promotionAssessment: routing.assessment,
   };
@@ -214,10 +186,6 @@ export function routeAuditedMemoryCandidates({
   options,
   positiveNumber,
   truthyOption,
-  revisionHash,
-  assess,
-  buildUpdateDraft,
-  formatUpdateCandidate,
 }) {
   const dryRun = options.dryRun == null ? true : truthyOption(options.dryRun);
   const requestedLimit = positiveNumber(options.limit == null ? 25 : Number(options.limit), 'limit');
@@ -247,7 +215,7 @@ export function routeAuditedMemoryCandidates({
     });
   }
   for (const candidate of candidates) {
-    const currentHash = revisionHash(candidate.candidate);
+    const currentHash = memoryCandidateRevisionHash(candidate.candidate);
     if (!candidate.auditContentHash || candidate.auditContentHash !== currentHash) {
       results.push({
         candidateId: candidate.id, status: 'skipped', reason: 'audit_revision_mismatch',
@@ -255,7 +223,7 @@ export function routeAuditedMemoryCandidates({
       });
       continue;
     }
-    const input = { store, scope, indexedCandidate: candidate, assess, buildUpdateDraft };
+    const input = { store, scope, indexedCandidate: candidate };
     const routing = dryRun
       ? promotionRoutingForIndexedCandidate(input)
       : store.withTransaction(() => {
@@ -263,11 +231,11 @@ export function routeAuditedMemoryCandidates({
           if (!fresh || fresh.status !== 'pending' || fresh.auditState !== 'audited' || fresh.auditDecision !== 'approve') {
             return null;
           }
-          if (!fresh.auditContentHash || fresh.auditContentHash !== revisionHash(fresh.candidate)) return null;
+          if (!fresh.auditContentHash || fresh.auditContentHash !== memoryCandidateRevisionHash(fresh.candidate)) return null;
           return persistPromotionRouting({ ...input, indexedCandidate: fresh });
         });
     results.push(routing
-      ? { candidateId: candidate.id, status: dryRun ? 'planned' : 'routed', routing: promotionRoutingResult(routing, formatUpdateCandidate) }
+      ? { candidateId: candidate.id, status: dryRun ? 'planned' : 'routed', routing: promotionRoutingResult(routing) }
       : { candidateId: candidate.id, status: 'skipped', reason: 'candidate_changed' });
   }
   const counts = results.reduce((acc, item) => {
