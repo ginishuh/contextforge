@@ -125,16 +125,19 @@ and `scripts/lint-source.js` fails both when a file exceeds its budget and when
 a file drops far enough below it that the budget should be tightened. A file
 that is not registered may not grow past 1,500 lines without an explicit budget
 entry. This makes decomposition the cheap path and budget inflation the visible
-one. SQLite compatibility
-migrations begin under `src/storage/migrations/` as ordered, versioned manifests.
-The current v19 manifest preserves the existing idempotent additive-column
-behavior. New schema work should add a new ordered manifest together with a
+one.
+
+SQLite compatibility migrations begin under `src/storage/migrations/` as
+ordered, versioned manifests. The current v19 manifest preserves the existing
+idempotent additive-column behavior. New schema work should add a new ordered manifest together with a
 `SCHEMA_VERSION` bump, migration backup coverage, and downgrade fail-fast tests.
 
 Domain contract tests live outside the legacy monolith under `test/contracts/`.
-`npm run lint` syntax-checks project JavaScript, rejects tabs/trailing whitespace,
-and enforces non-growth budgets on the largest legacy files. CI runs this source
-gate separately; `npm run verify` runs it before the complete test suite.
+`npm run lint` syntax-checks project JavaScript, rejects tabs/trailing
+whitespace, and enforces the ratchet budgets described above: a budgeted file
+may not grow, a budget may not be left loose after a file shrinks, and an
+unbudgeted file may not pass 1,500 lines. CI runs this source gate separately;
+`npm run verify` runs it before the complete test suite.
 
 ## Scope Model
 

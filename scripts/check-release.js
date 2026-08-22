@@ -15,6 +15,7 @@ const publishedScripts = Object.freeze([
   'scripts/install-codex-router-service.sh',
   'scripts/install-codex-watch-service.sh',
   'scripts/junit-report.js',
+  'scripts/line-budgets.json',
   'scripts/lint-source.js',
   'scripts/run-quality-eval.js',
   'scripts/run-tests.js',

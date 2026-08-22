@@ -20,14 +20,23 @@ const UNREGISTERED_FILE_LIMIT = 1500;
 const defaultRoots = ['src', 'scripts', 'test'];
 const defaultBudgetFile = 'scripts/line-budgets.json';
 
+// Budget keys are POSIX-separated so the same budget file works on every OS.
+// Windows readdir walks produce backslashes, which would miss every lookup.
+function toPosix(filePath) {
+  return filePath.split(path.sep).join('/');
+}
+
 function parseArguments(argv) {
   const roots = [];
   let budgetFile = defaultBudgetFile;
   let updateBudgets = false;
+  let baseCheck = true;
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === '--update-budgets') {
       updateBudgets = true;
+    } else if (argument === '--no-base-check') {
+      baseCheck = false;
     } else if (argument === '--root') {
       index += 1;
       if (!argv[index]) throw new Error('--root requires a directory');
@@ -40,7 +49,7 @@ function parseArguments(argv) {
       throw new Error(`unknown argument ${argument}`);
     }
   }
-  return { roots: roots.length ? roots : defaultRoots, budgetFile, updateBudgets };
+  return { roots: roots.length ? roots : defaultRoots, budgetFile, updateBudgets, baseCheck };
 }
 
 function readBudgets(budgetFile) {
@@ -65,7 +74,7 @@ function javascriptFiles(directory) {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const file = path.join(directory, entry.name);
     if (entry.isDirectory()) return javascriptFiles(file);
-    return entry.isFile() && entry.name.endsWith('.js') ? [file] : [];
+    return entry.isFile() && entry.name.endsWith('.js') ? [toPosix(file)] : [];
   });
 }
 
@@ -78,6 +87,48 @@ function countLines(source) {
   return lines.length;
 }
 
+function gitOutput(args) {
+  const result = spawnSync('git', args, { encoding: 'utf8' });
+  if (result.error || result.status !== 0) return null;
+  return result.stdout;
+}
+
+// Prefer the merge base with the integration branch so a budget raised anywhere
+// in the branch is caught, not just one raised in the working tree. CI checkouts
+// name their base explicitly because the remote-tracking ref may not be fetched;
+// a checkout without either can still compare against its own HEAD.
+function baseBudgetRef() {
+  const candidates = [process.env.CONTEXTFORGE_LINT_BASE_REF, 'origin/main'].filter(Boolean);
+  for (const candidate of candidates) {
+    if (gitOutput(['rev-parse', '--verify', '--quiet', candidate]) === null) continue;
+    const mergeBase = gitOutput(['merge-base', candidate, 'HEAD']);
+    if (mergeBase !== null && mergeBase.trim()) return mergeBase.trim();
+  }
+  return gitOutput(['rev-parse', '--verify', '--quiet', 'HEAD']) !== null ? 'HEAD' : null;
+}
+
+// Returns the committed budgets, or null when no baseline is obtainable. Every
+// failure path here is a silent skip on purpose: the published npm package ships
+// without a .git directory, and lint must still run there.
+function readBaseBudgets(budgetFile) {
+  if (gitOutput(['rev-parse', '--git-dir']) === null) return null;
+  const ref = baseBudgetRef();
+  if (ref === null) return null;
+  const relative = toPosix(path.relative(process.cwd(), path.resolve(budgetFile)));
+  // `<rev>:./<path>` resolves relative to the cwd; a path outside the repo
+  // cannot be addressed that way, so there is nothing to compare.
+  if (!relative || relative.startsWith('..')) return null;
+  const shown = gitOutput(['show', `${ref}:./${relative}`]);
+  if (shown === null) return null;
+  try {
+    const parsed = JSON.parse(shown);
+    const budgets = parsed && typeof parsed === 'object' ? parsed.budgets : null;
+    return budgets && typeof budgets === 'object' ? budgets : null;
+  } catch {
+    return null;
+  }
+}
+
 const options = parseArguments(process.argv.slice(2));
 const defaultNote = [
   'Ratchet budgets in lines. Budgets may only go down.',
@@ -88,34 +139,61 @@ const existingNote = fs.existsSync(options.budgetFile)
   : null;
 const budgets = readBudgets(options.budgetFile);
 const files = options.roots.flatMap(javascriptFiles).sort();
+// A narrower scan than the default cannot see every budgeted file, so entries
+// outside it must be carried over rather than treated as deleted.
+const fullScope = [...options.roots].sort().join(',') === [...defaultRoots].sort().join(',');
+
+function underRoot(file, root) {
+  const normalized = toPosix(root).replace(/\/+$/, '');
+  return file === normalized || file.startsWith(`${normalized}/`);
+}
+
+// A budget entry can only be judged as an orphan when the scan could actually
+// have seen it. Two cases make it unseeable, and both preserve the entry rather
+// than deleting it:
+//   - its root directory is absent entirely (the published npm package ships no
+//     test/ directory, so every test budget would look orphaned);
+//   - a narrowed --root put it outside the scanned scope.
+// The test is deliberately the root directory, not the file: a file missing from
+// a root that *is* present is a genuine orphan and must keep failing.
+function budgetUnreachable(file) {
+  const owningRoot = options.roots.find((root) => underRoot(file, root));
+  if (owningRoot === undefined) return !fullScope;
+  return !fs.existsSync(owningRoot);
+}
+
 const measured = new Map();
-const errors = [];
+// Syntax and formatting problems are the file's own fault and must block even
+// `--update-budgets`. Budget problems are exactly what an update is meant to
+// resolve, so they are collected separately.
+const sourceErrors = [];
+const budgetErrors = [];
 
 for (const file of files) {
   const source = fs.readFileSync(file, 'utf8');
   const lines = source.split('\n');
   for (let index = 0; index < lines.length; index += 1) {
-    if (/\s+$/.test(lines[index])) errors.push(`${file}:${index + 1}: trailing whitespace`);
-    if (lines[index].includes('\t')) errors.push(`${file}:${index + 1}: tab character`);
+    if (/\s+$/.test(lines[index])) sourceErrors.push(`${file}:${index + 1}: trailing whitespace`);
+    if (lines[index].includes('\t')) sourceErrors.push(`${file}:${index + 1}: tab character`);
   }
   const syntax = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
-  if (syntax.status !== 0) errors.push(`${file}: syntax check failed\n${syntax.stderr.trim()}`);
+  if (syntax.status !== 0) sourceErrors.push(`${file}: syntax check failed\n${syntax.stderr.trim()}`);
 
   const actual = countLines(source);
   measured.set(file, actual);
   const budget = budgets[file];
   if (budget === undefined) {
     if (actual > UNREGISTERED_FILE_LIMIT) {
-      errors.push(
+      budgetErrors.push(
         `${file}: ${actual} lines is unbudgeted; add "${file}": ${actual} to ${options.budgetFile}`,
       );
     }
     continue;
   }
   if (actual > budget) {
-    errors.push(`${file}: ${actual} lines exceeds the architecture budget ${budget}`);
+    budgetErrors.push(`${file}: ${actual} lines exceeds the architecture budget ${budget}`);
   } else if (budget - actual >= RATCHET_SLACK_LINES) {
-    errors.push(
+    budgetErrors.push(
       `${file}: ${actual} lines is ${budget - actual} under the budget ${budget};`
         + ` tighten the budget to ${actual} in ${options.budgetFile}`,
     );
@@ -123,24 +201,65 @@ for (const file of files) {
 }
 
 for (const file of Object.keys(budgets)) {
-  if (!measured.has(file)) {
-    errors.push(`${options.budgetFile}: ${file} is budgeted but was not found; remove the entry`);
+  if (!measured.has(file) && !budgetUnreachable(file)) {
+    budgetErrors.push(
+      `${options.budgetFile}: ${file} is budgeted but was not found; remove the entry`,
+    );
   }
 }
 
 if (options.updateBudgets) {
+  if (sourceErrors.length) {
+    console.error(sourceErrors.join('\n'));
+    console.error('Refusing to update budgets while the source lint fails.');
+    process.exit(1);
+  }
   const next = {};
-  for (const file of Object.keys(budgets)) {
-    if (measured.has(file)) next[file] = measured.get(file);
+  const updateErrors = [];
+  for (const [file, budget] of Object.entries(budgets)) {
+    if (!measured.has(file)) {
+      if (budgetUnreachable(file)) next[file] = budget;
+      continue;
+    }
+    const actual = measured.get(file);
+    if (actual > budget) {
+      updateErrors.push(
+        `${file}: ${actual} lines exceeds the recorded budget ${budget};`
+          + ' --update-budgets only tightens budgets, it can never raise one',
+      );
+      continue;
+    }
+    next[file] = actual;
   }
   for (const [file, actual] of measured) {
-    if (next[file] === undefined && actual > UNREGISTERED_FILE_LIMIT) next[file] = actual;
+    const isNewEntry = budgets[file] === undefined;
+    if (isNewEntry && actual > UNREGISTERED_FILE_LIMIT) next[file] = actual;
+  }
+  if (updateErrors.length) {
+    console.error(updateErrors.join('\n'));
+    process.exit(1);
   }
   writeBudgets(options.budgetFile, next, existingNote || defaultNote);
   console.log(`Updated ${options.budgetFile} for ${Object.keys(next).length} files.`);
   process.exit(0);
 }
 
+if (options.baseCheck) {
+  const baseBudgets = readBaseBudgets(options.budgetFile);
+  if (baseBudgets) {
+    for (const [file, baseBudget] of Object.entries(baseBudgets)) {
+      const current = budgets[file];
+      if (typeof current === 'number' && typeof baseBudget === 'number' && current > baseBudget) {
+        budgetErrors.push(
+          `${options.budgetFile}: budget for ${file} was raised from ${baseBudget} to ${current};`
+            + ' budgets may only go down',
+        );
+      }
+    }
+  }
+}
+
+const errors = [...sourceErrors, ...budgetErrors];
 if (errors.length) {
   console.error(errors.join('\n'));
   process.exit(1);

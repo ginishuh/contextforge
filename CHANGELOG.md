@@ -10,7 +10,13 @@
   `scripts/line-budgets.json`: exceeding a budget still fails, and so does
   leaving a shrunken file's budget untightened, so extracting code is now the
   cheap path. Unregistered files may not pass 1,500 lines without an explicit
-  budget entry.
+  budget entry. The manifest ships in the npm package so `npm run lint` works
+  from the published artifact, and budget entries under a root the package
+  omits, such as `test/`, are skipped rather than reported as orphans. Raising a
+  budget is rejected two ways: `--update-budgets` refuses to write an increase,
+  and lint compares the manifest against the pull request's base branch, so a
+  hand-edited increase fails CI. Paths are normalized to POSIX separators, and
+  `--update-budgets` refuses to run while the source lint itself fails.
 - Cleared the production dependency advisories that had made the
   `dependency-audit` CI gate fail on `main`. `@modelcontextprotocol/sdk` moved
   to 1.30.0 and `zod` to 4.4.3, and pinned `overrides` now force patched
