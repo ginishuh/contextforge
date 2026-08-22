@@ -208,6 +208,74 @@ function baseBudgetViolations(baseBudgets, candidate, measured, budgetFile) {
   return violations;
 }
 
+// Locates each `import ...` statement as a line range. A statement ends on the
+// line carrying its `from '...'` clause, so multi-line brace lists are covered;
+// a side-effect import (`import './x.js';`) ends on its own line.
+function importStatements(lines) {
+  const statements = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!/^import\s/.test(lines[index])) continue;
+    let end = index;
+    while (
+      end < lines.length
+      && !/\bfrom\s+['"][^'"]+['"];?\s*$/.test(lines[end])
+      && !/^import\s+['"][^'"]+['"];?\s*$/.test(lines[end])
+    ) end += 1;
+    if (end >= lines.length) continue;
+    statements.push({ start: index, end });
+    index = end;
+  }
+  return statements;
+}
+
+// The local names a statement binds. For `x as y` the binding is `y`, which is
+// the name the rest of the file has to use.
+function importBindings(text) {
+  const names = [];
+  const braced = text.match(/\{([\s\S]*?)\}/);
+  if (braced) {
+    for (const part of braced[1].split(',')) {
+      const trimmed = part.trim();
+      if (!trimmed) continue;
+      const match = trimmed.match(/(?:\w+)\s+as\s+(\w+)$/) || trimmed.match(/^(\w+)$/);
+      if (match) names.push(match[1]);
+    }
+  }
+  const namespace = text.match(/\*\s+as\s+(\w+)/);
+  if (namespace) names.push(namespace[1]);
+  const defaultBinding = text.replace(/^import\s+/, '').match(/^(\w+)\s*(?:,|from)/);
+  if (defaultBinding) names.push(defaultBinding[1]);
+  return names;
+}
+
+// An import nobody calls is dead weight that also misleads: it suggests the
+// file still owns a responsibility that moved elsewhere. This has shown up
+// three times during the core decomposition, always as a leftover of code that
+// was extracted, so it is checked rather than caught by review.
+//
+// Usage is a word-boundary match against the file with its import statements
+// removed. A name mentioned only in a comment or string therefore counts as
+// used — deliberately, since the cost of a false failure here is much higher
+// than the cost of missing one dead import.
+function unusedImportErrors(file, lines) {
+  const statements = importStatements(lines);
+  const importLines = new Set();
+  for (const statement of statements) {
+    for (let index = statement.start; index <= statement.end; index += 1) importLines.add(index);
+  }
+  const body = lines.filter((_, index) => !importLines.has(index)).join('\n');
+  const errors = [];
+  for (const statement of statements) {
+    const text = lines.slice(statement.start, statement.end + 1).join('\n');
+    for (const name of importBindings(text)) {
+      if (!new RegExp(`\\b${name}\\b`).test(body)) {
+        errors.push(`${file}:${statement.start + 1}: unused import ${name}`);
+      }
+    }
+  }
+  return errors;
+}
+
 const options = parseArguments(process.argv.slice(2));
 const defaultNote = [
   'Ratchet budgets in lines. Budgets may only go down.',
@@ -259,6 +327,9 @@ for (const file of files) {
   }
   const syntax = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
   if (syntax.status !== 0) sourceErrors.push(`${file}: syntax check failed\n${syntax.stderr.trim()}`);
+  // Only meaningful once the file parses; a syntax error makes the line scan
+  // guesswork.
+  if (syntax.status === 0) sourceErrors.push(...unusedImportErrors(file, lines));
 
   const actual = countLines(source);
   measured.set(file, actual);
