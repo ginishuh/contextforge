@@ -1,0 +1,46 @@
+import { createHash } from 'node:crypto';
+
+// Leaf utilities shared across layers. Nothing here may import another
+// ContextForge module: these exist so core.js and the modules extracted from it
+// can share a definition without importing each other.
+
+// Collapses whitespace and appends an ellipsis. The result is a human-readable
+// preview for a summary field, not a byte-budget trim — see truncate() in
+// src/ingest/common.js for the budget-enforcing variant that reports whether it
+// cut anything.
+export function summarySnippet(value, maxChars = 280) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (text.length <= maxChars) {
+    return text;
+  }
+  return `${text.slice(0, maxChars)}...`;
+}
+
+// Importance is a 0-10 integer everywhere it is stored or compared.
+export function clampImportance(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.min(10, Math.round(parsed)));
+}
+
+export function normalizeToken(value) {
+  return String(value || '')
+    .toLowerCase()
+    .trim();
+}
+
+// Hashes the empty string for a nullish input. Callers persist this value —
+// memory content hashes in particular — so the `|| ''` coercion is part of the
+// stored contract and must not be relaxed to String(value).
+export function contentHash(value) {
+  return createHash('sha256').update(String(value || '')).digest('hex');
+}
+
+// Matches vocabulary that names mutable live state (branches, PRs, CI, deploys,
+// migrations, queues) in English or Korean. Used both to flag a bootstrap
+// result as needing live verification and to classify a correction query.
+export function liveStateTermsMatch(text) {
+  return /(\b(branch\w*|prs?|pull requests?|issues?|ci|checks?|runtimes?|deploy\w*|deployments?|migrations?|migrate\w*|servers?|services?|queues?|status|drafts?|merge\w*|merged|commits?|tags?|releases?|rollbacks?)\b|브랜치|원격|머지|이슈|배포|런타임|마이그레이션|마이그레이트|커밋|릴리즈|롤백|서버|서비스|큐|상태)/i.test(
+    String(text || ''),
+  );
+}
