@@ -114,7 +114,18 @@ transport presentation separate from application operation identity without a
 large rewrite.
 
 Reusable application plumbing begins under `src/application/`; bounded list
-pagination lives there rather than inside the core facade. SQLite compatibility
+pagination and LLM usage accounting live there rather than inside the core
+facade. `src/application/llm_usage.js` owns provider usage extraction, usage
+event recording, and distill/rollup usage summaries; the core facade imports the
+five entry points it actually calls and keeps none of the intermediate helpers.
+
+Core facade size is enforced as a ratchet rather than a ceiling.
+`scripts/line-budgets.json` records the current line count of each large file,
+and `scripts/lint-source.js` fails both when a file exceeds its budget and when
+a file drops far enough below it that the budget should be tightened. A file
+that is not registered may not grow past 1,500 lines without an explicit budget
+entry. This makes decomposition the cheap path and budget inflation the visible
+one. SQLite compatibility
 migrations begin under `src/storage/migrations/` as ordered, versioned manifests.
 The current v19 manifest preserves the existing idempotent additive-column
 behavior. New schema work should add a new ordered manifest together with a
