@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
+import { clampImportance, contentHash } from '../common.js';
 import {
   backfillMemoryCandidateAuditStateOnce as backfillCandidateAuditState,
   hydrateMemoryCandidateAuditAttempt,
@@ -470,18 +471,6 @@ function ftsValue(value) {
 
 function normalizeTags(tags) {
   return Array.isArray(tags) ? tags.map((tag) => String(tag)) : [];
-}
-
-function clampImportance(value) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) {
-    return 0;
-  }
-  return Math.max(0, Math.min(10, Math.round(parsed)));
-}
-
-function contentHash(value) {
-  return createHash('sha256').update(String(value || '')).digest('hex');
 }
 
 function normalizePreferenceText(value) {

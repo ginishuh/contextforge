@@ -1,6 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { pagedList } from './application/paged_list.js';
 import {
+  clampImportance,
+  contentHash,
+  liveStateTermsMatch,
+  normalizeToken,
+  summarySnippet,
+} from './common.js';
+import {
   errorUsageMetadata,
   providerModelFromMetadata,
   recordLlmUsageEvent,
@@ -17,6 +24,11 @@ import { STRUCTURED_CHECKPOINT_SCHEMA_VERSION, validateDistillOutput } from './d
 import { createEmbeddingProvider } from './embeddings/index.js';
 import { normalizeAgentAdapterIds } from './ingest/agents.js';
 import { submitMemoryCandidateAuditJob } from './memory/candidate_audit_jobs.js';
+import {
+  candidateQualityText,
+  normalizeContentForRisk,
+  tokenOverlapScore,
+} from './memory/candidate_text.js';
 import { buildMemoryCandidateBacklog } from './memory/candidate_backlog.js';
 import { candidateBacklogAuditPlanMethods } from './memory/candidate_backlog_audit_plan.js';
 import { candidateDispositionMethods } from './memory/candidate_dispositions.js';
@@ -205,12 +217,6 @@ function sessionWorkingContextInput(source = {}, previous = null) {
   };
 }
 
-function normalizeToken(value) {
-  return String(value || '')
-    .toLowerCase()
-    .trim();
-}
-
 function isPreferenceLike(candidate = {}) {
   return [candidate.category, candidate.candidateType].some((value) => normalizeToken(value) === 'preference');
 }
@@ -368,18 +374,6 @@ function checkpointText(checkpoint) {
     .join('\n');
 }
 
-function truncateText(value, maxChars = 280) {
-  const text = String(value || '').replace(/\s+/g, ' ').trim();
-  if (text.length <= maxChars) {
-    return text;
-  }
-  return `${text.slice(0, maxChars)}...`;
-}
-
-function contentHash(value) {
-  return createHash('sha256').update(String(value || '')).digest('hex');
-}
-
 function resultTextForVerification(result) {
   if (result.memory) {
     return [result.memory.key, result.memory.category, result.memory.content, ...(result.memory.tags || [])].join(' ');
@@ -479,14 +473,14 @@ function bootstrapResultSummary(result) {
     return {
       key: result.memory.key,
       category: result.memory.category,
-      content: truncateText(result.memory.content),
+      content: summarySnippet(result.memory.content),
     };
   }
   if (result.checkpoint) {
     return {
       key: result.checkpoint.id,
       category: 'checkpoint',
-      content: truncateText(result.checkpoint.summaryText || result.checkpoint.summaryShort),
+      content: summarySnippet(result.checkpoint.summaryText || result.checkpoint.summaryShort),
       sessionId: result.checkpoint.sessionId,
       level: result.checkpoint.level,
       createdAt: result.checkpoint.createdAt,
@@ -497,7 +491,7 @@ function bootstrapResultSummary(result) {
     return {
       key: result.candidate.candidate.key,
       category: result.candidate.candidate.category,
-      content: truncateText(result.candidate.candidate.content),
+      content: summarySnippet(result.candidate.candidate.content),
       candidateId: result.candidate.id,
       status: result.candidate.status,
       checkpointId: result.candidate.checkpointId,
@@ -523,7 +517,7 @@ function bootstrapWorkingSummary(summary) {
     id: summary.id,
     sessionId: summary.sessionId,
     conversationId: summary.conversationId,
-    content: truncateText(summary.summaryText, 1200),
+    content: summarySnippet(summary.summaryText, 1200),
     summaryShort: summary.summaryShort,
     sourceCheckpointId: summary.sourceCheckpointId,
     distillRunId: summary.distillRunId,
@@ -571,7 +565,7 @@ function bootstrapRawTailEvent(event) {
   return {
     id: event.id,
     role: event.role,
-    content: truncateText(event.content, 800),
+    content: summarySnippet(event.content, 800),
     metadata: event.metadata,
     createdAt: event.createdAt,
   };
@@ -648,7 +642,7 @@ function checkpointHandoffCompact(checkpoint, scope) {
     level: checkpoint.level,
     createdAt: checkpoint.createdAt,
     summaryShort: checkpoint.summaryShort,
-    summaryText: truncateText(checkpoint.summaryText, 1600),
+    summaryText: summarySnippet(checkpoint.summaryText, 1600),
     decisions: checkpoint.decisions || [],
     todos: checkpoint.todos || [],
     openQuestions: checkpoint.openQuestions || [],
@@ -1097,7 +1091,7 @@ function memoryCompact(memory, maxChars = 260) {
     memoryId: memory.id,
     key: memory.key,
     category: memory.category,
-    content: truncateText(memory.content, maxChars),
+    content: summarySnippet(memory.content, maxChars),
     tags: Array.isArray(memory.tags) ? memory.tags : [],
     importance: memory.importance,
     updatedAt: memory.updatedAt,
@@ -1323,56 +1317,6 @@ function fullClusterMemory(memory) {
   };
 }
 
-function normalizeContentForRisk(value) {
-  return String(value || '')
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function clampImportance(value) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return 0;
-  return Math.max(0, Math.min(10, Math.round(parsed)));
-}
-
-function qualityTokens(value) {
-  return String(value || '')
-    .toLowerCase()
-    .split(/[^a-z0-9_./:-]+/)
-    .filter((token) => token.length > 2);
-}
-
-function tokenOverlapScore(left, right) {
-  const leftTokens = new Set(qualityTokens(left));
-  const rightTokens = new Set(qualityTokens(right));
-  if (!leftTokens.size || !rightTokens.size) return 0;
-  let intersection = 0;
-  for (const token of leftTokens) {
-    if (rightTokens.has(token)) intersection += 1;
-  }
-  const union = new Set([...leftTokens, ...rightTokens]).size;
-  return union ? intersection / union : 0;
-}
-
-function candidateQualityText({ key, content, candidate = {} }) {
-  return [
-    key,
-    candidate.key,
-    content,
-    candidate.content,
-    candidate.reason,
-    candidate.durabilityReason,
-    candidate.riskReason,
-    candidate.candidateType,
-    candidate.category,
-    ...(Array.isArray(candidate.tags) ? candidate.tags : []),
-    ...(Array.isArray(candidate.evidenceRefs) ? candidate.evidenceRefs : []),
-  ]
-    .filter(Boolean)
-    .join('\n');
-}
-
 function normalizeSuggestedPromotionAction(candidate = {}) {
   return String(candidate.suggestedAction || candidate.duplicateAction || '')
     .trim()
@@ -1400,7 +1344,7 @@ function memorySimilaritySummary(memory, { key, content, candidate = {} }, retri
     revisionHash: durableMemoryRevisionHash(memory),
     key: memory.key,
     category: memory.category,
-    content: truncateText(memory.content, 280),
+    content: summarySnippet(memory.content, 280),
     importance: memory.importance,
     overlap,
     exactContent: normalizeContentForRisk(memory.content) === normalizeContentForRisk(content),
@@ -1853,7 +1797,7 @@ function compactBootstrapCandidate(result) {
     candidateId: result.candidateId || null,
     key: result.key || null,
     category: result.category || null,
-    content: truncateText(result.content, 240),
+    content: summarySnippet(result.content, 240),
     status: result.status || null,
     checkpointId: result.checkpointId || null,
     sourceAgent: result.sourceAgent || null,
@@ -1869,7 +1813,7 @@ function compactIndexedCandidate(indexedCandidate) {
     candidateId: indexedCandidate.id,
     key: indexedCandidate.candidate?.key || null,
     category: indexedCandidate.candidate?.category || null,
-    content: truncateText(indexedCandidate.candidate?.content, 240),
+    content: summarySnippet(indexedCandidate.candidate?.content, 240),
     status: indexedCandidate.status || null,
     checkpointId: indexedCandidate.checkpointId || null,
     sourceAgent: sourceProvenance?.sourceAgent || indexedCandidate.source?.sourceAgent || null,
@@ -1897,7 +1841,7 @@ function checkpointHandoffResult(checkpoint, group = 'session') {
     type: 'checkpoint',
     key: checkpoint.id,
     category: 'checkpoint',
-    content: truncateText(checkpoint.summaryText || checkpoint.summaryShort),
+    content: summarySnippet(checkpoint.summaryText || checkpoint.summaryShort),
     verificationRequired: true,
     why: [],
     source: {
@@ -1930,7 +1874,7 @@ function checkpointBasisResult(checkpoint) {
     type: 'checkpoint',
     key: checkpoint.id,
     category: 'checkpoint',
-    content: truncateText(checkpoint.summaryText || checkpoint.summaryShort, 500),
+    content: summarySnippet(checkpoint.summaryText || checkpoint.summaryShort, 500),
     trust: 'credible_recent_handoff',
     whyUse: 'Checkpoint basis explains why prior agents may have believed this; do not edit checkpoints directly.',
     verificationRequired: true,
@@ -1964,7 +1908,7 @@ function indexedCandidateBasisResult(indexedCandidate) {
     type: 'memory_candidate',
     key: indexedCandidate.candidate?.key || null,
     category: indexedCandidate.candidate?.category || null,
-    content: truncateText(indexedCandidate.candidate?.content, 500),
+    content: summarySnippet(indexedCandidate.candidate?.content, 500),
     trust: 'review_material',
     whyUse: 'Unreviewed promotion material; useful context and review material, not durable truth.',
     verificationRequired: true,
@@ -2504,7 +2448,7 @@ function summarizeBasisResult(result) {
     type: result.type,
     key: result.key,
     category: result.category || null,
-    content: truncateText(result.content, 500),
+    content: summarySnippet(result.content, 500),
     trust: result.trust || bootstrapTrustForType(result.type),
     whyUse: result.whyUse || bootstrapUseHint(result),
     verificationRequired: Boolean(result.verificationRequired),
@@ -2534,12 +2478,6 @@ function isLiveStateCorrection(text) {
     /\b(ci|check run|github action|workflow run|migration|runtime|deployment|server|service|queue)\s+(failed|passing|passed|running|stopped|down|up|merged|deployed|current|pending)\b/i,
     /\b(alembic|migration|migrations)\s+(current|heads?|upgraded?|downgraded?|applied|pending)\b/i,
   ].some((pattern) => pattern.test(value)) || liveStateTermsMatch(value);
-}
-
-function liveStateTermsMatch(text) {
-  return /(\b(branch\w*|prs?|pull requests?|issues?|ci|checks?|runtimes?|deploy\w*|deployments?|migrations?|migrate\w*|servers?|services?|queues?|status|drafts?|merge\w*|merged|commits?|tags?|releases?|rollbacks?)\b|브랜치|원격|머지|이슈|배포|런타임|마이그레이션|마이그레이트|커밋|릴리즈|롤백|서버|서비스|큐|상태)/i.test(
-    String(text || ''),
-  );
 }
 
 function checkpointTimestamp(checkpoint) {
@@ -5227,14 +5165,14 @@ export function createContextForge(options = {}) {
                   type: 'memory',
                   key: survivor.key,
                   memoryId: survivor.id,
-                  content: truncateText(survivor.content, 500),
+                  content: summarySnippet(survivor.content, 500),
                   role: 'survivor',
                 },
                 {
                   type: 'memory',
                   key: duplicate.key,
                   memoryId: duplicate.id,
-                  content: truncateText(duplicate.content, 500),
+                  content: summarySnippet(duplicate.content, 500),
                   role: 'duplicate',
                 },
               ],
