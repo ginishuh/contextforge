@@ -52,12 +52,24 @@ function parseArguments(argv) {
   return { roots: roots.length ? roots : defaultRoots, budgetFile, updateBudgets, baseCheck };
 }
 
+// Budgets must be real integers. A budget written as a string still compares
+// against a line count through JavaScript's implicit conversion, so the ordinary
+// checks keep passing, but the base comparison below only trusts numbers and
+// would skip the entry. Changing the JSON type would then raise a budget without
+// tripping anything, so the type is rejected at load time instead.
 function readBudgets(budgetFile) {
   if (!fs.existsSync(budgetFile)) return {};
   const parsed = JSON.parse(fs.readFileSync(budgetFile, 'utf8'));
   const budgets = parsed && typeof parsed === 'object' ? parsed.budgets : null;
   if (!budgets || typeof budgets !== 'object') {
     throw new Error(`${budgetFile}: expected an object with a "budgets" map`);
+  }
+  for (const [file, budget] of Object.entries(budgets)) {
+    if (typeof budget !== 'number' || !Number.isInteger(budget) || budget < 0) {
+      throw new Error(
+        `${budgetFile}: budget for ${file} must be a non-negative integer, got ${JSON.stringify(budget)}`,
+      );
+    }
   }
   return budgets;
 }
@@ -247,9 +259,13 @@ if (options.updateBudgets) {
 if (options.baseCheck) {
   const baseBudgets = readBaseBudgets(options.budgetFile);
   if (baseBudgets) {
-    for (const [file, baseBudget] of Object.entries(baseBudgets)) {
+    for (const [file, rawBaseBudget] of Object.entries(baseBudgets)) {
       const current = budgets[file];
-      if (typeof current === 'number' && typeof baseBudget === 'number' && current > baseBudget) {
+      // The base manifest is already committed and cannot be corrected from
+      // here, so a loosely typed historical value is coerced rather than
+      // rejected. The current manifest is validated strictly at load time.
+      const baseBudget = Number(rawBaseBudget);
+      if (typeof current === 'number' && Number.isFinite(baseBudget) && current > baseBudget) {
         budgetErrors.push(
           `${options.budgetFile}: budget for ${file} was raised from ${baseBudget} to ${current};`
             + ' budgets may only go down',

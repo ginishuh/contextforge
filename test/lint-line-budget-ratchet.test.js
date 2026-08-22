@@ -304,3 +304,35 @@ test('the base comparison is skipped outside a git repository', async () => {
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
+
+test('a budget that is not an integer fails the lint', async () => {
+  const directory = await makeWorkspace({ 'src/big.js': '300' });
+  try {
+    await writeSource(directory, 'src/big.js', 280);
+    const result = await runLint(directory);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /budget for src\/big\.js must be a non-negative integer, got "300"/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('retyping a budget as a string cannot raise it past the baseline', async () => {
+  const directory = await makeGitWorkspace({ 'src/big.js': 200 });
+  try {
+    await writeSource(directory, 'src/big.js', 180);
+    await git(directory, 'add', '-A');
+    await git(directory, 'commit', '--quiet', '-m', 'baseline');
+
+    // A string budget still compares against the line count by implicit
+    // conversion, so without the type check the ordinary ratchet would pass
+    // while the base comparison silently skipped the entry.
+    await writeBudgets(directory, { 'src/big.js': '300' });
+    await writeSource(directory, 'src/big.js', 280);
+    const result = await runLint(directory);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /must be a non-negative integer/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
