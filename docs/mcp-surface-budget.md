@@ -34,6 +34,24 @@ The default `agent-core` surface is about 57% smaller than `all` by this token
 estimate. Regression tests cap it at 1,600 instruction bytes, 26,000 tool-schema
 bytes, and 6,700 estimated tokens.
 
+## 2026-08-22 Measurement
+
+| Profile | Tools | Instructions bytes | `tools/list` JSON bytes | Description bytes | Estimated tokens |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `agent-core` | 24 | 1,423 | 25,358 | 5,776 | 6,696 |
+| `review` | 45 | 1,423 | 45,379 | 9,214 | 11,701 |
+| `operator` | 67 | 1,423 | 65,942 | 13,059 | 16,842 |
+| `workspace-admin` | 11 | 1,423 | 8,888 | 2,061 | 2,578 |
+| `all` | 73 | 1,423 | 71,040 | 14,081 | 18,116 |
+
+`agent-core` grew by 16 tool-schema bytes when `@modelcontextprotocol/sdk` moved
+from 1.29.0 to 1.30.0, leaving 4 estimated tokens under the 6,700 regression
+cap. The review, operator, and all profiles grew because candidate lifecycle
+operations were added after the July baseline, not because of the SDK. The
+default surface stays inside its budget, but the next schema addition or SDK
+schema change will need either a tool-description trim or an explicit,
+documented budget change rather than a silent cap increase.
+
 ## Selection Contract
 
 Selection correctness is tested as a deterministic capability contract rather
