@@ -195,13 +195,15 @@ function baseBudgetViolations(baseBudgets, candidate, measured, budgetFile) {
     // under UNREGISTERED_FILE_LIMIT would not be caught by the unbudgeted
     // check either. Removing the entry for a file that is genuinely gone is
     // the legitimate case, so the file still being present is what separates
-    // the two.
-    if (measured.has(file)) {
-      violations.push(
-        `${budgetFile}: budget for ${file} was removed while the file still exists;`
-          + ` restore the entry at ${Math.min(baseBudget, measured.get(file))} or lower`,
-      );
-    }
+    // the two. Presence is read from disk rather than from `measured`, because
+    // a narrowed --root never measures the file and would otherwise let a
+    // partial update quietly shrink the manifest.
+    if (!measured.has(file) && !fs.existsSync(file)) continue;
+    const floor = measured.has(file) ? Math.min(baseBudget, measured.get(file)) : baseBudget;
+    violations.push(
+      `${budgetFile}: budget for ${file} was removed while the file still exists;`
+        + ` restore the entry at ${floor} or lower`,
+    );
   }
   return violations;
 }

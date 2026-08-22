@@ -204,6 +204,33 @@ test('a narrowed --root preserves budget entries outside the scanned scope', asy
   }
 });
 
+test('a narrowed --root cannot drop an out-of-scope entry the baseline still has', async () => {
+  const directory = await makeGitWorkspace({ 'src/big.js': 200, 'test/core.test.js': 300 });
+  try {
+    await fs.mkdir(path.join(directory, 'test'), { recursive: true });
+    await writeSource(directory, 'test/core.test.js', 300);
+    await writeSource(directory, 'src/big.js', 180);
+    await git(directory, 'add', '-A');
+    await git(directory, 'commit', '--quiet', '-m', 'baseline');
+
+    // The out-of-scope entry is deleted from the manifest, then a narrow update
+    // is run. Nothing measures test/, so only the baseline can catch this.
+    await writeBudgets(directory, { 'src/big.js': 200 });
+    const result = await runLint(directory, ['--update-budgets']);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /budget for test\/core\.test\.js was removed while the file still exists/);
+    assert.deepEqual(await readBudgets(directory), { 'src/big.js': 200 });
+
+    // Deleting the file too is the legitimate case and must still pass.
+    await fs.rm(path.join(directory, 'test/core.test.js'));
+    const legitimate = await runLint(directory, ['--update-budgets']);
+    assert.equal(legitimate.code, 0, legitimate.stderr);
+    assert.deepEqual(await readBudgets(directory), { 'src/big.js': 180 });
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('budget entries under a missing root directory are not orphans', async () => {
   // Mirrors the published npm package, which ships src/ and scripts/ but no test/.
   const directory = await makeWorkspace({ 'src/big.js': 200, 'test/core.test.js': 300 });
