@@ -26,6 +26,16 @@ function toPosix(filePath) {
   return filePath.split(path.sep).join('/');
 }
 
+// Roots reach the orphan check as plain strings, so `./src`, `src/`, and an
+// absolute path all have to collapse to the same key the file walk produces.
+// Without this, `--root ./src` leaves every budget entry looking out-of-scope
+// and the orphan check silently passes.
+function canonicalRoot(root) {
+  const relative = toPosix(path.relative(process.cwd(), path.resolve(root)));
+  const trimmed = relative.replace(/\/+$/, '');
+  return trimmed === '' ? '.' : trimmed;
+}
+
 function parseArguments(argv) {
   const roots = [];
   let budgetFile = defaultBudgetFile;
@@ -40,7 +50,7 @@ function parseArguments(argv) {
     } else if (argument === '--root') {
       index += 1;
       if (!argv[index]) throw new Error('--root requires a directory');
-      roots.push(argv[index]);
+      roots.push(canonicalRoot(argv[index]));
     } else if (argument === '--budgets') {
       index += 1;
       if (!argv[index]) throw new Error('--budgets requires a file path');
@@ -109,35 +119,54 @@ function gitOutput(args) {
 // in the branch is caught, not just one raised in the working tree. CI checkouts
 // name their base explicitly because the remote-tracking ref may not be fetched;
 // a checkout without either can still compare against its own HEAD.
+// The HEAD fallback only holds when no base ref exists at all: it compares the
+// working tree against the last commit, which still catches an uncommitted
+// raise. Once a base ref *is* present but has no merge base with HEAD — a
+// shallow clone is the usual cause — falling back to HEAD would compare the
+// branch against itself and wave every committed raise through. That case is
+// reported instead, so an unverifiable ratchet is never a silent pass.
 function baseBudgetRef() {
   const candidates = [process.env.CONTEXTFORGE_LINT_BASE_REF, 'origin/main'].filter(Boolean);
+  let unresolved = null;
   for (const candidate of candidates) {
     if (gitOutput(['rev-parse', '--verify', '--quiet', candidate]) === null) continue;
     const mergeBase = gitOutput(['merge-base', candidate, 'HEAD']);
-    if (mergeBase !== null && mergeBase.trim()) return mergeBase.trim();
+    if (mergeBase !== null && mergeBase.trim()) return { ref: mergeBase.trim() };
+    if (unresolved === null) unresolved = candidate;
   }
-  return gitOutput(['rev-parse', '--verify', '--quiet', 'HEAD']) !== null ? 'HEAD' : null;
+  if (unresolved !== null) return { ref: null, unresolved };
+  return { ref: gitOutput(['rev-parse', '--verify', '--quiet', 'HEAD']) !== null ? 'HEAD' : null };
+}
+
+function unresolvedBaseError(unresolved, budgetFile) {
+  return (
+    `${budgetFile}: no merge base between ${unresolved} and HEAD,`
+    + ' so the line budget ratchet cannot be verified against the baseline.'
+    + ' Fetch the full history (fetch-depth: 0), set CONTEXTFORGE_LINT_BASE_REF'
+    + ' to a ref that shares history, or pass --no-base-check to skip the comparison.'
+  );
 }
 
 // Returns the committed budgets, or null when no baseline is obtainable. Every
 // failure path here is a silent skip on purpose: the published npm package ships
 // without a .git directory, and lint must still run there.
 function readBaseBudgets(budgetFile) {
-  if (gitOutput(['rev-parse', '--git-dir']) === null) return null;
-  const ref = baseBudgetRef();
-  if (ref === null) return null;
+  if (gitOutput(['rev-parse', '--git-dir']) === null) return { budgets: null };
+  const { ref, unresolved } = baseBudgetRef();
+  if (unresolved) return { budgets: null, unresolved };
+  if (ref === null) return { budgets: null };
   const relative = toPosix(path.relative(process.cwd(), path.resolve(budgetFile)));
   // `<rev>:./<path>` resolves relative to the cwd; a path outside the repo
   // cannot be addressed that way, so there is nothing to compare.
-  if (!relative || relative.startsWith('..')) return null;
+  if (!relative || relative.startsWith('..')) return { budgets: null };
   const shown = gitOutput(['show', `${ref}:./${relative}`]);
-  if (shown === null) return null;
+  if (shown === null) return { budgets: null };
   try {
     const parsed = JSON.parse(shown);
     const budgets = parsed && typeof parsed === 'object' ? parsed.budgets : null;
-    return budgets && typeof budgets === 'object' ? budgets : null;
+    return { budgets: budgets && typeof budgets === 'object' ? budgets : null };
   } catch {
-    return null;
+    return { budgets: null };
   }
 }
 
@@ -191,9 +220,11 @@ const files = options.roots.flatMap(javascriptFiles).sort();
 // outside it must be carried over rather than treated as deleted.
 const fullScope = [...options.roots].sort().join(',') === [...defaultRoots].sort().join(',');
 
+// Roots are already canonical here, so this is a plain prefix test. A root of
+// the working directory itself owns every measured file.
 function underRoot(file, root) {
-  const normalized = toPosix(root).replace(/\/+$/, '');
-  return file === normalized || file.startsWith(`${normalized}/`);
+  if (root === '.') return true;
+  return file === root || file.startsWith(`${root}/`);
 }
 
 // A budget entry can only be judged as an orphan when the scan could actually
@@ -297,10 +328,12 @@ if (options.updateBudgets) {
   // baseline could be rewritten to a still-too-high line count and exit 0,
   // succeeding here while `npm run lint` fails.
   if (options.baseCheck) {
-    const baseBudgets = readBaseBudgets(options.budgetFile);
-    if (baseBudgets) {
+    const base = readBaseBudgets(options.budgetFile);
+    if (base.unresolved) {
+      updateErrors.push(unresolvedBaseError(base.unresolved, options.budgetFile));
+    } else if (base.budgets) {
       updateErrors.push(
-        ...baseBudgetViolations(baseBudgets, next, measured, options.budgetFile),
+        ...baseBudgetViolations(base.budgets, next, measured, options.budgetFile),
       );
     }
   }
@@ -314,9 +347,11 @@ if (options.updateBudgets) {
 }
 
 if (options.baseCheck) {
-  const baseBudgets = readBaseBudgets(options.budgetFile);
-  if (baseBudgets) {
-    budgetErrors.push(...baseBudgetViolations(baseBudgets, budgets, measured, options.budgetFile));
+  const base = readBaseBudgets(options.budgetFile);
+  if (base.unresolved) {
+    budgetErrors.push(unresolvedBaseError(base.unresolved, options.budgetFile));
+  } else if (base.budgets) {
+    budgetErrors.push(...baseBudgetViolations(base.budgets, budgets, measured, options.budgetFile));
   }
 }
 

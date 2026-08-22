@@ -37,6 +37,22 @@ async function runLint(directory, extraArguments = []) {
   }
 }
 
+// runLint always passes `--root src`, which would mask how a differently
+// spelled root behaves on its own.
+async function runLintWithRoots(directory, roots, extraArguments = []) {
+  const rootArguments = roots.flatMap((root) => ['--root', root]);
+  try {
+    const result = await execFileAsync(
+      'node',
+      [lintScript, ...rootArguments, '--budgets', 'budgets.json', ...extraArguments],
+      { cwd: directory },
+    );
+    return { code: 0, stdout: result.stdout, stderr: result.stderr };
+  } catch (error) {
+    return { code: error.code, stdout: error.stdout, stderr: error.stderr };
+  }
+}
+
 async function readBudgets(directory) {
   return JSON.parse(await fs.readFile(path.join(directory, 'budgets.json'), 'utf8')).budgets;
 }
@@ -288,6 +304,67 @@ test('the baseline is the merge base with origin/main, not HEAD', async () => {
     const result = await runLint(directory);
     assert.equal(result.code, 1);
     assert.match(result.stderr, /budget for src\/big\.js was raised from 200 to 300/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('an unreachable merge base fails instead of comparing HEAD to itself', async () => {
+  const directory = await makeGitWorkspace({ 'src/big.js': 200 });
+  try {
+    await writeSource(directory, 'src/big.js', 180);
+    await git(directory, 'add', '-A');
+    await git(directory, 'commit', '--quiet', '-m', 'baseline');
+
+    // A shallow clone has the base ref but no shared history with it. Building
+    // the same condition here without touching the working tree.
+    const { stdout: emptyTree } = await execFileAsync('git', ['hash-object', '-t', 'tree', '/dev/null'], {
+      cwd: directory,
+    });
+    const { stdout: unrelated } = await execFileAsync(
+      'git',
+      ['-c', 'user.email=lint@test', '-c', 'user.name=Lint Test', 'commit-tree', emptyTree.trim(), '-m', 'unrelated'],
+      { cwd: directory },
+    );
+    await git(directory, 'update-ref', 'refs/remotes/origin/main', unrelated.trim());
+
+    // Commit the raise. A HEAD baseline would be the raised manifest itself,
+    // so the ratchet would compare the branch against its own budget and pass.
+    await writeBudgets(directory, { 'src/big.js': 300 });
+    await writeSource(directory, 'src/big.js', 280);
+    await git(directory, 'add', '-A');
+    await git(directory, 'commit', '--quiet', '-m', 'raise the budget');
+
+    const result = await runLint(directory);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /no merge base between origin\/main and HEAD/);
+
+    // The update path must refuse for the same reason, not write 280.
+    const updated = await runLint(directory, ['--update-budgets']);
+    assert.equal(updated.code, 1);
+    assert.match(updated.stderr, /no merge base between origin\/main and HEAD/);
+    assert.deepEqual(await readBudgets(directory), { 'src/big.js': 300 });
+
+    // The documented escape hatch still works for callers without history.
+    const skipped = await runLint(directory, ['--no-base-check']);
+    assert.equal(skipped.code, 0, skipped.stderr);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('orphan entries are caught however the root is spelled', async () => {
+  const directory = await makeWorkspace({ 'src/gone.js': 300 });
+  try {
+    await writeSource(directory, 'src/keep.js', 10);
+    // `./src` and `src/` must collapse to the same key the file walk produces,
+    // or every budget entry looks out of scope and the orphan check passes.
+    for (const root of ['src', './src', 'src/', path.join(directory, 'src')]) {
+      // Bypasses runLint so the spelling under test is the only --root given.
+      const result = await runLintWithRoots(directory, [root]);
+      assert.equal(result.code, 1, `root ${root} should have failed`);
+      assert.match(result.stderr, /src\/gone\.js is budgeted but was not found/);
+    }
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
