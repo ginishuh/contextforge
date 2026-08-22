@@ -208,18 +208,63 @@ function baseBudgetViolations(baseBudgets, candidate, measured, budgetFile) {
   return violations;
 }
 
-// Locates each `import ...` statement as a line range. A statement ends on the
-// line carrying its `from '...'` clause, so multi-line brace lists are covered;
-// a side-effect import (`import './x.js';`) ends on its own line.
+// Marks which lines *begin* in code rather than inside a block comment or a
+// template literal. A column-0 `import` inside either is text, not a statement,
+// and treating it as one would fail the lint over a name that was never
+// imported. Regex literals are not tracked: only `/*` matters here, and a
+// regex containing it is vanishingly rare next to a code-generating template.
+function codeContextLines(lines) {
+  const inCode = [];
+  let blockComment = false;
+  let template = false;
+  for (const line of lines) {
+    inCode.push(!blockComment && !template);
+    for (let index = 0; index < line.length; index += 1) {
+      const pair = line.slice(index, index + 2);
+      if (blockComment) {
+        if (pair === '*/') { blockComment = false; index += 1; }
+        continue;
+      }
+      if (template) {
+        if (line[index] === '\\') index += 1;
+        else if (line[index] === '`') template = false;
+        continue;
+      }
+      if (pair === '//') break;
+      if (pair === '/*') { blockComment = true; index += 1; continue; }
+      if (line[index] === '`') { template = true; continue; }
+      if (line[index] === "'" || line[index] === '"') {
+        const quote = line[index];
+        index += 1;
+        while (index < line.length && line[index] !== quote) {
+          if (line[index] === '\\') index += 1;
+          index += 1;
+        }
+      }
+    }
+  }
+  return inCode;
+}
+
+// A statement closes on the line carrying its `from '...'` clause, so multi-line
+// brace lists are covered. The tail allows an import attribute clause and a
+// trailing line comment: a leftover import is exactly the thing someone
+// annotates with `// moved`, and missing those would blind the check in the
+// case it exists for.
+const IMPORT_TAIL = "\\s*(?:with\\s*\\{[^}]*\\})?\\s*;?\\s*(?://.*)?$";
+const IMPORT_FROM_END = new RegExp(`\\bfrom\\s+['"][^'"]+['"]${IMPORT_TAIL}`);
+const IMPORT_SIDE_EFFECT = new RegExp(`^import\\s+['"][^'"]+['"]${IMPORT_TAIL}`);
+
 function importStatements(lines) {
+  const inCode = codeContextLines(lines);
   const statements = [];
   for (let index = 0; index < lines.length; index += 1) {
-    if (!/^import\s/.test(lines[index])) continue;
+    if (!inCode[index] || !/^import\s/.test(lines[index])) continue;
     let end = index;
     while (
       end < lines.length
-      && !/\bfrom\s+['"][^'"]+['"];?\s*$/.test(lines[end])
-      && !/^import\s+['"][^'"]+['"];?\s*$/.test(lines[end])
+      && !IMPORT_FROM_END.test(lines[end])
+      && !IMPORT_SIDE_EFFECT.test(lines[end])
     ) end += 1;
     if (end >= lines.length) continue;
     statements.push({ start: index, end });
@@ -228,22 +273,35 @@ function importStatements(lines) {
   return statements;
 }
 
+// `$` is a valid identifier character, so the name pattern has to accept it or
+// a `$`-named binding is silently never checked.
+const IDENTIFIER = '[\\w$]+';
+
 // The local names a statement binds. For `x as y` the binding is `y`, which is
-// the name the rest of the file has to use.
+// the name the rest of the file has to use. Comments are stripped per line
+// first: a `// note` after a specifier would otherwise swallow the comma and
+// hide the specifier that follows it.
 function importBindings(text) {
+  const withoutComments = text
+    .split('\n')
+    .map((line) => line.replace(/\/\/.*$/, ''))
+    .join('\n');
   const names = [];
-  const braced = text.match(/\{([\s\S]*?)\}/);
+  const braced = withoutComments.match(/\{([\s\S]*?)\}/);
   if (braced) {
     for (const part of braced[1].split(',')) {
       const trimmed = part.trim();
       if (!trimmed) continue;
-      const match = trimmed.match(/(?:\w+)\s+as\s+(\w+)$/) || trimmed.match(/^(\w+)$/);
+      const match = trimmed.match(new RegExp(`(?:${IDENTIFIER})\\s+as\\s+(${IDENTIFIER})$`))
+        || trimmed.match(new RegExp(`^(${IDENTIFIER})$`));
       if (match) names.push(match[1]);
     }
   }
-  const namespace = text.match(/\*\s+as\s+(\w+)/);
+  const namespace = withoutComments.match(new RegExp(`\\*\\s+as\\s+(${IDENTIFIER})`));
   if (namespace) names.push(namespace[1]);
-  const defaultBinding = text.replace(/^import\s+/, '').match(/^(\w+)\s*(?:,|from)/);
+  const defaultBinding = withoutComments
+    .replace(/^import\s+/, '')
+    .match(new RegExp(`^(${IDENTIFIER})\\s*(?:,|from)`));
   if (defaultBinding) names.push(defaultBinding[1]);
   return names;
 }
@@ -268,7 +326,10 @@ function unusedImportErrors(file, lines) {
   for (const statement of statements) {
     const text = lines.slice(statement.start, statement.end + 1).join('\n');
     for (const name of importBindings(text)) {
-      if (!new RegExp(`\\b${name}\\b`).test(body)) {
+      // `\b` does not hold at a `$` boundary and `$` is a regex metacharacter,
+      // so the boundary is spelled out and the name escaped.
+      const escaped = name.replace(/\$/g, '\\$');
+      if (!new RegExp(`(?<![\\w$])${escaped}(?![\\w$])`).test(body)) {
         errors.push(`${file}:${statement.start + 1}: unused import ${name}`);
       }
     }
