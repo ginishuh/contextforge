@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Started decomposing the core facade and changed how its size is enforced.
+  LLM usage accounting moved out of `src/core.js` into
+  `src/application/llm_usage.js`, which removes 324 lines from the facade
+  without changing any public operation. Line budgets moved from an inline
+  ceiling in `scripts/lint-source.js` to a ratchet in
+  `scripts/line-budgets.json`: exceeding a budget still fails, and so does
+  leaving a shrunken file's budget untightened, so extracting code is now the
+  cheap path. Unregistered files may not pass 1,500 lines without an explicit
+  budget entry. The manifest ships in the npm package so `npm run lint` works
+  from the published artifact, and budget entries under a root the package
+  omits, such as `test/`, are skipped rather than reported as orphans. Raising a
+  budget is rejected two ways: `--update-budgets` refuses to write an increase,
+  and lint compares the manifest against the pull request's base branch, so a
+  hand-edited increase fails CI. Paths are normalized to POSIX separators, and
+  `--update-budgets` refuses to run while the source lint itself fails. Budget
+  values must be integers, since a budget retyped as a string compares by
+  implicit conversion but is skipped by the base comparison, and dropping an
+  entry for a file that still exists is rejected the same way raising one is.
 - Cleared the production dependency advisories that had made the
   `dependency-audit` CI gate fail on `main`. `@modelcontextprotocol/sdk` moved
   to 1.30.0 and `zod` to 4.4.3, and pinned `overrides` now force patched

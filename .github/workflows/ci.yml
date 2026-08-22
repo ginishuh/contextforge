@@ -80,12 +80,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v6
         with:
           node-version: 22
 
+      # The line budget ratchet compares against the base branch so a budget
+      # raised anywhere in the pull request is rejected. Without this fetch the
+      # base ref is absent and the comparison silently skips itself.
+      - name: Fetch base branch for the line budget ratchet
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+
       - run: npm run lint
+        env:
+          CONTEXTFORGE_LINT_BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || '' }}
 
   quality-eval:
     name: Offline quality eval
