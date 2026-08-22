@@ -265,10 +265,25 @@ if (options.baseCheck) {
       // here, so a loosely typed historical value is coerced rather than
       // rejected. The current manifest is validated strictly at load time.
       const baseBudget = Number(rawBaseBudget);
-      if (typeof current === 'number' && Number.isFinite(baseBudget) && current > baseBudget) {
+      if (!Number.isFinite(baseBudget)) continue;
+      if (typeof current === 'number') {
+        if (current > baseBudget) {
+          budgetErrors.push(
+            `${options.budgetFile}: budget for ${file} was raised from ${baseBudget} to ${current};`
+              + ' budgets may only go down',
+          );
+        }
+        continue;
+      }
+      // Dropping an entry lifts that file's budget to infinity, and a file now
+      // under UNREGISTERED_FILE_LIMIT would not be caught by the unbudgeted
+      // check either. Removing the entry for a file that is genuinely gone is
+      // the legitimate case, so the file still being present is what separates
+      // the two.
+      if (measured.has(file)) {
         budgetErrors.push(
-          `${options.budgetFile}: budget for ${file} was raised from ${baseBudget} to ${current};`
-            + ' budgets may only go down',
+          `${options.budgetFile}: budget for ${file} was removed while the file still exists;`
+            + ` restore the entry at ${Math.min(baseBudget, measured.get(file))} or lower`,
         );
       }
     }

@@ -336,3 +336,37 @@ test('retyping a budget as a string cannot raise it past the baseline', async ()
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
+
+test('dropping a budget entry for a file that still exists fails the lint', async () => {
+  const directory = await makeGitWorkspace({ 'src/big.js': 200 });
+  try {
+    await writeSource(directory, 'src/big.js', 180);
+    await git(directory, 'add', '-A');
+    await git(directory, 'commit', '--quiet', '-m', 'baseline');
+
+    // Deleting the entry lifts the budget to infinity, and a file under the
+    // unregistered limit would otherwise sail through unnoticed.
+    await writeBudgets(directory, {});
+    const result = await runLint(directory);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /budget for src\/big\.js was removed while the file still exists/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('dropping a budget entry for a deleted file is allowed', async () => {
+  const directory = await makeGitWorkspace({ 'src/big.js': 200 });
+  try {
+    await writeSource(directory, 'src/big.js', 180);
+    await git(directory, 'add', '-A');
+    await git(directory, 'commit', '--quiet', '-m', 'baseline');
+
+    await fs.rm(path.join(directory, 'src/big.js'));
+    await writeBudgets(directory, {});
+    const result = await runLint(directory);
+    assert.equal(result.code, 0, result.stderr);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});

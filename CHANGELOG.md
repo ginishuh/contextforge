@@ -16,7 +16,10 @@
   budget is rejected two ways: `--update-budgets` refuses to write an increase,
   and lint compares the manifest against the pull request's base branch, so a
   hand-edited increase fails CI. Paths are normalized to POSIX separators, and
-  `--update-budgets` refuses to run while the source lint itself fails.
+  `--update-budgets` refuses to run while the source lint itself fails. Budget
+  values must be integers, since a budget retyped as a string compares by
+  implicit conversion but is skipped by the base comparison, and dropping an
+  entry for a file that still exists is rejected the same way raising one is.
 - Cleared the production dependency advisories that had made the
   `dependency-audit` CI gate fail on `main`. `@modelcontextprotocol/sdk` moved
   to 1.30.0 and `zod` to 4.4.3, and pinned `overrides` now force patched

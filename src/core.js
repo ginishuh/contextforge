@@ -35,7 +35,7 @@ import {
   runWithKeyedLock,
   runWithProviderConcurrency,
 } from './runtime/provider_execution.js';
-import { currentRequestContext, runWithRequestContext } from './runtime/request_context.js';
+import { runWithRequestContext } from './runtime/request_context.js';
 import { normalizeScopeOptions } from './scopes/index.js';
 import { ContextForgeStore } from './storage/sqlite.js';
 import {
