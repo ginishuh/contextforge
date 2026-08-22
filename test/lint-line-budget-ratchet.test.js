@@ -355,6 +355,49 @@ test('dropping a budget entry for a file that still exists fails the lint', asyn
   }
 });
 
+test('--update-budgets cannot write a budget above the committed baseline', async () => {
+  const directory = await makeGitWorkspace({ 'src/big.js': 200 });
+  try {
+    await writeSource(directory, 'src/big.js', 180);
+    await git(directory, 'add', '-A');
+    await git(directory, 'commit', '--quiet', '-m', 'baseline');
+
+    // Hand-raising the budget and then updating would otherwise record the
+    // grown line count and exit 0, even though the ordinary lint rejects it.
+    await writeBudgets(directory, { 'src/big.js': 300 });
+    await writeSource(directory, 'src/big.js', 280);
+    const result = await runLint(directory, ['--update-budgets']);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /budget for src\/big\.js was raised from 200 to 280/);
+
+    // The rejected update must leave the manifest exactly as it found it.
+    assert.deepEqual(await readBudgets(directory), { 'src/big.js': 300 });
+
+    // Callers that opted out of the base check keep the old behaviour.
+    const skipped = await runLint(directory, ['--update-budgets', '--no-base-check']);
+    assert.equal(skipped.code, 0, skipped.stderr);
+    assert.deepEqual(await readBudgets(directory), { 'src/big.js': 280 });
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('--update-budgets refuses to drop an orphan entry', async () => {
+  const directory = await makeWorkspace({ 'src/big.js': 200, 'src/gone.js': 300 });
+  try {
+    await writeSource(directory, 'src/big.js', 120);
+    const result = await runLint(directory, ['--update-budgets']);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /src\/gone\.js is budgeted but was not found/);
+    assert.match(result.stderr, /will not drop it for you/);
+
+    // Both entries survive: a typo must not be laundered into a deletion.
+    assert.deepEqual(await readBudgets(directory), { 'src/big.js': 200, 'src/gone.js': 300 });
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('dropping a budget entry for a deleted file is allowed', async () => {
   const directory = await makeGitWorkspace({ 'src/big.js': 200 });
   try {

@@ -141,6 +141,42 @@ function readBaseBudgets(budgetFile) {
   }
 }
 
+// Compares a candidate budget map against the committed baseline. Both the
+// ordinary lint and --update-budgets run this against the manifest they are
+// about to accept, so neither path can leave a budget looser than the baseline.
+function baseBudgetViolations(baseBudgets, candidate, measured, budgetFile) {
+  const violations = [];
+  for (const [file, rawBaseBudget] of Object.entries(baseBudgets)) {
+    const current = candidate[file];
+    // The base manifest is already committed and cannot be corrected from
+    // here, so a loosely typed historical value is coerced rather than
+    // rejected. The current manifest is validated strictly at load time.
+    const baseBudget = Number(rawBaseBudget);
+    if (!Number.isFinite(baseBudget)) continue;
+    if (typeof current === 'number') {
+      if (current > baseBudget) {
+        violations.push(
+          `${budgetFile}: budget for ${file} was raised from ${baseBudget} to ${current};`
+            + ' budgets may only go down',
+        );
+      }
+      continue;
+    }
+    // Dropping an entry lifts that file's budget to infinity, and a file now
+    // under UNREGISTERED_FILE_LIMIT would not be caught by the unbudgeted
+    // check either. Removing the entry for a file that is genuinely gone is
+    // the legitimate case, so the file still being present is what separates
+    // the two.
+    if (measured.has(file)) {
+      violations.push(
+        `${budgetFile}: budget for ${file} was removed while the file still exists;`
+          + ` restore the entry at ${Math.min(baseBudget, measured.get(file))} or lower`,
+      );
+    }
+  }
+  return violations;
+}
+
 const options = parseArguments(process.argv.slice(2));
 const defaultNote = [
   'Ratchet budgets in lines. Budgets may only go down.',
@@ -230,7 +266,16 @@ if (options.updateBudgets) {
   const updateErrors = [];
   for (const [file, budget] of Object.entries(budgets)) {
     if (!measured.has(file)) {
-      if (budgetUnreachable(file)) next[file] = budget;
+      // An unreachable entry is carried over untouched. A genuine orphan is the
+      // same failure the ordinary lint reports, and an update must not launder
+      // it away: the entry is kept so the rejected run leaves the file intact.
+      next[file] = budget;
+      if (!budgetUnreachable(file)) {
+        updateErrors.push(
+          `${options.budgetFile}: ${file} is budgeted but was not found;`
+            + ' remove the entry yourself, --update-budgets will not drop it for you',
+        );
+      }
       continue;
     }
     const actual = measured.get(file);
@@ -247,6 +292,18 @@ if (options.updateBudgets) {
     const isNewEntry = budgets[file] === undefined;
     if (isNewEntry && actual > UNREGISTERED_FILE_LIMIT) next[file] = actual;
   }
+  // The manifest about to be written is held to the same baseline as the one
+  // the ordinary lint reads. Without this, an entry hand-raised above the
+  // baseline could be rewritten to a still-too-high line count and exit 0,
+  // succeeding here while `npm run lint` fails.
+  if (options.baseCheck) {
+    const baseBudgets = readBaseBudgets(options.budgetFile);
+    if (baseBudgets) {
+      updateErrors.push(
+        ...baseBudgetViolations(baseBudgets, next, measured, options.budgetFile),
+      );
+    }
+  }
   if (updateErrors.length) {
     console.error(updateErrors.join('\n'));
     process.exit(1);
@@ -259,34 +316,7 @@ if (options.updateBudgets) {
 if (options.baseCheck) {
   const baseBudgets = readBaseBudgets(options.budgetFile);
   if (baseBudgets) {
-    for (const [file, rawBaseBudget] of Object.entries(baseBudgets)) {
-      const current = budgets[file];
-      // The base manifest is already committed and cannot be corrected from
-      // here, so a loosely typed historical value is coerced rather than
-      // rejected. The current manifest is validated strictly at load time.
-      const baseBudget = Number(rawBaseBudget);
-      if (!Number.isFinite(baseBudget)) continue;
-      if (typeof current === 'number') {
-        if (current > baseBudget) {
-          budgetErrors.push(
-            `${options.budgetFile}: budget for ${file} was raised from ${baseBudget} to ${current};`
-              + ' budgets may only go down',
-          );
-        }
-        continue;
-      }
-      // Dropping an entry lifts that file's budget to infinity, and a file now
-      // under UNREGISTERED_FILE_LIMIT would not be caught by the unbudgeted
-      // check either. Removing the entry for a file that is genuinely gone is
-      // the legitimate case, so the file still being present is what separates
-      // the two.
-      if (measured.has(file)) {
-        budgetErrors.push(
-          `${options.budgetFile}: budget for ${file} was removed while the file still exists;`
-            + ` restore the entry at ${Math.min(baseBudget, measured.get(file))} or lower`,
-        );
-      }
-    }
+    budgetErrors.push(...baseBudgetViolations(baseBudgets, budgets, measured, options.budgetFile));
   }
 }
 
