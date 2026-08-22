@@ -683,7 +683,7 @@ export function autoPromotionWouldPromote(indexedCandidate, warnings, rank) {
 
 export function auditedPromotionProposal(indexedCandidate, warnings, audit, rank, options = {}) {
   return buildAuditedPromotionProposal({
-    indexedCandidate, warnings, audit, rank, ...options, makeProposal: promotionProposal,
+    indexedCandidate, warnings, audit, rank, ...options,
   });
 }
 
