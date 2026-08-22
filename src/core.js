@@ -79,7 +79,7 @@ import {
 } from './memory/candidate_promotion.js';
 import { candidateBacklogAuditPlanMethods } from './memory/candidate_backlog_audit_plan.js';
 import { candidateDispositionMethods } from './memory/candidate_dispositions.js';
-import { durableMemoryRevisionHash, memoryCandidateRevisionHash } from './memory/candidate_revision.js';
+import { memoryCandidateRevisionHash } from './memory/candidate_revision.js';
 import { candidateStaleSlaMethods } from './memory/candidate_stale_sla.js';
 import { assertCurrentPromotionRouting, assertMemoryUpdateTarget, finalizeRoutedSourceCandidate, persistApprovedAuditRouting, promotionRoutingResult, routeAuditedMemoryCandidates } from './memory/audited_candidate_routing.js';
 import { dueDistillSessionSummary, listIdleCandidateAudits, processIdleCandidateAudits } from './memory/idle_candidate_audits.js';
