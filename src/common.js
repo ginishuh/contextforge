@@ -36,6 +36,28 @@ export function contentHash(value) {
   return createHash('sha256').update(String(value || '')).digest('hex');
 }
 
+const CONSULT_REASONS = new Set([
+  'startup',
+  'resume',
+  'compaction_recovery',
+  'agent_switch',
+  'targeted_search',
+  'live_state_check',
+  'active_session',
+  'unknown',
+]);
+
+export function normalizeConsultReason(value) {
+  const reason = String(value || 'unknown')
+    .trim()
+    .toLowerCase()
+    .replace(/[-\s]+/g, '_');
+  if (!CONSULT_REASONS.has(reason)) {
+    throw new Error(`consultReason must be one of: ${Array.from(CONSULT_REASONS).join(', ')}.`);
+  }
+  return reason;
+}
+
 export function requireOption(value, name) {
   if (value == null || value === '') {
     throw new Error(`${name} is required.`);
