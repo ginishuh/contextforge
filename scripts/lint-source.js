@@ -246,27 +246,63 @@ function codeContextLines(lines) {
   return inCode;
 }
 
-// A statement closes on the line carrying its `from '...'` clause, so multi-line
-// brace lists are covered. The tail allows an import attribute clause and a
-// trailing line comment: a leftover import is exactly the thing someone
-// annotates with `// moved`, and missing those would blind the check in the
-// case it exists for.
-const IMPORT_TAIL = "\\s*(?:with\\s*\\{[^}]*\\})?\\s*;?\\s*(?://.*)?$";
-const IMPORT_FROM_END = new RegExp(`\\bfrom\\s+['"][^'"]+['"]${IMPORT_TAIL}`);
-const IMPORT_SIDE_EFFECT = new RegExp(`^import\\s+['"][^'"]+['"]${IMPORT_TAIL}`);
+// Drops a line's trailing comment without being fooled by one inside a string,
+// so a path like './a//b.js' survives while `// from './fake.js'` does not.
+function stripComment(line) {
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (character === "'" || character === '"' || character === '`') {
+      index += 1;
+      while (index < line.length && line[index] !== character) {
+        if (line[index] === '\\') index += 1;
+        index += 1;
+      }
+      continue;
+    }
+    const pair = line.slice(index, index + 2);
+    if (pair === '//' || pair === '/*') return line.slice(0, index);
+  }
+  return line;
+}
+
+const IMPORT_FROM_END = /\bfrom\s+['"][^'"]+['"]\s*$/;
+
+// Finds the line a statement ends on, reading only code: comments are stripped
+// first, and braces are counted so a multi-line attribute clause (`with {` on
+// its own line) keeps the statement open. Falling back to a bare `from '...'`
+// tail covers a statement written without a semicolon.
+function statementEnd(lines, start) {
+  let depth = 0;
+  for (let index = start; index < lines.length; index += 1) {
+    const code = stripComment(lines[index]);
+    for (let position = 0; position < code.length; position += 1) {
+      const character = code[position];
+      if (character === "'" || character === '"' || character === '`') {
+        position += 1;
+        while (position < code.length && code[position] !== character) {
+          if (code[position] === '\\') position += 1;
+          position += 1;
+        }
+        continue;
+      }
+      if (character === '{') depth += 1;
+      else if (character === '}') depth -= 1;
+      else if (character === ';' && depth <= 0) return index;
+    }
+    if (depth <= 0 && IMPORT_FROM_END.test(code.trimEnd())) return index;
+  }
+  return -1;
+}
 
 function importStatements(lines) {
   const inCode = codeContextLines(lines);
   const statements = [];
   for (let index = 0; index < lines.length; index += 1) {
-    if (!inCode[index] || !/^import\s/.test(lines[index])) continue;
-    let end = index;
-    while (
-      end < lines.length
-      && !IMPORT_FROM_END.test(lines[end])
-      && !IMPORT_SIDE_EFFECT.test(lines[end])
-    ) end += 1;
-    if (end >= lines.length) continue;
+    // Indented is still top-level as far as the module is concerned; the code
+    // context check above is what keeps a quoted `import` line out.
+    if (!inCode[index] || !/^\s*import\s/.test(lines[index])) continue;
+    const end = statementEnd(lines, index);
+    if (end === -1) continue;
     statements.push({ start: index, end });
     index = end;
   }
@@ -284,10 +320,15 @@ const IDENTIFIER = '[\\w$]+';
 function importBindings(text) {
   const withoutComments = text
     .split('\n')
-    .map((line) => line.replace(/\/\/.*$/, ''))
+    .map((line) => stripComment(line))
     .join('\n');
+  // Specifiers live before the `from` clause. Anything after it is the module
+  // path and possibly an attribute clause, whose braces would otherwise be
+  // read as a specifier list.
+  const fromClause = withoutComments.match(/\bfrom\s+['"]/);
+  const head = fromClause ? withoutComments.slice(0, fromClause.index) : withoutComments;
   const names = [];
-  const braced = withoutComments.match(/\{([\s\S]*?)\}/);
+  const braced = head.match(/\{([\s\S]*?)\}/);
   if (braced) {
     for (const part of braced[1].split(',')) {
       const trimmed = part.trim();
@@ -297,11 +338,13 @@ function importBindings(text) {
       if (match) names.push(match[1]);
     }
   }
-  const namespace = withoutComments.match(new RegExp(`\\*\\s+as\\s+(${IDENTIFIER})`));
+  const namespace = head.match(new RegExp(`\\*\\s+as\\s+(${IDENTIFIER})`));
   if (namespace) names.push(namespace[1]);
-  const defaultBinding = withoutComments
-    .replace(/^import\s+/, '')
-    .match(new RegExp(`^(${IDENTIFIER})\\s*(?:,|from)`));
+  // `head` already stops before the `from` clause, so a default binding is
+  // followed by a comma or nothing at all.
+  const defaultBinding = head
+    .replace(/^\s*import\s+/, '')
+    .match(new RegExp(`^(${IDENTIFIER})\\s*(?:,|$)`));
   if (defaultBinding) names.push(defaultBinding[1]);
   return names;
 }

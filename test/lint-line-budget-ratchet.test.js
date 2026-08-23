@@ -714,3 +714,66 @@ test('an import attribute clause still closes the statement', async () => {
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
+
+test('a comment that looks like a from clause does not close the statement', async () => {
+  const directory = await makeWorkspace({});
+  try {
+    await fs.writeFile(
+      path.join(directory, 'src/dep.js'),
+      'export const dead = 1;\nexport const alsoDead = 2;\n',
+    );
+    await fs.writeFile(path.join(directory, 'src/app.js'), [
+      'import {',
+      '  dead,',
+      "  // from './fake.js'",
+      '  alsoDead,',
+      "} from './dep.js';",
+      '',
+      'console.log(1);',
+      '',
+    ].join('\n'));
+    const result = await runLint(directory);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /unused import dead/);
+    assert.match(result.stderr, /unused import alsoDead/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('an attribute clause spanning lines keeps the statement open', async () => {
+  const directory = await makeWorkspace({});
+  try {
+    await fs.writeFile(path.join(directory, 'src/app.js'), [
+      "import data from './data.json' with {",
+      "  type: 'json',",
+      '};',
+      '',
+      'console.log(1);',
+      '',
+    ].join('\n'));
+    const result = await runLint(directory);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /src\/app\.js:1: unused import data/);
+    // The attribute key is not a specifier and must never be reported as one.
+    assert.doesNotMatch(result.stderr, /unused import type/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('an indented import is still checked', async () => {
+  const directory = await makeWorkspace({});
+  try {
+    await fs.writeFile(path.join(directory, 'src/dep.js'), 'export const dead = 1;\n');
+    await fs.writeFile(
+      path.join(directory, 'src/app.js'),
+      "  import { dead } from './dep.js';\n\nconsole.log(1);\n",
+    );
+    const result = await runLint(directory);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /unused import dead/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
