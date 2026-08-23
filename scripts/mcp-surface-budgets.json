@@ -1,0 +1,36 @@
+{
+  "note": "Ratchet budgets for the MCP initialization surface, in bytes and estimated tokens. The surface may never grow past what is recorded here: a change that needs more room re-records it in the same commit and says why, so the increase shows up in a diff. A token count falling well below its budget must be tightened the same way. Run 'node scripts/check-mcp-surface.js --update' to re-record.",
+  "slackRatio": 0.05,
+  "profiles": {
+    "agent-core": {
+      "toolCount": 24,
+      "instructionsBytes": 1423,
+      "toolSchemaBytes": 25358,
+      "estimatedInitialTokens": 6696
+    },
+    "all": {
+      "toolCount": 73,
+      "instructionsBytes": 1423,
+      "toolSchemaBytes": 71040,
+      "estimatedInitialTokens": 18116
+    },
+    "operator": {
+      "toolCount": 67,
+      "instructionsBytes": 1423,
+      "toolSchemaBytes": 65942,
+      "estimatedInitialTokens": 16842
+    },
+    "review": {
+      "toolCount": 45,
+      "instructionsBytes": 1423,
+      "toolSchemaBytes": 45379,
+      "estimatedInitialTokens": 11701
+    },
+    "workspace-admin": {
+      "toolCount": 11,
+      "instructionsBytes": 1423,
+      "toolSchemaBytes": 8888,
+      "estimatedInitialTokens": 2578
+    }
+  }
+}

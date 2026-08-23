@@ -368,10 +368,10 @@ clients that need it:
 | Profile | Tools | Intended caller |
 | --- | ---: | --- |
 | `agent-core` | 24 | normal agent bootstrap, retrieval, evidence, distillation, and closeout |
-| `review` | 37 | candidate and durable-memory review |
-| `operator` | 56 | queues, retention, embeddings, usage, and server maintenance |
+| `review` | 45 | candidate and durable-memory review |
+| `operator` | 67 | queues, retention, embeddings, usage, and server maintenance |
 | `workspace-admin` | 11 | workspace topology and scope migration |
-| `all` | 62 | complete surface, including compatibility with pre-profile tools |
+| `all` | 73 | complete surface, including compatibility with pre-profile tools |
 
 Set `CONTEXTFORGE_MCP_PROFILE`, or use `CONTEXTFORGE_MCP_TOOLS` as an exact
 comma-separated allowlist. An allowlist takes precedence over the profile;
@@ -387,8 +387,10 @@ node src/mcp.js --describe-surface --profile agent-core
 
 The report includes enabled and disabled names, instruction/schema byte counts,
 per-tool description/schema counts, and a conservative initial-token estimate.
-The current default budget is at most 1,600 instruction bytes, 26,000 tool
-schema bytes, and 6,700 estimated tokens. Use `--profile all` temporarily when
+Budgets for every profile are recorded in `scripts/mcp-surface-budgets.json`
+and ratcheted: the surface may never grow past what is recorded, and a change
+that needs more room updates the manifest in the same commit. Verify with
+`npm run lint:mcp-surface`. Use `--profile all` temporarily when
 migrating an existing client that depended on the old full surface. Detailed
 workflow guidance lives in the packaged `contextforge-memory` skill; profile
 selection does not depend on that skill being installed.
