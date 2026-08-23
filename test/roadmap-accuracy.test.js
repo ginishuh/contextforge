@@ -74,6 +74,20 @@ test('no milestone is left describing shipped work as in progress', async () => 
   );
 });
 
+test('the follow-up split does not claim every milestone has a tracking issue', async () => {
+  const roadmap = await fs.readFile('docs/roadmap.md', 'utf8');
+  const untracked = roadmap.match(/^Tracking issue: none yet\.$/gm) || [];
+  if (untracked.length > 0) {
+    // Adding a milestone without an issue quietly falsified the sentence above
+    // the list, which is exactly the drift this file exists to catch.
+    assert.doesNotMatch(
+      roadmap,
+      /^Each milestone after v0 has a focused tracking issue/m,
+      `${untracked.length} milestone(s) have no tracking issue, so the follow-up split cannot say every one does`,
+    );
+  }
+});
+
 test('every milestone carries a status line', async () => {
   const roadmap = await fs.readFile('docs/roadmap.md', 'utf8');
   const milestones = roadmap.split(/^## Milestone /m).slice(1);

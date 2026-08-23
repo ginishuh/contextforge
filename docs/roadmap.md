@@ -372,7 +372,7 @@ Remaining:
 
 ## Follow-Up Issue Split
 
-Each milestone after v0 has a focused tracking issue:
+Most milestones after v0 have a focused tracking issue:
 
 - #5: provider abstraction hardening
 - #8: remote storage mode
@@ -388,6 +388,6 @@ Each milestone after v0 has a focused tracking issue:
 
 Those issues should stay narrow enough to produce reviewable PRs.
 
-Milestone 9 (workspace federation) has no tracking issue. Neither does the
-candidate review workflow that grew out of Milestone 6, which is why its scope
-was never weighed against anything.
+Two areas have none. Milestone 9 (workspace federation) was built without one,
+and so was the candidate review workflow that grew out of Milestone 6 — which
+is why its scope was never weighed against anything.
