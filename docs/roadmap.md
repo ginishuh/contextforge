@@ -35,33 +35,61 @@ Goals:
 
 Tracking issue: #8.
 
-Status: initial implementation in progress.
+Status: implemented. Two goals were restated below to match what was built;
+see Remaining for what is genuinely open.
 
-Remote mode is an early first-class path for users whose canonical work already
-lives on a VPS or server. Local mode remains the zero-friction install and a
-useful fallback/cache shape.
+Remote mode is a first-class path for users whose canonical work already lives
+on a VPS or server. Local mode remains the zero-friction install.
 
 Goals:
 
 - server-backed canonical memory
 - client auth
-- multi-machine sync
-- local fallback behavior
+- one canonical store shared by every machine, with scope keys that resolve to
+  the same scope regardless of checkout path
+- visible failure when the server is unreachable, rather than an offline cache
+  or silent local write
 - clear shared/repo/local write policy
 
-Initial implementation:
+The third and fourth goals previously read "multi-machine sync" and "local
+fallback behavior". Neither describes the design that shipped. There is no
+replication, conflict resolution, or offline cache: every machine reads and
+writes the one server directly, and losing it is an error rather than a
+degraded mode. Keeping the old wording implied a distributed-sync feature that
+was never intended.
 
-- JSON HTTP server for the stable core methods
+Implemented:
+
+- JSON HTTP server exposing the stable core methods (88 operations)
 - remote client mode selected by `CONTEXTFORGE_STORAGE_MODE=remote`
-- bearer token auth with `CONTEXTFORGE_REMOTE_TOKEN`
-- visible failure when remote is unavailable instead of silent local fallback
+- bearer token auth with `CONTEXTFORGE_REMOTE_TOKEN`, plus capability and
+  scope-scoped policy tokens via `CONTEXTFORGE_API_TOKENS_JSON`; the server
+  re-binds scope from the token rather than trusting the client
+- no fallback path at all: a remote client never constructs a local store, and
+  local-authority commands such as `backupDatabase` refuse to run
 - server-side distillation for canonical checkpoint writes
+- git-remote-derived repo scope keys, and local path hints stripped from
+  request bodies once the scope is resolved
+- health, readiness, authenticated Prometheus metrics, graceful drain,
+  request-size limits, admin UI sessions, and Streamable HTTP MCP
+
+Remaining:
+
+- `clear shared/repo/local write policy` is prose, not code.
+  `docs/architecture.md` says `local` should not leak into shared or remote
+  scopes, while `docs/runtime-modes.md` says the remote server owns reads and
+  writes for all three. Nothing enforces either, and a remote client writing
+  `scope: 'local'` lands in the server's local scope.
+- No regression test covers the server being unreachable. The visible-failure
+  guarantee is tested for authorization failures (401) but not for connection
+  refusal or client timeout.
 
 ## Milestone 3: Shared + Repo Retrieval
 
 Tracking issue: #7.
 
-Status: initial implementation in progress.
+Status: implemented. The fourth goal is narrower in practice than its wording
+suggests; see Remaining.
 
 Goals:
 
@@ -70,13 +98,28 @@ Goals:
 - provide result source metadata
 - favor exact repo memory while including useful shared rules
 
-Initial implementation:
+Implemented:
 
 - `searchScopes` option for `scope`, `repo`, `shared`, `repo+shared`, and
-  `local`
+  `local`, wired through the CLI, MCP, and remote API
 - `sharedScopeKey` option with `CONTEXTFORGE_SHARED_SCOPE_KEY` fallback
-- result `source` metadata describing the returned scope and role
-- local memory remains excluded from `repo+shared`
+- result `source` metadata describing the returned scope and role, carried
+  through to bootstrap results
+- local memory remains excluded from `repo+shared`, and workspace members
+  cannot reach `local` without `allowLocal`
+
+Remaining:
+
+- Repo preference is a tie-breaker, not a ranking policy. `scopeBoost` sorts
+  after relevance, so a shared result outranks a repo result whenever their
+  scores differ at all, and scoring itself never looks at scope.
+  `docs/architecture.md` states this accurately ("ahead of equally relevant
+  shared memory"); the goal wording above promises more than that.
+- The scope-leakage slice in the quality eval exercises `bootstrapContext`'s
+  `includeShared` merge, not `searchScopes`. The `repo+shared` exclusion of
+  `local` rests on a single unit test.
+- No test covers `CONTEXTFORGE_SHARED_SCOPE_KEY` falling back on the search
+  path specifically.
 
 ## Milestone 4: First Real Distill Provider
 
@@ -186,6 +229,25 @@ Initial implementation:
 - `listMemoryEvents` exposes provenance events for audit/debug flows
 - search excludes inactive memories while exact `getMemory` can still inspect them
 
+Grown well past the original goals since:
+
+The review workflow is now the largest single area of the operation surface —
+27 of 88 registered operations — and none of the following was in the goals
+above. It is recorded here rather than left implicit, because a reader deciding
+what to work on next should see where the code actually went.
+
+- audited promotion: `submitAuditJob`, `auditMemoryCandidates`,
+  `listMemoryCandidateAuditAttempts`, `planMemoryCandidateBacklogAudit`
+- routing of audited candidates into update proposals rather than duplicate
+  durable memory: `routeAuditedMemoryCandidates`, `applyMemoryUpdateCandidate`,
+  `rejectMemoryUpdateCandidate`, `skipMemoryUpdateCandidate`
+- candidate lifecycle states and their supervised workers: snooze, wake, stale
+  transitions, and the six `listDue*`/`processDue*` operations that drive them
+- `memoryCandidateBacklog` and `auditMemoryDuplicates`
+
+Whether this depth is proportionate for a product with no users yet is an open
+question, not a settled direction. It is listed under Open Decisions.
+
 ## Milestone 7: Retrieval Quality
 
 Tracking issue: #9.
@@ -234,6 +296,32 @@ Delivered:
   `CONTEXTFORGE_EMBEDDINGS_STALE_AFTER_MS`
 - rebuild path that enqueues and processes derived vector work
 
+## Milestone 9: Workspace Federation
+
+Tracking issue: none yet.
+
+Status: implemented, previously unrecorded here.
+
+Federation was built without a milestone entry, so the roadmap described a
+narrower product than the one that exists. It is adjacent to Milestone 3 but a
+separate mechanism: `searchScopes` merges scopes into one ranked list, while
+federation leaves the primary search alone and returns a separate workspace
+block with its own ordering and its own shared-scope policy.
+
+Implemented:
+
+- workspace profiles, members, and routing rules with `off`/`auto`/`strict`
+  modes
+- a federation block on `search` and `bootstrapContext` carrying per-member
+  results with role and workspace metadata
+- member-level scope permissions, including `allowLocal` gating
+- workspace-scoped repository aliases and scope migration
+
+Remaining:
+
+- no tracking issue, and no entry in the follow-up split below
+- the relationship to Milestone 3 is undocumented outside this paragraph
+
 ## Open Decisions
 
 - Default repo scope keys now infer from git remotes when possible, normalize
@@ -245,7 +333,14 @@ Delivered:
   runs; future providers should expose the same metadata contract.
 - `codex_exec` can be checked with a dry doctor command and an opt-in live
   structured smoke before users enable it as the distillation provider.
-- What is the minimum auth model for remote mode?
+- Is the depth of the candidate review workflow proportionate? It is 27 of 88
+  operations and most recent work, while the retrieval and distillation core it
+  sits on top of has not moved in comparison. Deciding this is a prerequisite
+  for planning anything else, because it determines whether the next work
+  extends the review surface or deliberately stops.
+- Should `local` scope be writable through a remote server? Milestone 2 records
+  the contradiction; resolving it means picking one of the two documented
+  positions and enforcing it in code.
 - Should embedding queue dead-letter/max-attempt behavior preserve stale reset
   attempts, reset them, or introduce a separate retry budget?
 - Should large-store coverage and `dbInfo` checks move to SQL aggregation or
@@ -268,3 +363,7 @@ Each milestone after v0 has a focused tracking issue:
 - #82: embedding job processing operations
 
 Those issues should stay narrow enough to produce reviewable PRs.
+
+Milestone 9 (workspace federation) has no tracking issue. Neither does the
+candidate review workflow that grew out of Milestone 6, which is why its scope
+was never weighed against anything.
