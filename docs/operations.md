@@ -286,6 +286,22 @@ When an existing database schema is older than the running binary, ContextForge
 creates a private `contextforge.db.pre-migration-v*.bak` with `VACUUM INTO`
 before migration. A newer schema still fails before backup or mutation.
 
+Each of those copies is the size of the whole database, so they are pruned to
+the newest `CONTEXTFORGE_MIGRATION_BACKUP_KEEP` (default `3`) once a migration
+succeeds. A failed migration prunes nothing — that is the moment the backups
+exist for. The newest is never removed regardless of the setting, and only
+files matching the `pre-migration-v*` naming are touched, so a copy an operator
+placed in the same directory is left alone.
+
+`dbInfo` reports what remains:
+
+```json
+"migrationBackups": { "count": 2, "bytes": 765952, "keep": 3 }
+```
+
+Pruning happens during a migration, so backups already on disk stay until the
+next one. Remove them by hand if they need to go sooner.
+
 ## Backup And Verification
 
 Run backups on the process/host that owns the canonical SQLite store. Remote

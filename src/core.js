@@ -321,7 +321,7 @@ function normalizeConsultReason(value) {
 }
 
 function withStore(config, fn) {
-  const store = new ContextForgeStore({ dataDir: config.dataDir });
+  const store = new ContextForgeStore({ dataDir: config.dataDir, migrationBackupKeep: config.migrationBackupKeep });
   try {
     const result = fn(store);
     if (result && typeof result.then === 'function') {
@@ -1591,7 +1591,7 @@ export function createContextForge(options = {}) {
     return createRemoteContextForge(config, { fetchImpl: options.fetchImpl });
   }
 
-  const sharedStore = options.store || (options.reuseStore ? new ContextForgeStore({ dataDir: config.dataDir }) : null);
+  const sharedStore = options.store || (options.reuseStore ? new ContextForgeStore({ dataDir: config.dataDir, migrationBackupKeep: config.migrationBackupKeep }) : null);
   const distillProviders = options.distillProviders || {};
   const embeddingProvider = createEmbeddingProvider(config, options.embeddingProviders || {}, {
     fetchImpl: options.fetchImpl,

@@ -298,6 +298,14 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
     'CONTEXTFORGE_DISTILL_MIN_INTERVAL_MS',
     10 * 60 * 1000,
   );
+  // Each migration copies the whole database, so without a limit the backups
+  // outgrow the data they protect. Three keeps a usable rollback window across
+  // consecutive migrations; the newest is never pruned regardless.
+  const migrationBackupKeep = parsePositiveInteger(
+    env.CONTEXTFORGE_MIGRATION_BACKUP_KEEP,
+    'CONTEXTFORGE_MIGRATION_BACKUP_KEEP',
+    3,
+  );
   const defaultSharedScopeKey = env.CONTEXTFORGE_SHARED_SCOPE_KEY || 'global';
   const scopeAliases = parseScopeAliases(env.CONTEXTFORGE_SCOPE_ALIASES);
   const defaultScopeKey = canonicalizeScope(
@@ -312,6 +320,7 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
     storageMode,
     cwd: resolvedCwd,
     dataDir,
+    migrationBackupKeep,
     defaultScope,
     defaultScopeKey,
     defaultSharedScopeKey,

@@ -1318,6 +1318,8 @@ Recommended cadence depends on the agent workflow:
 
 Default distill recommendation thresholds are:
 
+- `CONTEXTFORGE_MIGRATION_BACKUP_KEEP`: `3` — pre-migration backups retained
+  after a successful migration; see `docs/operations.md`
 - `CONTEXTFORGE_DISTILL_MIN_EVENTS`: `5`
 - `CONTEXTFORGE_DISTILL_MIN_INTERVAL_MS`: `600000`
 - `CONTEXTFORGE_DISTILL_CHAR_THRESHOLD`: 80% of

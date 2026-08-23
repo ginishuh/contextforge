@@ -1,9 +1,13 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { clampImportance, contentHash } from '../common.js';
+import {
+  createMigrationBackup,
+  migrationBackupInventory,
+  pruneMigrationBackups,
+} from './migration_backups.js';
 import {
   backfillMemoryCandidateAuditStateOnce as backfillCandidateAuditState,
   listCandidateAuditSessions as listAuditCandidateSessions,
@@ -639,8 +643,9 @@ const SCOPE_MIGRATION_CONFLICTS = [
 ];
 
 export class ContextForgeStore {
-  constructor({ dataDir }) {
+  constructor({ dataDir, migrationBackupKeep = 3 }) {
     this.dataDir = dataDir;
+    this.migrationBackupKeep = migrationBackupKeep;
     this.storagePermissions = secureDataDirectoryPermissions(dataDir);
     this.dbPath = this.storagePermissions.dbPath;
     this.db = new Database(this.dbPath);
@@ -652,9 +657,14 @@ export class ContextForgeStore {
         PRAGMA synchronous = NORMAL;
         PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS};
       `);
-      this.migrationBackup = this.backupBeforeMigration();
+      this.migrationBackup = createMigrationBackup(this.db, this.dataDir, this.openedSchemaVersion, SCHEMA_VERSION);
       this.vectorStatus = this.loadVectorExtension();
       this.migrate();
+      // Pruned only after the migration succeeds. A failure leaves every backup
+      // in place, which is the moment they exist for.
+      if (this.migrationBackup) {
+        this.migrationBackup.pruned = pruneMigrationBackups(this.dataDir, this.migrationBackupKeep);
+      }
       this.storagePermissions = secureDataDirectoryPermissions(dataDir);
     } catch (error) {
       this.db.close();
@@ -686,28 +696,6 @@ export class ContextForgeStore {
       throw new UnsupportedSchemaVersionError(existingVersion, SCHEMA_VERSION);
     }
     this.openedSchemaVersion = existingVersion;
-  }
-
-  backupBeforeMigration() {
-    if (
-      !Number.isInteger(this.openedSchemaVersion) ||
-      this.openedSchemaVersion <= 0 ||
-      this.openedSchemaVersion >= SCHEMA_VERSION
-    ) {
-      return null;
-    }
-    const timestamp = new Date().toISOString().replaceAll(/[:.]/g, '-');
-    const backupPath = path.join(
-      this.dataDir,
-      `contextforge.db.pre-migration-v${this.openedSchemaVersion}-${timestamp}.bak`,
-    );
-    this.db.prepare('VACUUM INTO ?').run(backupPath);
-    fs.chmodSync(backupPath, 0o600);
-    return {
-      file: backupPath,
-      fromSchemaVersion: this.openedSchemaVersion,
-      toSchemaVersion: SCHEMA_VERSION,
-    };
   }
 
   loadVectorExtension() {
@@ -1307,6 +1295,7 @@ export class ContextForgeStore {
       },
       sqlite: this.sqlitePolicy(),
       migrationBackup: this.migrationBackup,
+      migrationBackups: migrationBackupInventory(this.dataDir, this.migrationBackupKeep),
     };
   }
 
