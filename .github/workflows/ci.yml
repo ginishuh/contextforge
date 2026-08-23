@@ -102,7 +102,6 @@ jobs:
         env:
           CONTEXTFORGE_LINT_BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || '' }}
 
-
   quality-eval:
     name: Offline quality eval
     needs: changes

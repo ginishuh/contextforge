@@ -1,5 +1,5 @@
 {
-  "note": "Ratchet budgets for the MCP initialization surface, in bytes and estimated tokens. Budgets may only go down. Run 'node scripts/check-mcp-surface.js --update' after a measured change and explain it in the commit.",
+  "note": "Ratchet budgets for the MCP initialization surface, in bytes and estimated tokens. The surface may never grow past what is recorded here: a change that needs more room re-records it in the same commit and says why, so the increase shows up in a diff. A token count falling well below its budget must be tightened the same way. Run 'node scripts/check-mcp-surface.js --update' to re-record.",
   "slackRatio": 0.05,
   "profiles": {
     "agent-core": {
