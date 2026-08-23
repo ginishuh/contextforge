@@ -102,6 +102,9 @@ jobs:
         env:
           CONTEXTFORGE_LINT_BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || '' }}
 
+      - name: Check MCP surface budgets
+        run: npm run lint:mcp-surface
+
   quality-eval:
     name: Offline quality eval
     needs: changes

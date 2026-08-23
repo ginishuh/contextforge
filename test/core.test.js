@@ -1035,9 +1035,8 @@ test('MCP default profile stays within the context budget without requiring an i
     const allSurface = getContextForgeMcpSurfaceInfo(allServer);
     assert.equal(surface.toolCount, 24);
     assert.equal(allSurface.toolCount, 73);
-    assert.ok(surface.instructionsBytes <= 1600, `instructions=${surface.instructionsBytes}`);
-    assert.ok(surface.toolSchemaBytes <= 26000, `schema=${surface.toolSchemaBytes}`);
-    assert.ok(surface.estimatedInitialTokens <= 6700, `tokens=${surface.estimatedInitialTokens}`);
+    // Absolute caps moved to scripts/mcp-surface-budgets.json, which ratchets
+    // every profile. What belongs here is the relation between them.
     assert.ok(surface.estimatedInitialTokens / allSurface.estimatedInitialTokens <= 0.5);
     assert.equal(
       surface.descriptionBytes,

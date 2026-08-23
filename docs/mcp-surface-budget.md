@@ -31,8 +31,8 @@ counts through the MCP protocol, so ContextForge reports the reproducible input
 bytes instead of inventing host-specific precision.
 
 The default `agent-core` surface is about 57% smaller than `all` by this token
-estimate. Regression tests cap it at 1,600 instruction bytes, 26,000 tool-schema
-bytes, and 6,700 estimated tokens.
+estimate. That ratio is what the regression test still asserts directly; the
+absolute numbers moved to the ratchet described below.
 
 ## 2026-08-22 Measurement
 
@@ -47,10 +47,35 @@ bytes, and 6,700 estimated tokens.
 `agent-core` grew by 16 tool-schema bytes when `@modelcontextprotocol/sdk` moved
 from 1.29.0 to 1.30.0, leaving 4 estimated tokens under the 6,700 regression
 cap. The review, operator, and all profiles grew because candidate lifecycle
-operations were added after the July baseline, not because of the SDK. The
-default surface stays inside its budget, but the next schema addition or SDK
-schema change will need either a tool-description trim or an explicit,
-documented budget change rather than a silent cap increase.
+operations were added after the July baseline, not because of the SDK.
+
+That measurement exposed two problems. The default profile had four tokens of
+headroom, so the next unrelated change would have failed its cap at a moment
+nobody chose. And the cap only ever guarded `agent-core`: the profiles that
+grew by roughly a fifth had nothing watching them at all.
+
+## Ratchet
+
+Budgets now live in `scripts/mcp-surface-budgets.json` and cover every profile.
+
+```bash
+npm run lint:mcp-surface                      # verify
+node scripts/check-mcp-surface.js --update    # re-record after a real change
+```
+
+The surface may never grow past what is recorded. When a change genuinely needs
+more room, the manifest is updated in the same commit, so the increase appears
+in a diff with a reason attached rather than as a silently raised constant.
+
+The ratchet also runs the other way: if the estimated token count falls more
+than `slackRatio` (5%) below its budget, the check asks for the manifest to be
+tightened, so reclaimed room cannot be spent again unnoticed. Only the token
+estimate demands tightening — byte counts drift with SDK releases, and asking
+for an update on every drift would turn the ratchet into churn.
+
+Headroom is no longer something to preserve. Four tokens is fine, because the
+question the budget answers is "did this change grow the surface, and did
+someone say why", not "how close are we to a line".
 
 ## Selection Contract
 
