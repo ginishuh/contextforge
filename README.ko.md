@@ -48,7 +48,7 @@ Korean release summary가 package version과 맞는지는 CI가 검사한다.
 
 ## 빠른 시작
 
-요구사항: Node.js 20 이상.
+요구사항: Node.js 22 이상.
 
 ```bash
 npm install
