@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { scopeIdentity } from '../common.js';
+import { average, scopeIdentity } from '../common.js';
 import { createContextForge } from '../core.js';
 
 function arrayOfStrings(value) {
@@ -36,10 +36,6 @@ function normalizedDiscountedCumulativeGain(resultKeys, relevance, topN) {
     .slice(0, topN);
   const ideal = idealGrades.reduce((total, grade, index) => total + (2 ** grade - 1) / Math.log2(index + 2), 0);
   return ideal === 0 ? 1 : discountedCumulativeGain(resultKeys.slice(0, topN), relevance) / ideal;
-}
-
-function average(values) {
-  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
 }
 
 function resultText(result) {

@@ -18,6 +18,7 @@ import {
   saveWatchState,
   shouldSkipOutsideRepo,
   summarizeResults,
+  textFromContent,
   truncate,
 } from './common.js';
 import { discoverClaudeCodeFiles, parseClaudeCodeFile, parseClaudeCodeLines } from './claude_code.js';
@@ -34,22 +35,6 @@ function stripSessionPrefix(prefix, sessionId) {
 function prefixedSessionId(prefix, nativeSessionId) {
   const native = stripSessionPrefix(prefix, nativeSessionId);
   return native ? `${prefix}:${native}` : null;
-}
-
-function textFromContent(content) {
-  if (typeof content === 'string') {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return '';
-  }
-  return content
-    .map((item) => {
-      if (!item || typeof item !== 'object') return '';
-      return item.text || item.input_text || item.output_text || '';
-    })
-    .filter(Boolean)
-    .join('\n\n');
 }
 
 function parseJsonLines(filePath, lines, normalizeRecord, options = {}, initialContext = {}) {

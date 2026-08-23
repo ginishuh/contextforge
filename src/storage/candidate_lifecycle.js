@@ -1,22 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { memoryCandidateRevisionHash } from '../memory/candidate_revision.js';
-
-function nowIso() {
-  return new Date().toISOString();
-}
-
-function json(value, fallback) {
-  return JSON.stringify(value ?? fallback);
-}
-
-function parseJson(value, fallback) {
-  if (value == null || value === '') return fallback;
-  try {
-    return JSON.parse(value);
-  } catch {
-    return fallback;
-  }
-}
+import { json, nowIso, parseJson } from './common.js';
 
 export function hydrateMemoryCandidateAuditAttempt(row) {
   if (!row) return null;

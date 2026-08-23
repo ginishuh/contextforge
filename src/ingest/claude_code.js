@@ -47,6 +47,8 @@ function claudeCodeSessionId(nativeSessionId) {
   return native ? `claude_code:${native}` : null;
 }
 
+// Deliberately stricter than textFromContent() in ./common.js: Claude Code
+// transcripts carry non-text parts that must not be flattened into content.
 function textFromContent(content) {
   if (typeof content === 'string') {
     return content;

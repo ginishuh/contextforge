@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { clampImportance, contentHash } from '../common.js';
+import { json, nowIso, parseJson } from './common.js';
 import {
   createMigrationBackup,
   migrationBackupInventory,
@@ -52,25 +53,6 @@ export class OperationJobLeaseLostError extends Error {
     this.code = 'CONTEXTFORGE_JOB_LEASE_LOST';
     this.retryable = true;
     this.jobId = jobId;
-  }
-}
-
-function nowIso() {
-  return new Date().toISOString();
-}
-
-function json(value, fallback) {
-  return JSON.stringify(value ?? fallback);
-}
-
-function parseJson(value, fallback) {
-  if (value == null || value === '') {
-    return fallback;
-  }
-  try {
-    return JSON.parse(value);
-  } catch {
-    return fallback;
   }
 }
 

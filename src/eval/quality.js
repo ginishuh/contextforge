@@ -2,15 +2,12 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
+import { average } from '../common.js';
 import { createContextForge } from '../core.js';
 import { evaluateRetrievalFixture } from './retrieval.js';
 
 function normalized(value) {
   return String(value || '').toLowerCase();
-}
-
-function average(values) {
-  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
 }
 
 function metricValue(report, metricPath) {
