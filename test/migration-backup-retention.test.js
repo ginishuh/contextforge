@@ -8,6 +8,7 @@ import Database from 'better-sqlite3';
 
 import { ContextForgeStore, SCHEMA_VERSION } from '../src/storage/sqlite.js';
 import {
+  DEFAULT_KEEP,
   listMigrationBackups,
   migrationBackupInventory,
   pruneMigrationBackups,
@@ -84,6 +85,50 @@ test('a keep of zero still leaves the newest backup in place', async () => {
     const result = pruneMigrationBackups(directory, 0);
     assert.equal(result.removed.length, 1);
     assert.deepEqual(listMigrationBackups(directory).map((b) => b.schemaVersion), [20]);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('the protected backup survives even when it sorts oldest', async () => {
+  // Ordering comes from the filename timestamp, so a clock that moved backwards
+  // between migrations sorts the newest backup last. Without protection the
+  // rollback this migration depends on would be the first thing deleted.
+  const directory = await makeDataDir([backupName(18, '06'), backupName(19, '07'), backupName(20, '08')]);
+  try {
+    const fresh = path.join(directory, backupName(21, '01'));
+    await fs.writeFile(fresh, 'x'.repeat(100));
+
+    const result = pruneMigrationBackups(directory, 3, fresh);
+    assert.ok(await fs.stat(fresh), 'the protected backup must still exist');
+    assert.equal(result.retained, 3);
+    assert.deepEqual(
+      listMigrationBackups(directory).map((backup) => backup.schemaVersion).sort(),
+      [19, 20, 21],
+    );
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('protecting a backup does not raise the retained count', async () => {
+  const directory = await makeDataDir([backupName(18, '02'), backupName(19, '03')]);
+  try {
+    const protectedFile = path.join(directory, backupName(19, '03'));
+    const result = pruneMigrationBackups(directory, 1, protectedFile);
+    assert.equal(result.retained, 1);
+    assert.deepEqual(listMigrationBackups(directory).map((b) => b.schemaVersion), [19]);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('a non-integer keep falls back to the default rather than to one', async () => {
+  const names = [16, 17, 18, 19, 20].map((version, index) => backupName(version, `0${index + 1}`));
+  const directory = await makeDataDir(names);
+  try {
+    const result = pruneMigrationBackups(directory, undefined);
+    assert.equal(result.retained, DEFAULT_KEEP);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }

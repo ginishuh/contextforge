@@ -663,7 +663,7 @@ export class ContextForgeStore {
       // Pruned only after the migration succeeds. A failure leaves every backup
       // in place, which is the moment they exist for.
       if (this.migrationBackup) {
-        this.migrationBackup.pruned = pruneMigrationBackups(this.dataDir, this.migrationBackupKeep);
+        this.migrationBackup.pruned = pruneMigrationBackups(this.dataDir, this.migrationBackupKeep, this.migrationBackup.file);
       }
       this.storagePermissions = secureDataDirectoryPermissions(dataDir);
     } catch (error) {

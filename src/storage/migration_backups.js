@@ -56,13 +56,23 @@ export function listMigrationBackups(dataDir) {
     .sort((left, right) => right.timestamp.localeCompare(left.timestamp));
 }
 
-export function pruneMigrationBackups(dataDir, keep) {
+export const DEFAULT_KEEP = 3;
+
+// `protect` names a backup that survives regardless of where it sorts. The
+// caller passes the copy it just took: ordering comes from the filename
+// timestamp, so a clock that moved backwards between migrations would sort the
+// newest backup last and delete the very rollback this migration depends on.
+export function pruneMigrationBackups(dataDir, keep, protect = null) {
   const backups = listMigrationBackups(dataDir);
   // Never go below one. A keep of zero would delete the backup just taken,
   // which is the one most likely to be needed.
-  const retain = Math.max(1, Number.isInteger(keep) ? keep : 1);
+  const retain = Math.max(1, Number.isInteger(keep) ? keep : DEFAULT_KEEP);
+  const protectedName = protect ? path.basename(protect) : null;
+  const isProtected = (backup) => backup.name === protectedName;
+  const protectedCount = backups.some(isProtected) ? 1 : 0;
+  const candidates = backups.filter((backup) => !isProtected(backup));
   const removed = [];
-  for (const backup of backups.slice(retain)) {
+  for (const backup of candidates.slice(Math.max(0, retain - protectedCount))) {
     try {
       fs.rmSync(backup.file);
       removed.push(backup.name);
@@ -71,7 +81,7 @@ export function pruneMigrationBackups(dataDir, keep) {
       // It stays, and the next migration reconsiders it.
     }
   }
-  return { removed, retained: Math.min(retain, backups.length) };
+  return { removed, retained: backups.length - removed.length };
 }
 
 // Reported through dbInfo so the space these occupy is visible to an operator
