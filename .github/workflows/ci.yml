@@ -102,6 +102,12 @@ jobs:
         env:
           CONTEXTFORGE_LINT_BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || '' }}
 
+      # ESLint is a CI-only tool. The repository ships zero devDependencies, so
+      # the script fetches a pinned eslint through npx instead; nothing is
+      # written to package.json, package-lock.json, or node_modules.
+      - name: Run ESLint
+        run: npm run lint:eslint
+
   quality-eval:
     name: Offline quality eval
     needs: changes

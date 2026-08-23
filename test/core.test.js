@@ -12116,7 +12116,7 @@ test('autoPromoteMemoryCandidates promotes only strict safe candidates when enab
     query: 'safe-api-contract',
   });
   const safeApiMemoryResult = memoryResults.find(
-    (result) => result.type === 'memory' && result.memory.key === 'safe-api-contract',
+    (entry) => entry.type === 'memory' && entry.memory.key === 'safe-api-contract',
   );
   assert.ok(safeApiMemoryResult, 'expected safe-api-contract memory result');
   assert.equal(safeApiMemoryResult.retrieval.vectorModel, 'test-embedding');
