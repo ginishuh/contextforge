@@ -208,6 +208,197 @@ function baseBudgetViolations(baseBudgets, candidate, measured, budgetFile) {
   return violations;
 }
 
+// Reading arbitrary JavaScript with regular expressions kept producing both
+// misses and — worse — false failures on valid code: a block comment between
+// specifiers, a regex literal holding a backtick, an attribute clause ended by
+// ASI. Each fix grew the patterns and opened another hole.
+//
+// So the scan no longer tries to find imports anywhere in a file. It reads only
+// the leading run of imports at the top, stopping at the first line that is not
+// blank, a line comment, or an import statement. A template literal, a regex,
+// or a commented-out import cannot appear in that run, which removes the whole
+// class of context-tracking bugs rather than patching them one at a time.
+//
+// The cost is that an import placed after other code is not checked. That is a
+// miss, never a false failure, and this repository puts imports at the top.
+
+// Strips comments from one line while carrying block-comment state across
+// lines. String literals are preserved, since the `from '...'` clause has to
+// survive for the end test.
+function stripCommentsStateful(line, state) {
+  let code = '';
+  for (let index = 0; index < line.length; index += 1) {
+    if (state.blockComment) {
+      if (line.slice(index, index + 2) === '*/') {
+        state.blockComment = false;
+        index += 1;
+      }
+      continue;
+    }
+    const character = line[index];
+    if (character === "'" || character === '"' || character === '`') {
+      code += character;
+      index += 1;
+      while (index < line.length && line[index] !== character) {
+        if (line[index] === '\\') {
+          code += line[index];
+          index += 1;
+        }
+        code += line[index];
+        index += 1;
+      }
+      if (index < line.length) code += line[index];
+      continue;
+    }
+    const pair = line.slice(index, index + 2);
+    if (pair === '//') break;
+    if (pair === '/*') {
+      state.blockComment = true;
+      index += 1;
+      code += ' ';
+      continue;
+    }
+    code += character;
+  }
+  return code;
+}
+
+const IMPORT_FROM_CLAUSE = /\bfrom\s+['"][^'"]+['"]/;
+const IMPORT_SIDE_EFFECT = /^\s*import\s+['"][^'"]+['"]/;
+
+// Returns the line a statement ends on, or -1. A statement closes at a
+// semicolon outside braces, or — when the source relies on ASI — at the end of
+// the line where its `from` clause sits and every brace is balanced, which is
+// what keeps a multi-line attribute clause open.
+function statementEnd(lines, start) {
+  const state = { blockComment: false };
+  let depth = 0;
+  let tail = false;
+  for (let index = start; index < lines.length; index += 1) {
+    const code = stripCommentsStateful(lines[index], state);
+    for (let position = 0; position < code.length; position += 1) {
+      const character = code[position];
+      if (character === "'" || character === '"' || character === '`') {
+        position += 1;
+        while (position < code.length && code[position] !== character) {
+          if (code[position] === '\\') position += 1;
+          position += 1;
+        }
+        continue;
+      }
+      if (character === '{') depth += 1;
+      else if (character === '}') depth -= 1;
+      else if (character === ';' && depth <= 0) {
+        // The column matters: code may follow the semicolon on this line, and
+        // blanking the whole line would hide a usage and fail valid code.
+        return { line: index, column: position + 1, blockComment: state.blockComment };
+      }
+    }
+    if (IMPORT_FROM_CLAUSE.test(code) || IMPORT_SIDE_EFFECT.test(code)) tail = true;
+    if (tail && depth <= 0) {
+      return { line: index, column: lines[index].length, blockComment: state.blockComment };
+    }
+  }
+  return null;
+}
+
+// The leading run of import statements. Anything else ends the run.
+function importStatements(lines) {
+  const statements = [];
+  let index = lines[0] && lines[0].startsWith('#!') ? 1 : 0;
+  while (index < lines.length) {
+    const trimmed = lines[index].trim();
+    if (trimmed === '' || trimmed.startsWith('//')) {
+      index += 1;
+      continue;
+    }
+    if (!/^\s*import\s/.test(lines[index])) break;
+    const end = statementEnd(lines, index);
+    if (end === null) break;
+    statements.push({ start: index, end: end.line, endColumn: end.column });
+    // A statement that ends with a block comment still open leaves everything
+    // after it as comment text. Reading an `import` line out of that text would
+    // fail the lint over a name nobody imported, so the run stops here.
+    if (end.blockComment) break;
+    index = end.line + 1;
+  }
+  return statements;
+}
+
+// Identifiers are not ASCII-only in JavaScript, and `$` is legal too. Matching
+// `\\w` alone would skip a `café` or `이름` binding without a word of warning.
+const IDENTIFIER = '[\\p{ID_Start}$_][\\p{ID_Continue}$]*';
+
+// The local names a statement binds. For `x as y` the binding is `y`, which is
+// the name the rest of the file has to use.
+function importBindings(text) {
+  const commentState = { blockComment: false };
+  const withoutComments = text
+    .split('\n')
+    .map((line) => stripCommentsStateful(line, commentState))
+    .join('\n');
+  // Specifiers live before the `from` clause. Anything after it is the module
+  // path and possibly an attribute clause, whose braces would otherwise be
+  // read as a specifier list.
+  const fromClause = withoutComments.match(/\bfrom\s+['"]/);
+  const head = fromClause ? withoutComments.slice(0, fromClause.index) : withoutComments;
+  const names = [];
+  const braced = head.match(/\{([\s\S]*?)\}/);
+  if (braced) {
+    for (const part of braced[1].split(',')) {
+      const trimmed = part.trim();
+      if (!trimmed) continue;
+      const match = trimmed.match(new RegExp(`(?:${IDENTIFIER})\\s+as\\s+(${IDENTIFIER})$`, 'u'))
+        || trimmed.match(new RegExp(`^(${IDENTIFIER})$`, 'u'));
+      if (match) names.push(match[1]);
+    }
+  }
+  const namespace = head.match(new RegExp(`\\*\\s+as\\s+(${IDENTIFIER})`, 'u'));
+  if (namespace) names.push(namespace[1]);
+  // `head` already stops before the `from` clause, so a default binding is
+  // followed by a comma or nothing at all.
+  const defaultBinding = head
+    .replace(/^\s*import\s+/, '')
+    .match(new RegExp(`^(${IDENTIFIER})\\s*(?:,|$)`, 'u'));
+  if (defaultBinding) names.push(defaultBinding[1]);
+  return names;
+}
+
+// An import nobody calls is dead weight that also misleads: it suggests the
+// file still owns a responsibility that moved elsewhere. This has shown up
+// three times during the core decomposition, always as a leftover of code that
+// was extracted, so it is checked rather than caught by review.
+//
+// Usage is a word-boundary match against the file with its import statements
+// removed. A name mentioned only in a comment or string therefore counts as
+// used — deliberately, since the cost of a false failure here is much higher
+// than the cost of missing one dead import.
+function unusedImportErrors(file, lines) {
+  const statements = importStatements(lines);
+  // Blank out exactly the span each statement occupies, so anything sharing its
+  // last line stays in the body and still counts as a usage.
+  const remaining = [...lines];
+  for (const statement of statements) {
+    for (let index = statement.start; index < statement.end; index += 1) remaining[index] = '';
+    const lastLine = remaining[statement.end];
+    remaining[statement.end] = lastLine.slice(statement.endColumn);
+  }
+  const body = remaining.join('\n');
+  const errors = [];
+  for (const statement of statements) {
+    const text = lines.slice(statement.start, statement.end + 1).join('\n');
+    for (const name of importBindings(text)) {
+      // `\b` does not hold at a `$` boundary and `$` is a regex metacharacter,
+      // so the boundary is spelled out and the name escaped.
+      const escaped = name.replace(/\$/g, '\\$');
+      if (!new RegExp(`(?<![\\p{ID_Continue}$])${escaped}(?![\\p{ID_Continue}$])`, 'u').test(body)) {
+        errors.push(`${file}:${statement.start + 1}: unused import ${name}`);
+      }
+    }
+  }
+  return errors;
+}
+
 const options = parseArguments(process.argv.slice(2));
 const defaultNote = [
   'Ratchet budgets in lines. Budgets may only go down.',
@@ -259,6 +450,9 @@ for (const file of files) {
   }
   const syntax = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
   if (syntax.status !== 0) sourceErrors.push(`${file}: syntax check failed\n${syntax.stderr.trim()}`);
+  // Only meaningful once the file parses; a syntax error makes the line scan
+  // guesswork.
+  if (syntax.status === 0) sourceErrors.push(...unusedImportErrors(file, lines));
 
   const actual = countLines(source);
   measured.set(file, actual);

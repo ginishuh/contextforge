@@ -6,7 +6,6 @@ import * as sqliteVec from 'sqlite-vec';
 import { clampImportance, contentHash } from '../common.js';
 import {
   backfillMemoryCandidateAuditStateOnce as backfillCandidateAuditState,
-  hydrateMemoryCandidateAuditAttempt,
   listCandidateAuditSessions as listAuditCandidateSessions,
   listMemoryCandidateAuditAttempts as listCandidateAuditAttempts,
   listOperationJobCandidates as listAuditJobCandidates,

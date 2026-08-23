@@ -517,3 +517,513 @@ test('dropping a budget entry for a deleted file is allowed', async () => {
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
+
+test('an import nobody uses fails the lint', async () => {
+  const directory = await makeWorkspace({});
+  try {
+    await fs.writeFile(
+      path.join(directory, 'src/helpers.js'),
+      'export const used = 1;\nexport const dead = 2;\n',
+    );
+    await fs.writeFile(
+      path.join(directory, 'src/app.js'),
+      "import { used, dead } from './helpers.js';\n\nconsole.log(used);\n",
+    );
+    const result = await runLint(directory);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /src\/app\.js:1: unused import dead/);
+    assert.doesNotMatch(result.stderr, /unused import used/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('unused import detection covers every import form', async () => {
+  const directory = await makeWorkspace({});
+  try {
+    await fs.writeFile(path.join(directory, 'src/dep.js'), 'export default 1;\nexport const named = 2;\n');
+    // A renamed binding is dead under its local name, not its exported one; a
+    // namespace and a default binding have to be seen too. The side-effect
+    // import binds nothing and must never be reported.
+    await fs.writeFile(
+      path.join(directory, 'src/app.js'),
+      [
+        "import './dep.js';",
+        "import fallback from './dep.js';",
+        "import * as everything from './dep.js';",
+        "import { named as renamed } from './dep.js';",
+        '',
+        'console.log(1);',
+        '',
+      ].join('\n'),
+    );
+    const result = await runLint(directory);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /src\/app\.js:2: unused import fallback/);
+    assert.match(result.stderr, /src\/app\.js:3: unused import everything/);
+    assert.match(result.stderr, /src\/app\.js:4: unused import renamed/);
+    // The exported name is not the local binding, so it must not be reported.
+    assert.doesNotMatch(result.stderr, /unused import named\b/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('a multi-line import list is read as one statement', async () => {
+  const directory = await makeWorkspace({});
+  try {
+    await fs.writeFile(
+      path.join(directory, 'src/dep.js'),
+      'export const alpha = 1;\nexport const beta = 2;\n',
+    );
+    await fs.writeFile(
+      path.join(directory, 'src/app.js'),
+      ['import {', '  alpha,', '  beta,', "} from './dep.js';", '', 'console.log(alpha);', ''].join('\n'),
+    );
+    const result = await runLint(directory);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /src\/app\.js:1: unused import beta/);
+    assert.doesNotMatch(result.stderr, /unused import alpha/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('a name used only in a comment counts as used', async () => {
+  const directory = await makeWorkspace({});
+  try {
+    await fs.writeFile(path.join(directory, 'src/dep.js'), 'export const thing = 1;\n');
+    await fs.writeFile(
+      path.join(directory, 'src/app.js'),
+      "import { thing } from './dep.js';\n\n// thing is documented here\nconsole.log(1);\n",
+    );
+    // Deliberately lenient: a false failure costs more than a missed dead import.
+    const result = await runLint(directory);
+    assert.equal(result.code, 0, result.stderr);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('a trailing comment does not hide the import from the check', async () => {
+  const directory = await makeWorkspace({});
+  try {
+    await fs.writeFile(
+      path.join(directory, 'src/dep.js'),
+      'export const dead = 1;\nexport const alsoDead = 2;\n',
+    );
+    // Annotating a leftover is exactly what someone does while decomposing, so
+    // the check has to survive it — including the statement that follows.
+    await fs.writeFile(
+      path.join(directory, 'src/app.js'),
+      [
+        "import { dead } from './dep.js'; // moved",
+        "import { alsoDead } from './dep.js';",
+        '',
+        'console.log(1);',
+        '',
+      ].join('\n'),
+    );
+    const result = await runLint(directory);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /src\/app\.js:1: unused import dead/);
+    assert.match(result.stderr, /src\/app\.js:2: unused import alsoDead/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('a comment inside the specifier list does not swallow the next name', async () => {
+  const directory = await makeWorkspace({});
+  try {
+    await fs.writeFile(
+      path.join(directory, 'src/dep.js'),
+      'export const dead = 1;\nexport const alsoDead = 2;\n',
+    );
+    await fs.writeFile(
+      path.join(directory, 'src/app.js'),
+      ['import {', '  dead, // note', '  alsoDead,', "} from './dep.js';", '', 'console.log(1);', ''].join('\n'),
+    );
+    const result = await runLint(directory);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /unused import dead/);
+    assert.match(result.stderr, /unused import alsoDead/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('a $ binding is checked like any other identifier', async () => {
+  const directory = await makeWorkspace({});
+  try {
+    await fs.writeFile(path.join(directory, 'src/dep.js'), 'export default 1;\n');
+    await fs.writeFile(
+      path.join(directory, 'src/app.js'),
+      "import $ from './dep.js';\n\nconsole.log(1);\n",
+    );
+    const unused = await runLint(directory);
+    assert.equal(unused.code, 1);
+    assert.match(unused.stderr, /src\/app\.js:1: unused import \$/);
+
+    // And using it must clear the error — `\b` does not hold at a `$` edge.
+    await fs.writeFile(
+      path.join(directory, 'src/app.js'),
+      "import $ from './dep.js';\n\nconsole.log($);\n",
+    );
+    const used = await runLint(directory);
+    assert.equal(used.code, 0, used.stderr);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('an import line inside a template or block comment is not a statement', async () => {
+  const directory = await makeWorkspace({});
+  try {
+    // A code-generating template is text. Reading it as an import would fail
+    // the lint over a name that was never imported — the false positive this
+    // check is meant to avoid.
+    await fs.writeFile(
+      path.join(directory, 'src/template.js'),
+      ['const source = `', "import { parseThing } from './parser.js';", '`;', 'console.log(source);', ''].join('\n'),
+    );
+    await fs.writeFile(
+      path.join(directory, 'src/commented.js'),
+      ['/*', "import { oldThing } from './old.js';", '*/', 'console.log(1);', ''].join('\n'),
+    );
+    const result = await runLint(directory);
+    assert.equal(result.code, 0, result.stderr);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('an import attribute clause still closes the statement', async () => {
+  const directory = await makeWorkspace({});
+  try {
+    await fs.writeFile(path.join(directory, 'src/app.js'), [
+      "import data from './data.json' with { type: 'json' };",
+      '',
+      'console.log(1);',
+      '',
+    ].join('\n'));
+    const result = await runLint(directory);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /src\/app\.js:1: unused import data/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('a comment that looks like a from clause does not close the statement', async () => {
+  const directory = await makeWorkspace({});
+  try {
+    await fs.writeFile(
+      path.join(directory, 'src/dep.js'),
+      'export const dead = 1;\nexport const alsoDead = 2;\n',
+    );
+    await fs.writeFile(path.join(directory, 'src/app.js'), [
+      'import {',
+      '  dead,',
+      "  // from './fake.js'",
+      '  alsoDead,',
+      "} from './dep.js';",
+      '',
+      'console.log(1);',
+      '',
+    ].join('\n'));
+    const result = await runLint(directory);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /unused import dead/);
+    assert.match(result.stderr, /unused import alsoDead/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('an attribute clause spanning lines keeps the statement open', async () => {
+  const directory = await makeWorkspace({});
+  try {
+    await fs.writeFile(path.join(directory, 'src/app.js'), [
+      "import data from './data.json' with {",
+      "  type: 'json',",
+      '};',
+      '',
+      'console.log(1);',
+      '',
+    ].join('\n'));
+    const result = await runLint(directory);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /src\/app\.js:1: unused import data/);
+    // The attribute key is not a specifier and must never be reported as one.
+    assert.doesNotMatch(result.stderr, /unused import type/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('an indented import is still checked', async () => {
+  const directory = await makeWorkspace({});
+  try {
+    await fs.writeFile(path.join(directory, 'src/dep.js'), 'export const dead = 1;\n');
+    await fs.writeFile(
+      path.join(directory, 'src/app.js'),
+      "  import { dead } from './dep.js';\n\nconsole.log(1);\n",
+    );
+    const result = await runLint(directory);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /unused import dead/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('a block comment between specifiers does not break the statement', async () => {
+  const directory = await makeWorkspace({});
+  try {
+    await fs.writeFile(
+      path.join(directory, 'src/dep.js'),
+      'export const dead = 1;\nexport const used = 2;\n',
+    );
+    // Reported as unused before: the comment ate the rest of the line, so the
+    // statement never closed and swallowed the code that used the binding.
+    await fs.writeFile(
+      path.join(directory, 'src/app.js'),
+      "import { used } /* explanation */ from './dep.js';\nconsole.log(used);\n",
+    );
+    const ok = await runLint(directory);
+    assert.equal(ok.code, 0, ok.stderr);
+
+    await fs.writeFile(
+      path.join(directory, 'src/app.js'),
+      "import { dead } /* explanation */ from './dep.js';\nconsole.log(1);\n",
+    );
+    const failing = await runLint(directory);
+    assert.equal(failing.code, 1);
+    assert.match(failing.stderr, /unused import dead/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('an attribute clause ended by ASI closes the statement', async () => {
+  const directory = await makeWorkspace({});
+  try {
+    // Without a semicolon the statement used to run on and consume the next
+    // line, hiding the very usage that made the import live.
+    await fs.writeFile(path.join(directory, 'src/app.js'), [
+      "import data from './data.json' with { type: 'json' }",
+      'console.log(data);',
+      '',
+    ].join('\n'));
+    const ok = await runLint(directory);
+    assert.equal(ok.code, 0, ok.stderr);
+
+    await fs.writeFile(path.join(directory, 'src/app.js'), [
+      "import data from './data.json' with { type: 'json' }",
+      'console.log(1);',
+      '',
+    ].join('\n'));
+    const failing = await runLint(directory);
+    assert.equal(failing.code, 1);
+    assert.match(failing.stderr, /unused import data/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('a regex literal below the imports cannot hide them', async () => {
+  const directory = await makeWorkspace({});
+  try {
+    await fs.writeFile(path.join(directory, 'src/dep.js'), 'export const dead = 1;\n');
+    // A backtick or `/*` inside a regex used to corrupt the context tracking
+    // for every later line. Only the leading import run is read now, so code
+    // below it cannot affect the scan at all.
+    await fs.writeFile(path.join(directory, 'src/app.js'), [
+      "import { dead } from './dep.js';",
+      '',
+      'const backtick = /`/;',
+      'const opener = /[/*]/;',
+      'console.log(backtick, opener);',
+      '',
+    ].join('\n'));
+    const result = await runLint(directory);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /unused import dead/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('the scan starts after a shebang and leading line comments', async () => {
+  const directory = await makeWorkspace({});
+  try {
+    await fs.writeFile(path.join(directory, 'src/dep.js'), 'export const dead = 1;\n');
+    await fs.writeFile(path.join(directory, 'src/app.js'), [
+      '#!/usr/bin/env node',
+      '// header note',
+      '',
+      "import { dead } from './dep.js';",
+      '',
+      'console.log(1);',
+      '',
+    ].join('\n'));
+    const result = await runLint(directory);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /src\/app\.js:4: unused import dead/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('an import below other code is out of scope rather than a false failure', async () => {
+  const directory = await makeWorkspace({});
+  try {
+    await fs.writeFile(path.join(directory, 'src/dep.js'), 'export const dead = 1;\n');
+    // The deliberate cost of reading only the leading run: this is a miss, and
+    // a miss is the direction this check is allowed to be wrong in.
+    await fs.writeFile(path.join(directory, 'src/app.js'), [
+      'const first = 1;',
+      "import { dead } from './dep.js';",
+      'console.log(first);',
+      '',
+    ].join('\n'));
+    const result = await runLint(directory);
+    assert.equal(result.code, 0, result.stderr);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('code sharing a line with the import still counts as usage', async () => {
+  const directory = await makeWorkspace({});
+  try {
+    await fs.writeFile(
+      path.join(directory, 'src/dep.js'),
+      'export const used = 1;\nexport const dead = 2;\n',
+    );
+    // Blanking the whole line used to remove this usage along with the import.
+    await fs.writeFile(
+      path.join(directory, 'src/app.js'),
+      "import { used } from './dep.js'; console.log(used);\n",
+    );
+    const ok = await runLint(directory);
+    assert.equal(ok.code, 0, ok.stderr);
+
+    await fs.writeFile(
+      path.join(directory, 'src/app.js'),
+      "import { dead } from './dep.js'; console.log(1);\n",
+    );
+    const failing = await runLint(directory);
+    assert.equal(failing.code, 1);
+    assert.match(failing.stderr, /unused import dead/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('a non-ASCII binding is checked like any other', async () => {
+  const directory = await makeWorkspace({});
+  try {
+    await fs.writeFile(path.join(directory, 'src/dep.js'), 'export default 1;\nexport const value = 2;\n');
+    await fs.writeFile(
+      path.join(directory, 'src/app.js'),
+      "import café from './dep.js';\n\nconsole.log(1);\n",
+    );
+    const unused = await runLint(directory);
+    assert.equal(unused.code, 1);
+    assert.match(unused.stderr, /unused import café/);
+
+    // Using it must clear the error, so the boundary has to be Unicode-aware
+    // on both sides of the probe.
+    await fs.writeFile(
+      path.join(directory, 'src/app.js'),
+      "import café from './dep.js';\n\nconsole.log(café);\n",
+    );
+    const used = await runLint(directory);
+    assert.equal(used.code, 0, used.stderr);
+
+    await fs.writeFile(
+      path.join(directory, 'src/app.js'),
+      "import { value as 이름 } from './dep.js';\n\nconsole.log(1);\n",
+    );
+    const renamed = await runLint(directory);
+    assert.equal(renamed.code, 1);
+    assert.match(renamed.stderr, /unused import 이름/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('text inside an unterminated block comment is not read as an import', async () => {
+  const directory = await makeWorkspace({});
+  try {
+    await fs.writeFile(path.join(directory, 'src/dep.js'), 'export default 1;\n');
+    // The comment opens on the import's own line, so everything below it is
+    // comment text. Reading it as a statement would fail the lint over a name
+    // nobody imported.
+    await fs.writeFile(path.join(directory, 'src/app.js'), [
+      "import used from './dep.js'; /*",
+      "import { fake } from './nope.js';",
+      '*/',
+      'console.log(used);',
+      '',
+    ].join('\n'));
+    const result = await runLint(directory);
+    assert.equal(result.code, 0, result.stderr);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('a block comment closed on the same line leaves the check running', async () => {
+  const directory = await makeWorkspace({});
+  try {
+    await fs.writeFile(path.join(directory, 'src/dep.js'), 'export const dead = 1;\n');
+    await fs.writeFile(
+      path.join(directory, 'src/app.js'),
+      "import { dead } from './dep.js'; /* note */\nconsole.log(1);\n",
+    );
+    const result = await runLint(directory);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /unused import dead/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('snake_case bindings are checked in both directions', async () => {
+  const directory = await makeWorkspace({});
+  try {
+    await fs.writeFile(
+      path.join(directory, 'src/dep.js'),
+      'export default 1;\nexport const dead_name = 2;\nexport const used_name = 3;\n',
+    );
+    // `_` is ID_Continue, so these work already; the test pins that against a
+    // future narrowing of the identifier pattern.
+    await fs.writeFile(
+      path.join(directory, 'src/app.js'),
+      "import dead_name from './dep.js';\n\nconsole.log(1);\n",
+    );
+    const defaultUnused = await runLint(directory);
+    assert.equal(defaultUnused.code, 1);
+    assert.match(defaultUnused.stderr, /unused import dead_name/);
+
+    await fs.writeFile(
+      path.join(directory, 'src/app.js'),
+      "import { dead_name } from './dep.js';\n\nconsole.log(1);\n",
+    );
+    const namedUnused = await runLint(directory);
+    assert.equal(namedUnused.code, 1);
+    assert.match(namedUnused.stderr, /unused import dead_name/);
+
+    await fs.writeFile(
+      path.join(directory, 'src/app.js'),
+      "import { used_name } from './dep.js';\n\nconsole.log(used_name);\n",
+    );
+    const used = await runLint(directory);
+    assert.equal(used.code, 0, used.stderr);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
