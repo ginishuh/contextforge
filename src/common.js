@@ -115,3 +115,12 @@ export function positiveInteger(value, name) {
   }
   return parsed;
 }
+
+// The core.js/embeddings variant: any finite positive number, already coerced by
+// the caller. Distinct from positiveInteger above, which rejects fractions.
+export function positiveNumber(value, name) {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`${name} must be a positive number.`);
+  }
+  return value;
+}
