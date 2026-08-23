@@ -35,7 +35,8 @@ Goals:
 
 Tracking issue: #8.
 
-Status: initial implementation in progress.
+Status: implemented. Note that "multi-machine sync" was met by one canonical
+server every machine talks to, not by replication or an offline cache.
 
 Remote mode is an early first-class path for users whose canonical work already
 lives on a VPS or server. Local mode remains the zero-friction install and a
@@ -61,7 +62,8 @@ Initial implementation:
 
 Tracking issue: #7.
 
-Status: initial implementation in progress.
+Status: implemented. Repo preference is a tie-breaker between equally relevant
+results rather than a ranking policy.
 
 Goals:
 
@@ -186,6 +188,11 @@ Initial implementation:
 - `listMemoryEvents` exposes provenance events for audit/debug flows
 - search excludes inactive memories while exact `getMemory` can still inspect them
 
+Fixing automatic promotion after #208 grew this into a much larger candidate
+lifecycle than the goals above describe: audit state, snooze/wake/stale
+handling, backlog planning, update-candidate routing, and supervised workers.
+Whether that depth is warranted is an open question, not a settled design.
+
 ## Milestone 7: Retrieval Quality
 
 Tracking issue: #9.
@@ -234,6 +241,17 @@ Delivered:
   `CONTEXTFORGE_EMBEDDINGS_STALE_AFTER_MS`
 - rebuild path that enqueues and processes derived vector work
 
+## Milestone 9: Workspace Federation
+
+Tracking issue: none yet.
+
+Status: implemented, previously unrecorded here.
+
+Workspace profiles, members, and routing rules, with a federation block on
+`search` and `bootstrapContext`. Adjacent to Milestone 3 but a separate
+mechanism: `searchScopes` merges scopes into one ranked list, while federation
+returns a separate block.
+
 ## Open Decisions
 
 - Default repo scope keys now infer from git remotes when possible, normalize
@@ -246,6 +264,10 @@ Delivered:
 - `codex_exec` can be checked with a dry doctor command and an opt-in live
   structured smoke before users enable it as the distillation provider.
 - What is the minimum auth model for remote mode?
+- Is the candidate lifecycle built after #208 more than the problem needed? The
+  problem was to get candidates audited and safely promoted reliably; what
+  exists now is a multi-state workflow. Reviewing that for over-design comes
+  before extending it further.
 - Should embedding queue dead-letter/max-attempt behavior preserve stale reset
   attempts, reset them, or introduce a separate retry budget?
 - Should large-store coverage and `dbInfo` checks move to SQL aggregation or
@@ -253,7 +275,7 @@ Delivered:
 
 ## Follow-Up Issue Split
 
-Each milestone after v0 has a focused tracking issue:
+Most milestones after v0 have a focused tracking issue:
 
 - #5: provider abstraction hardening
 - #8: remote storage mode
