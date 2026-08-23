@@ -265,9 +265,9 @@ returns a separate block.
   structured smoke before users enable it as the distillation provider.
 - What is the minimum auth model for remote mode?
 - Is the candidate lifecycle built after #208 more than the problem needed? The
-  original goal was that candidates get audited at closeout and safe ones get
-  promoted; what exists now is a multi-state workflow. Reviewing that for
-  over-design comes before extending it further.
+  problem was to get candidates audited and safely promoted reliably; what
+  exists now is a multi-state workflow. Reviewing that for over-design comes
+  before extending it further.
 - Should embedding queue dead-letter/max-attempt behavior preserve stale reset
   attempts, reset them, or introduce a separate retry budget?
 - Should large-store coverage and `dbInfo` checks move to SQL aggregation or
