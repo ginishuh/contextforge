@@ -1301,8 +1301,8 @@ export function createContextForge(options = {}) {
 
   // Embedding job plumbing lives in src/embeddings/jobs.js. The handles stay in
   // this scope because callers outside the embedding operations use them:
-  // enqueueEmbeddingSources from remember/promote/correct/consolidate/distill,
-  // embeddingFailureResult from the distill checkpoint path.
+  // enqueueEmbeddingSources from remember/promote/correct/distill (and injected
+  // into consolidationMethods), embeddingFailureResult from distill checkpoint.
   const {
     enqueueEmbeddingSources,
     embeddingMaintenanceInventory,
