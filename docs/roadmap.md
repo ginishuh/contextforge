@@ -231,19 +231,24 @@ Initial implementation:
 
 Grown well past the original goals since:
 
-The review workflow is now the largest single area of the operation surface —
-27 of 88 registered operations — and none of the following was in the goals
-above. It is recorded here rather than left implicit, because a reader deciding
-what to work on next should see where the code actually went.
+The registry classifies 24 of 88 registered operations as `review` capability,
+which makes this the largest area of the operation surface after plain reads.
+None of the following was in the goals above. It is recorded here rather than
+left implicit, because a reader deciding what to work on next should see where
+the code actually went.
 
 - audited promotion: `submitAuditJob`, `auditMemoryCandidates`,
   `listMemoryCandidateAuditAttempts`, `planMemoryCandidateBacklogAudit`
 - routing of audited candidates into update proposals rather than duplicate
   durable memory: `routeAuditedMemoryCandidates`, `applyMemoryUpdateCandidate`,
   `rejectMemoryUpdateCandidate`, `skipMemoryUpdateCandidate`
-- candidate lifecycle states and their supervised workers: snooze, wake, stale
-  transitions, and the six `listDue*`/`processDue*` operations that drive them
+- candidate lifecycle states: snooze, wake, and stale transitions, with
+  `listDue*` queries beside them
 - `memoryCandidateBacklog` and `auditMemoryDuplicates`
+
+The supervised workers that drive those transitions (`processDue*`,
+`processConsolidations`) are `operator` capability rather than `review`, so
+they sit outside that count while belonging to the same machinery.
 
 Whether this depth is proportionate for a product with no users yet is an open
 question, not a settled direction. It is listed under Open Decisions.
@@ -333,8 +338,9 @@ Remaining:
   runs; future providers should expose the same metadata contract.
 - `codex_exec` can be checked with a dry doctor command and an opt-in live
   structured smoke before users enable it as the distillation provider.
-- Is the depth of the candidate review workflow proportionate? It is 27 of 88
-  operations and most recent work, while the retrieval and distillation core it
+- Is the depth of the candidate review workflow proportionate? It is 24 of 88
+  operations by the registry's own `review` classification, plus the operator
+  workers that drive it, and most recent work, while the core it
   sits on top of has not moved in comparison. Deciding this is a prerequisite
   for planning anything else, because it determines whether the next work
   extends the review surface or deliberately stops.

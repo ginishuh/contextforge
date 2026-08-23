@@ -5,7 +5,7 @@
 - Brought the roadmap back in step with the code. Milestones 2 and 3 had said
   "initial implementation in progress" for four months after shipping, and two
   built features — workspace federation, and the candidate review workflow that
-  grew out of Milestone 6 to 27 of 88 operations — had no entry at all. Two
+  grew out of Milestone 6 to 24 of 88 operations — had no entry at all. Two
   Milestone 2 goals were restated because "multi-machine sync" and "local
   fallback behavior" described a design that was deliberately not built. What
   is genuinely unfinished now sits under Remaining, and the checkable claims
