@@ -91,3 +91,27 @@ export function liveStateTermsMatch(text) {
     String(text || ''),
   );
 }
+
+// Deterministic key-sorted clone used to build stable hash inputs. core.js and
+// src/embeddings/jobs.js both hash option bags with it, so it lives here rather
+// than in either one.
+export function stableJsonValue(value) {
+  if (Array.isArray(value)) return value.map(stableJsonValue);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, stableJsonValue(value[key])]),
+  );
+}
+
+// The core.js/embeddings variant: strict integer, no fallback, no upper bound.
+// The variants under src/memory/ and src/runtime/ take fallbacks and caps and
+// are deliberately separate; do not fold them together.
+export function positiveInteger(value, name) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer.`);
+  }
+  return parsed;
+}
