@@ -1,14 +1,8 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
 import test from 'node:test';
 import { createContextForge } from '../src/core.js';
 import { ContextForgeStore } from '../src/storage/sqlite.js';
-
-async function makeTempDir() {
-  return fs.mkdtemp(path.join(os.tmpdir(), 'contextforge-audited-routing-test-'));
-}
+import { makeTempDir } from './helpers/temp.js';
 
 function approve(store, scope, candidateId) {
   return store.markMemoryCandidateAudited({
