@@ -1,7 +1,8 @@
 // ESLint runs in CI only. The repository keeps devDependencies at zero, so the
-// workflow installs a pinned eslint with `--no-save --no-package-lock` instead
-// of adding it to package.json. The globals below are listed by hand for the
-// same reason: depending on the `globals` package would mean a second install.
+// workflow runs a pinned `npx --yes eslint@10.9.0 .` instead of adding it to
+// package.json; npx leaves package.json and package-lock.json untouched. The
+// globals below are listed by hand for the same reason: depending on the
+// `globals` package would mean a second install.
 //
 // Rule selection is deliberately narrow. `no-undef`, `no-unused-vars` and
 // `no-shadow` are the checks the hand-rolled `scripts/lint-source.js` cannot
