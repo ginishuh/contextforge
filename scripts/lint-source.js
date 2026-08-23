@@ -291,11 +291,13 @@ function statementEnd(lines, start) {
       else if (character === ';' && depth <= 0) {
         // The column matters: code may follow the semicolon on this line, and
         // blanking the whole line would hide a usage and fail valid code.
-        return { line: index, column: position + 1 };
+        return { line: index, column: position + 1, blockComment: state.blockComment };
       }
     }
     if (IMPORT_FROM_CLAUSE.test(code) || IMPORT_SIDE_EFFECT.test(code)) tail = true;
-    if (tail && depth <= 0) return { line: index, column: lines[index].length };
+    if (tail && depth <= 0) {
+      return { line: index, column: lines[index].length, blockComment: state.blockComment };
+    }
   }
   return null;
 }
@@ -314,6 +316,10 @@ function importStatements(lines) {
     const end = statementEnd(lines, index);
     if (end === null) break;
     statements.push({ start: index, end: end.line, endColumn: end.column });
+    // A statement that ends with a block comment still open leaves everything
+    // after it as comment text. Reading an `import` line out of that text would
+    // fail the lint over a name nobody imported, so the run stops here.
+    if (end.blockComment) break;
     index = end.line + 1;
   }
   return statements;

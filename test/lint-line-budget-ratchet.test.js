@@ -954,3 +954,40 @@ test('a non-ASCII binding is checked like any other', async () => {
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
+
+test('text inside an unterminated block comment is not read as an import', async () => {
+  const directory = await makeWorkspace({});
+  try {
+    await fs.writeFile(path.join(directory, 'src/dep.js'), 'export default 1;\n');
+    // The comment opens on the import's own line, so everything below it is
+    // comment text. Reading it as a statement would fail the lint over a name
+    // nobody imported.
+    await fs.writeFile(path.join(directory, 'src/app.js'), [
+      "import used from './dep.js'; /*",
+      "import { fake } from './nope.js';",
+      '*/',
+      'console.log(used);',
+      '',
+    ].join('\n'));
+    const result = await runLint(directory);
+    assert.equal(result.code, 0, result.stderr);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('a block comment closed on the same line leaves the check running', async () => {
+  const directory = await makeWorkspace({});
+  try {
+    await fs.writeFile(path.join(directory, 'src/dep.js'), 'export const dead = 1;\n');
+    await fs.writeFile(
+      path.join(directory, 'src/app.js'),
+      "import { dead } from './dep.js'; /* note */\nconsole.log(1);\n",
+    );
+    const result = await runLint(directory);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /unused import dead/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
