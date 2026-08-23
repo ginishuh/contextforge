@@ -83,6 +83,39 @@ test('the surface selection env vars cannot skew a measurement', async () => {
   }
 });
 
+test('the storage env cannot stop a measurement', async () => {
+  // Building a server also builds an app, so a shell configured as a remote
+  // client used to kill the measurement outright: the remote client throws
+  // without a URL. A storage backend has no bearing on tool schemas.
+  const previous = process.env.CONTEXTFORGE_STORAGE_MODE;
+  process.env.CONTEXTFORGE_STORAGE_MODE = 'remote';
+  try {
+    const measurements = await measureSurfaces();
+    assert.equal(measurements['agent-core'].toolCount, 24);
+  } finally {
+    if (previous === undefined) delete process.env.CONTEXTFORGE_STORAGE_MODE;
+    else process.env.CONTEXTFORGE_STORAGE_MODE = previous;
+  }
+});
+
+test('the reference tables state the tool counts the manifest records', async () => {
+  // These tables describe the current contract, not history, and drifted from
+  // the real profiles before anything checked them.
+  const recorded = readSurfaceBudgets();
+  for (const file of ['docs/reference.md', 'docs/reference.ko.md']) {
+    const text = await fs.readFile(file, 'utf8');
+    for (const [profile, budget] of Object.entries(recorded.profiles)) {
+      const row = text.match(new RegExp(`\\|\\s*\`${profile}\`\\s*\\|\\s*(\\d+)`));
+      assert.ok(row, `${file} has no row for ${profile}`);
+      assert.equal(
+        Number(row[1]),
+        budget.toolCount,
+        `${file} lists ${row[1]} tools for ${profile}, manifest records ${budget.toolCount}`,
+      );
+    }
+  }
+});
+
 test('reclaimed room must be tightened rather than left to be respent', () => {
   // 5% of 6696 is 334, so a 400-token reduction has to be recorded.
   const violations = surfaceBudgetViolations(budgets(), measured({ estimatedInitialTokens: 6296 }));

@@ -368,10 +368,10 @@ clients that need it:
 | Profile | Tools | Intended caller |
 | --- | ---: | --- |
 | `agent-core` | 24 | normal agent bootstrap, retrieval, evidence, distillation, and closeout |
-| `review` | 37 | candidate and durable-memory review |
-| `operator` | 56 | queues, retention, embeddings, usage, and server maintenance |
+| `review` | 45 | candidate and durable-memory review |
+| `operator` | 67 | queues, retention, embeddings, usage, and server maintenance |
 | `workspace-admin` | 11 | workspace topology and scope migration |
-| `all` | 62 | complete surface, including compatibility with pre-profile tools |
+| `all` | 73 | complete surface, including compatibility with pre-profile tools |
 
 Set `CONTEXTFORGE_MCP_PROFILE`, or use `CONTEXTFORGE_MCP_TOOLS` as an exact
 comma-separated allowlist. An allowlist takes precedence over the profile;

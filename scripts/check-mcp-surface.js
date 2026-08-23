@@ -51,15 +51,27 @@ export function readSurfaceBudgets(file = budgetFile) {
   return { profiles, slackRatio, note: parsed.note || '' };
 }
 
-// The two variables that pick a surface are stripped before measuring. With
-// CONTEXTFORGE_MCP_TOOLS set in the shell every profile measures as that
-// allowlist instead, and an --update run would then overwrite the manifest with
-// those numbers — the ratchet would be recording the developer's environment
-// rather than the repository's surface.
+// What the surface is made of — instructions and tool schemas — depends on the
+// profile and nothing else. Two groups of variables are stripped so a shell
+// cannot change what gets recorded.
+//
+// The surface selectors come first: with CONTEXTFORGE_MCP_TOOLS exported, every
+// profile measures as that allowlist, and an --update run would write those
+// numbers into the manifest — recording the developer's environment instead of
+// the repository's surface.
+//
+// The storage selectors come second: building a server also builds an app, and
+// CONTEXTFORGE_STORAGE_MODE=remote sends that through the remote client, which
+// throws without a URL. Measuring would die on a machine configured as a remote
+// client even though a storage backend has no bearing on tool schemas.
 function measurementEnv() {
   const {
     CONTEXTFORGE_MCP_PROFILE: _profile,
     CONTEXTFORGE_MCP_TOOLS: _tools,
+    CONTEXTFORGE_STORAGE_MODE: _storageMode,
+    CONTEXTFORGE_REMOTE_URL: _remoteUrl,
+    CONTEXTFORGE_REMOTE_TOKEN: _remoteToken,
+    CONTEXTFORGE_REMOTE_TIMEOUT_MS: _remoteTimeout,
     ...rest
   } = process.env;
   return rest;

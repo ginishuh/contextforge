@@ -426,10 +426,10 @@ MCP는 기본적으로 모든 유지보수·관리 schema를 preload하지 않�
 | 프로필 | 도구 수 | 용도 |
 | --- | ---: | --- |
 | `agent-core` | 24 | 일반 agent bootstrap, 검색, evidence, distill, closeout |
-| `review` | 37 | candidate와 durable memory 검토 |
-| `operator` | 56 | job, retention, embedding, usage, 서버 유지보수 |
+| `review` | 45 | candidate와 durable memory 검토 |
+| `operator` | 67 | job, retention, embedding, usage, 서버 유지보수 |
 | `workspace-admin` | 11 | workspace topology와 scope migration |
-| `all` | 62 | 기존 도구 호환을 포함한 전체 MCP surface |
+| `all` | 73 | 기존 도구 호환을 포함한 전체 MCP surface |
 
 `CONTEXTFORGE_MCP_PROFILE`로 프로필을 선택한다. 정확한 comma-separated
 allowlist가 필요하면 `CONTEXTFORGE_MCP_TOOLS`를 사용하며, 이 값은 프로필보다
@@ -442,7 +442,10 @@ node src/mcp.js --describe-surface --profile agent-core
 ```
 
 이 보고서는 활성/비활성 도구 이름, instruction/schema/description byte 수와 초기
-token 추정치를 보여준다. 기존 client가 전체 surface에 의존했다면 migration 동안만
+token 추정치를 보여준다. 프로필별 예산은 `scripts/mcp-surface-budgets.json`에
+기록되며 ratchet으로 관리한다. surface는 기록된 값을 넘어설 수 없고, 더 필요한
+변경은 같은 커밋에서 매니페스트를 다시 기록해 증가가 diff에 남게 한다.
+`npm run lint:mcp-surface`로 확인한다. 기존 client가 전체 surface에 의존했다면 migration 동안만
 `all`을 사용하고, 일반 coding agent는 기본 `agent-core`를 유지하는 편이 좋다.
 상세 workflow는 package에 포함된 `contextforge-memory` skill에 있으며, skill 설치
 여부와 관계없이 profile 선택과 서버 startup은 동작한다.
