@@ -44,6 +44,11 @@ if (live && !hasExplicitTestPath) {
     process.exit(2);
   }
   testArgs.push(...liveTests);
+} else if (!hasExplicitTestPath) {
+  // Node's default glob treats every `.js` file under `test/` as a test file, so
+  // shared helper modules would be reported as empty test files. Name the suite
+  // explicitly instead; this matches the same 19 files the default glob found.
+  testArgs.push('test/**/*.test.js');
 }
 
 const startedAt = Date.now();
