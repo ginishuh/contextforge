@@ -82,8 +82,8 @@ export function createOpenAiEmbeddingProvider(config, options = {}) {
           signal: timeout.signal,
         });
         if (!response.ok) {
-          const body = await response.text().catch(() => '');
-          throw new Error(`OpenAI embeddings request failed with HTTP ${response.status}: ${body.slice(0, 240)}`);
+          const errorBody = await response.text().catch(() => '');
+          throw new Error(`OpenAI embeddings request failed with HTTP ${response.status}: ${errorBody.slice(0, 240)}`);
         }
         const payload = await response.json();
         const rows = Array.isArray(payload.data) ? payload.data : [];

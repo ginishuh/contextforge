@@ -6744,13 +6744,13 @@ export function createContextForge(options = {}) {
               reasoningEffort: auditor?.metadata?.reasoningEffort || null,
             };
           } else {
-            const policy = {
+            const auditPolicy = {
               minConfidence: 0.7,
               minStability: 0.7,
               allowedCategories: AUDIT_CANDIDATE_CATEGORIES,
             };
             const assessed = unauditedPending.map((candidate) => {
-              const warnings = auditCandidateWarnings(store, scope, candidate, policy);
+              const warnings = auditCandidateWarnings(store, scope, candidate, auditPolicy);
               const score = scorePromotionCandidate(candidate, warnings, AUDIT_CANDIDATE_SKIP_WARNING_CODES);
               return { candidate, warnings, score };
             });

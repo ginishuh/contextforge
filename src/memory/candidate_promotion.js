@@ -510,7 +510,7 @@ export function promotionProposal(indexedCandidate, warnings, rank) {
   return proposal;
 }
 
-export function memoryUpdateCandidateProposal(candidate, promotionAssessment = null) {
+export function memoryUpdateCandidateProposal(candidate, assessment = null) {
   const proposal = {
     candidateId: candidate.id,
     action: candidate.action,
@@ -528,11 +528,11 @@ export function memoryUpdateCandidateProposal(candidate, promotionAssessment = n
       candidateId: candidate.sourceCandidateId,
     },
     recommendedAction: 'ask_user',
-    ...(promotionAssessment
+    ...(assessment
       ? {
           promotionAssessment: {
-            classification: promotionAssessment.classification,
-            recommendedAction: promotionAssessment.recommendedAction,
+            classification: assessment.classification,
+            recommendedAction: assessment.recommendedAction,
           },
         }
       : {}),

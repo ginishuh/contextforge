@@ -99,10 +99,6 @@ function parseJsonLines(filePath, lines, normalizeRecord, options = {}, initialC
   return { context, events, warnings };
 }
 
-function parseJsonLineFile(filePath, text, normalizeRecord, options = {}, initialContext = {}) {
-  return parseJsonLines(filePath, text.split(/\r?\n/), normalizeRecord, options, initialContext);
-}
-
 function encodedCwdFromGrokChatHistory(filePath) {
   const sessionDir = path.dirname(filePath);
   const encodedCwd = path.basename(path.dirname(sessionDir));

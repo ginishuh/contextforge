@@ -55,6 +55,7 @@
     "benchmark:retrieval": "node scripts/benchmark-retrieval.js",
     "eval:quality": "node scripts/run-quality-eval.js",
     "lint": "node scripts/lint-source.js",
+    "lint:eslint": "npx --yes eslint@10.9.0 .",
     "lint:mcp-surface": "node scripts/check-mcp-surface.js",
     "test": "node scripts/run-tests.js",
     "test:live": "node scripts/run-tests.js --live",
