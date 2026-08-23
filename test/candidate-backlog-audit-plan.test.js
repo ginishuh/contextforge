@@ -1,15 +1,9 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
 import test from 'node:test';
 import { createContextForge } from '../src/core.js';
 import { operationByName } from '../src/operations/registry.js';
 import { ContextForgeStore } from '../src/storage/sqlite.js';
-
-async function makeTempDir() {
-  return fs.mkdtemp(path.join(os.tmpdir(), 'contextforge-candidate-backlog-plan-test-'));
-}
+import { makeTempDir } from './helpers/temp.js';
 
 function candidate(key, content, overrides = {}) {
   return {

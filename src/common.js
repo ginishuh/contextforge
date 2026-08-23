@@ -105,9 +105,22 @@ export function stableJsonValue(value) {
   );
 }
 
-// The core.js/embeddings variant: strict integer, no fallback, no upper bound.
-// The variants under src/memory/ and src/runtime/ take fallbacks and caps and
-// are deliberately separate; do not fold them together.
+// Arithmetic mean with an explicit 0 for the empty case. The retrieval and
+// quality evals both report metrics with it.
+export function average(values) {
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+}
+
+// The canonical "scopeType:scopeKey" identity string. core.js, the retrieval
+// eval, and workspace resolution all key maps by it, so the separator lives in
+// one place.
+export function scopeIdentity(scopeType, scopeKey) {
+  return `${scopeType}:${scopeKey}`;
+}
+
+// Strict integer, no fallback, no upper bound. The three variants under
+// src/memory/ take a fallback or a cap, so folding them in here would widen or
+// narrow their accepted input ranges; they are deliberately separate.
 export function positiveInteger(value, name) {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) {

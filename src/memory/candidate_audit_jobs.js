@@ -1,23 +1,8 @@
 import { createHash } from 'node:crypto';
-
-function stable(value) {
-  if (Array.isArray(value)) return value.map(stable);
-  if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stable(value[key])]));
-}
+import { positiveInteger, stableJsonValue, truthyOption } from '../common.js';
 
 function idempotencyKey(identity) {
-  return `audit_memory_candidates:${createHash('sha256').update(JSON.stringify(stable(identity))).digest('hex')}`;
-}
-
-function positiveInteger(value, name) {
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0) throw new Error(`${name} must be a positive integer.`);
-  return parsed;
-}
-
-function truthy(value) {
-  return value === true || value === 'true' || value === '1' || value === 1;
+  return `audit_memory_candidates:${createHash('sha256').update(JSON.stringify(stableJsonValue(identity))).digest('hex')}`;
 }
 
 export function candidateAuditSourceWatermark({ store, scope, sessionId, checkpoint = null, latestCheckpoint = null }) {
@@ -42,7 +27,7 @@ export function candidateAuditSourceWatermark({ store, scope, sessionId, checkpo
 }
 
 function assertExpectedSourceWatermark(expected, actual) {
-  if (!expected || JSON.stringify(stable(expected)) === JSON.stringify(stable(actual))) return;
+  if (!expected || JSON.stringify(stableJsonValue(expected)) === JSON.stringify(stableJsonValue(actual))) return;
   const error = new Error('The candidate audit source changed after the idle epoch was selected.');
   error.name = 'CandidateAuditSourceWatermarkChangedError';
   error.code = 'CONTEXTFORGE_AUDIT_SOURCE_WATERMARK_CHANGED';
@@ -107,7 +92,7 @@ function submitMemoryCandidateAuditJobInTransaction({ store, scope, options, aud
     throw new Error('Every candidateIds item must identify a pending candidate in the requested canonical scope.');
   }
   const candidates = scanned.filter((candidate) =>
-    truthy(options.force) || ['unaudited', 'failed_retryable', 'legacy_unknown'].includes(candidate.auditState),
+    truthyOption(options.force) || ['unaudited', 'failed_retryable', 'legacy_unknown'].includes(candidate.auditState),
   ).slice(0, requestedLimit);
   if (candidates.length === 0) {
     const error = new Error('No eligible pending memory candidates matched the requested audit source.');
@@ -150,7 +135,7 @@ function submitMemoryCandidateAuditJobInTransaction({ store, scope, options, aud
     payload,
     maxAttempts,
     priority,
-    retryFailed: truthy(options.retryFailed),
+    retryFailed: truthyOption(options.retryFailed),
     metadata: {
       submittedBy: options.submittedBy || 'api',
       requestId: options.requestId || null,
@@ -168,7 +153,7 @@ function submitMemoryCandidateAuditJobInTransaction({ store, scope, options, aud
   const jobCandidates = store.registerOperationJobCandidates({
     jobId: queued.job.id,
     candidateIds: registeredCandidateIds,
-    force: truthy(options.force),
+    force: truthyOption(options.force),
   });
   const submittedCandidateIds = registeredCandidateIds;
   const submittedIds = new Set(submittedCandidateIds);
@@ -179,7 +164,7 @@ function submitMemoryCandidateAuditJobInTransaction({ store, scope, options, aud
       auditState: candidate.auditState,
       reason: queued.deduplicated
         ? 'deduplicated_job_selection'
-        : truthy(options.force) || ['unaudited', 'failed_retryable', 'legacy_unknown'].includes(candidate.auditState)
+        : truthyOption(options.force) || ['unaudited', 'failed_retryable', 'legacy_unknown'].includes(candidate.auditState)
           ? 'batch_limit'
           : 'audit_state_ineligible',
     }));

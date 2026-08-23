@@ -27,6 +27,7 @@ import {
   positiveInteger,
   positiveNumber,
   requireOption,
+  scopeIdentity,
   stableJsonValue,
   summarySnippet,
   truthyOption,
@@ -436,10 +437,6 @@ function normalizeRelatedScopeKeys(value) {
   }
   const items = Array.isArray(value) ? value : String(value).split(',');
   return [...new Set(items.map((item) => String(item).trim()).filter(Boolean))];
-}
-
-function scopeIdentity(scopeType, scopeKey) {
-  return `${scopeType}:${scopeKey}`;
 }
 
 function workspaceTypeTier(type) {

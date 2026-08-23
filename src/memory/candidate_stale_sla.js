@@ -1,4 +1,5 @@
-import { randomUUID } from 'node:crypto';
+import { truthyOption } from '../common.js';
+import { boundedLimit, codedError, lifecycleMetadata } from './candidate_lifecycle_common.js';
 import { normalizeScopeOptions } from '../scopes/index.js';
 
 const ACTIVE_AUDIT_STATES = new Set(['queued', 'running']);
@@ -8,34 +9,6 @@ const SLA_ANCHOR_SQL = `CASE
     THEN json_extract(review_metadata_json, '$.candidateSlaAnchorAt')
   ELSE COALESCE(reviewed_at, created_at)
 END`;
-
-function truthy(value) {
-  return value === true || value === 'true' || value === '1' || value === 1;
-}
-
-function boundedLimit(value, fallback = 50, max = 500) {
-  const parsed = Number(value == null ? fallback : value);
-  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > max) {
-    throw new Error(`limit must be a positive integer no greater than ${max}.`);
-  }
-  return parsed;
-}
-
-function codedError(message, code) {
-  const error = new Error(message);
-  error.code = code;
-  return error;
-}
-
-function lifecycleMetadata(candidate, event) {
-  const existing = Array.isArray(candidate.reviewMetadata?.lifecycleEvents)
-    ? candidate.reviewMetadata.lifecycleEvents
-    : [];
-  return {
-    ...(candidate.reviewMetadata || {}),
-    lifecycleEvents: [...existing, { id: randomUUID(), ...event }],
-  };
-}
 
 function candidateQueue(candidate) {
   if (candidate.auditState === 'audited') {
@@ -229,7 +202,7 @@ export function reopenStaleCandidate(store, scope, options = {}) {
 }
 
 export function processDueCandidateStaleTransitions(store, scope, options = {}, policy) {
-  const dryRun = truthy(options.dryRun);
+  const dryRun = truthyOption(options.dryRun);
   const due = listDueCandidateStaleTransitions(store, scope, options, policy);
   const result = {
     kind: 'memory_candidate_stale_transition_batch',

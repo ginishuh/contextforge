@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import test from 'node:test';
@@ -12,12 +11,9 @@ import {
 } from '../src/memory/candidate_lifecycle_worker.js';
 import { createContextForge } from '../src/core.js';
 import { ContextForgeStore } from '../src/storage/sqlite.js';
+import { makeTempDir } from './helpers/temp.js';
 
 const execFileAsync = promisify(execFile);
-
-async function makeTempDir() {
-  return fs.mkdtemp(path.join(os.tmpdir(), 'contextforge-lifecycle-worker-test-'));
-}
 
 async function assertPrivateAuthorityFile({ home, unitName, authorityName, remoteUrl, remoteTimeoutMs = 180000 }) {
   const unitDir = path.join(home, '.config', 'systemd', 'user');

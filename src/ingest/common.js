@@ -155,6 +155,25 @@ export async function shouldSkipRecentFailedAutoDistill(app, scopeOptions, sessi
   return Date.now() - failedAt < status.thresholds.minIntervalMs;
 }
 
+// Flattens a Codex/agent-log content array to text. The Claude Code reader
+// keeps its own stricter variant (it accepts only `type: "text"` parts), so do
+// not point that one here.
+export function textFromContent(content) {
+  if (typeof content === 'string') {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return '';
+  }
+  return content
+    .map((item) => {
+      if (!item || typeof item !== 'object') return '';
+      return item.text || item.input_text || item.output_text || '';
+    })
+    .filter(Boolean)
+    .join('\n\n');
+}
+
 export function truncate(value, maxChars) {
   const text = String(value || '');
   if (text.length <= maxChars) {

@@ -1,15 +1,9 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
 import test from 'node:test';
 import { createContextForge } from '../src/core.js';
 import { buildMemoryCandidateBacklog } from '../src/memory/candidate_backlog.js';
 import { ContextForgeStore } from '../src/storage/sqlite.js';
-
-async function makeTempDir() {
-  return fs.mkdtemp(path.join(os.tmpdir(), 'contextforge-candidate-lifecycle-test-'));
-}
+import { makeTempDir } from './helpers/temp.js';
 
 test('candidate backlog is read-only, paged, and submits an explicit bounded backlog batch', async () => {
   const dataDir = await makeTempDir();

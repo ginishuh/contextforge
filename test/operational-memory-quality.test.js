@@ -1,15 +1,9 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
 import test from 'node:test';
 import { createContextForge } from '../src/core.js';
 import { startContextForgeServer } from '../src/server.js';
 import { ContextForgeStore } from '../src/storage/sqlite.js';
-
-async function makeTempDir() {
-  return fs.mkdtemp(path.join(os.tmpdir(), 'contextforge-operational-quality-test-'));
-}
+import { makeTempDir } from './helpers/temp.js';
 
 test('readiness degrades only after queued work outlives the operation worker grace period', async () => {
   const dataDir = await makeTempDir();

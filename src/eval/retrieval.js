@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
+import { average, scopeIdentity } from '../common.js';
 import { createContextForge } from '../core.js';
 
 function arrayOfStrings(value) {
@@ -37,18 +38,10 @@ function normalizedDiscountedCumulativeGain(resultKeys, relevance, topN) {
   return ideal === 0 ? 1 : discountedCumulativeGain(resultKeys.slice(0, topN), relevance) / ideal;
 }
 
-function average(values) {
-  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
-}
-
 function resultText(result) {
   return [result.key, result.category, result.content, ...(result.why || []).map((hit) => hit.token)]
     .filter(Boolean)
     .join('\n');
-}
-
-function scopeIdentity(scopeType, scopeKey) {
-  return `${scopeType}:${scopeKey}`;
 }
 
 function scopePlanRoleMap(scopePlan) {

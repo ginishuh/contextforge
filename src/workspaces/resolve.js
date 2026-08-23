@@ -1,3 +1,5 @@
+import { scopeIdentity } from '../common.js';
+
 const SCOPE_TYPES = new Set(['shared', 'repo', 'local']);
 const WORKSPACE_MODES = new Set(['off', 'auto', 'strict']);
 const PROFILE_STATUSES = new Set(['active', 'inactive']);
@@ -183,10 +185,6 @@ function normalizeRuleJson(value, name, { allowedKeys, termKeys = new Set() }) {
     normalized[key] = rawItems.map((item) => normalizeString(item, `${name}.${key} item`, { maxLength }));
   }
   return normalized;
-}
-
-function scopeIdentity(scopeType, scopeKey) {
-  return `${scopeType}:${scopeKey}`;
 }
 
 function memberIdentity(member) {

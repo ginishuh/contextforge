@@ -1,3 +1,5 @@
+import { positiveInteger } from '../common.js';
+
 const providerStates = new Map();
 const inFlightOperations = new Map();
 const keyedLocks = new Map();
@@ -27,14 +29,6 @@ export class ProviderTimeoutExceedsClientTimeoutError extends Error {
     this.clientTimeoutMs = clientTimeoutMs;
     this.retryable = false;
   }
-}
-
-function positiveInteger(value, name) {
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error(`${name} must be a positive integer.`);
-  }
-  return parsed;
 }
 
 function providerState(provider, limit) {
