@@ -4,6 +4,6 @@
     "src/core.js": 6144,
     "src/mcp.js": 1899,
     "src/storage/sqlite.js": 5225,
-    "test/core.test.js": 16706
+    "test/core.test.js": 14323
   }
 }
