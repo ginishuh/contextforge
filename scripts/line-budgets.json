@@ -1,7 +1,7 @@
 {
   "note": "Ratchet budgets in lines. Budgets may only go down. Run 'node scripts/lint-source.js --update-budgets' after shrinking a file.",
   "budgets": {
-    "src/core.js": 7169,
+    "src/core.js": 7152,
     "src/mcp.js": 1899,
     "src/storage/sqlite.js": 5225,
     "test/core.test.js": 17098

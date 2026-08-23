@@ -20,9 +20,12 @@ import {
 import {
   clampImportance,
   contentHash,
+  errorSummary,
   liveStateTermsMatch,
   normalizeToken,
+  requireOption,
   summarySnippet,
+  truthyOption,
 } from './common.js';
 import {
   errorUsageMetadata,
@@ -106,12 +109,6 @@ import {
   normalizeScopeType,
   resolveWorkspaceScopePlan,
 } from './workspaces/resolve.js';
-
-function requireOption(value, name) {
-  if (value == null || value === '') {
-    throw new Error(`${name} is required.`);
-  }
-}
 
 function executionKey(...parts) {
   return parts.map((part) => JSON.stringify(part == null ? null : String(part))).join(':');
@@ -352,16 +349,6 @@ function checkpointText(checkpoint) {
   ]
     .filter(Boolean)
     .join('\n');
-}
-
-function errorSummary(error) {
-  if (!error) return null;
-  return {
-    name: error.name || 'Error',
-    message: error.message || String(error),
-    ...(error.code ? { code: error.code } : {}),
-    ...(typeof error.retryable === 'boolean' ? { retryable: error.retryable } : {}),
-  };
 }
 
 function rethrowExternalProviderTestError(error) {
@@ -964,10 +951,6 @@ function mergeWarnings(warnings, extraWarnings) {
     merged.push(warning);
   }
   return merged;
-}
-
-function truthyOption(value) {
-  return value === true || value === 'true' || value === '1' || value === 1;
 }
 
 const CLOSEOUT_TRIGGERS = new Set([

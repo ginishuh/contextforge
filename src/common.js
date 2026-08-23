@@ -36,6 +36,31 @@ export function contentHash(value) {
   return createHash('sha256').update(String(value || '')).digest('hex');
 }
 
+export function requireOption(value, name) {
+  if (value == null || value === '') {
+    throw new Error(`${name} is required.`);
+  }
+}
+
+export function truthyOption(value) {
+  return value === true || value === 'true' || value === '1' || value === 1;
+}
+
+// Serializes an error for a stored/returned payload. Returns null for a falsy
+// error, and only carries `code`/`retryable` when the error actually has them —
+// callers persist this shape, so the fields and their omission are contract.
+// The near-identical variants under src/memory/ are deliberately separate; do
+// not fold them together.
+export function errorSummary(error) {
+  if (!error) return null;
+  return {
+    name: error.name || 'Error',
+    message: error.message || String(error),
+    ...(error.code ? { code: error.code } : {}),
+    ...(typeof error.retryable === 'boolean' ? { retryable: error.retryable } : {}),
+  };
+}
+
 // Matches vocabulary that names mutable live state (branches, PRs, CI, deploys,
 // migrations, queues) in English or Korean. Used both to flag a bootstrap
 // result as needing live verification and to classify a correction query.
