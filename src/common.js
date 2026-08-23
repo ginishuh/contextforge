@@ -105,6 +105,13 @@ export function stableJsonValue(value) {
   );
 }
 
+// The canonical "scopeType:scopeKey" identity string. core.js, the retrieval
+// eval, and workspace resolution all key maps by it, so the separator lives in
+// one place.
+export function scopeIdentity(scopeType, scopeKey) {
+  return `${scopeType}:${scopeKey}`;
+}
+
 // The core.js/embeddings variant: strict integer, no fallback, no upper bound.
 // The variants under src/memory/ and src/runtime/ take fallbacks and caps and
 // are deliberately separate; do not fold them together.

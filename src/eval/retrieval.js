@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
+import { scopeIdentity } from '../common.js';
 import { createContextForge } from '../core.js';
 
 function arrayOfStrings(value) {
@@ -45,10 +46,6 @@ function resultText(result) {
   return [result.key, result.category, result.content, ...(result.why || []).map((hit) => hit.token)]
     .filter(Boolean)
     .join('\n');
-}
-
-function scopeIdentity(scopeType, scopeKey) {
-  return `${scopeType}:${scopeKey}`;
 }
 
 function scopePlanRoleMap(scopePlan) {

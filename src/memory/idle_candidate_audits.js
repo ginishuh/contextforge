@@ -1,3 +1,4 @@
+import { truthyOption } from '../common.js';
 import { candidateAuditSourceWatermark } from './candidate_audit_jobs.js';
 
 function positiveInteger(value, name, max = 500) {
@@ -12,10 +13,6 @@ function nonnegativeNumber(value, name) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 0) throw new Error(`${name} must be a non-negative number.`);
   return parsed;
-}
-
-function truthy(value) {
-  return value === true || value === 'true' || value === '1' || value === 1;
 }
 
 function errorSummary(error) {
@@ -136,7 +133,7 @@ export async function processIdleCandidateAudits({ app, options = {} }) {
     throw new Error('processDueCandidateAudits requires one explicit canonical scope.');
   }
   const limit = positiveInteger(options.limit == null ? 5 : options.limit, 'limit');
-  const dryRun = truthy(options.dryRun);
+  const dryRun = truthyOption(options.dryRun);
   const due = app.listDueCandidateAudits({ ...options, limit });
   const result = {
     kind: 'idle_candidate_audit_batch',

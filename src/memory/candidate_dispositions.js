@@ -1,23 +1,8 @@
-import { randomUUID } from 'node:crypto';
+import { requireOption, truthyOption } from '../common.js';
+import { boundedLimit, codedError, lifecycleMetadata } from './candidate_lifecycle_common.js';
 import { normalizeScopeOptions } from '../scopes/index.js';
 
 const ACTIVE_AUDIT_STATES = new Set(['queued', 'running']);
-
-function requireOption(value, name) {
-  if (value == null || value === '') throw new Error(`${name} is required.`);
-}
-
-function truthy(value) {
-  return value === true || value === 'true' || value === '1' || value === 1;
-}
-
-function boundedLimit(value, fallback = 50, max = 500) {
-  const parsed = Number(value == null ? fallback : value);
-  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > max) {
-    throw new Error(`limit must be a positive integer no greater than ${max}.`);
-  }
-  return parsed;
-}
 
 function normalizedFutureIso(value, nowMs, maxSnoozeMs = 90 * 24 * 60 * 60 * 1000) {
   const parsed = Date.parse(String(value || ''));
@@ -27,22 +12,6 @@ function normalizedFutureIso(value, nowMs, maxSnoozeMs = 90 * 24 * 60 * 60 * 100
     throw new Error(`snoozedUntil must be no more than ${maxSnoozeMs}ms in the future.`);
   }
   return new Date(parsed).toISOString();
-}
-
-function lifecycleMetadata(candidate, event) {
-  const existing = Array.isArray(candidate.reviewMetadata?.lifecycleEvents)
-    ? candidate.reviewMetadata.lifecycleEvents
-    : [];
-  return {
-    ...(candidate.reviewMetadata || {}),
-    lifecycleEvents: [...existing, { id: randomUUID(), ...event }],
-  };
-}
-
-function codedError(message, code) {
-  const error = new Error(message);
-  error.code = code;
-  return error;
 }
 
 export function snoozeCandidate(store, scope, options = {}) {
@@ -112,7 +81,7 @@ export function wakeCandidate(store, scope, options = {}) {
     if (options.expectedSnoozedUntil && candidate.snoozedUntil !== options.expectedSnoozedUntil) {
       throw codedError(`Memory candidate ${candidate.id} snooze epoch changed.`, 'CONTEXTFORGE_CANDIDATE_SNOOZE_EPOCH_CHANGED');
     }
-    if (truthy(options.onlyIfDue) && Date.parse(candidate.snoozedUntil || '') > now.getTime()) {
+    if (truthyOption(options.onlyIfDue) && Date.parse(candidate.snoozedUntil || '') > now.getTime()) {
       throw codedError(`Memory candidate ${candidate.id} snooze is not due.`, 'CONTEXTFORGE_CANDIDATE_SNOOZE_NOT_DUE');
     }
     const wakeUpStatus = candidate.wakeUpStatus || 'pending';
@@ -165,7 +134,7 @@ export function listDueCandidateWakeups(store, scope, options = {}) {
 }
 
 export function processDueCandidateWakeups(store, scope, options = {}) {
-  const dryRun = truthy(options.dryRun);
+  const dryRun = truthyOption(options.dryRun);
   const due = listDueCandidateWakeups(store, scope, options);
   const result = {
     kind: 'memory_candidate_wake_up_batch', scope, asOf: due.asOf, dryRun,
@@ -227,12 +196,12 @@ export function candidateDispositionMethods({ config, useStore }) {
       return useStore((store) => {
         const candidate = store.getMemoryCandidate({ ...scope, candidateId: options.candidateId });
         if (!candidate) throw new Error(`Memory candidate not found: ${options.candidateId}`);
-        if (candidate.status !== 'pending' && !truthy(options.allowStatusOverride)) {
+        if (candidate.status !== 'pending' && !truthyOption(options.allowStatusOverride)) {
           throw new Error(`Memory candidate ${candidate.id} is ${candidate.status}; expected pending. Pass allowStatusOverride to change it anyway.`);
         }
         return store.markMemoryCandidateReviewed({
           ...scope, candidateId: options.candidateId, status: 'rejected', reason: options.reason,
-          allowStatusOverride: truthy(options.allowStatusOverride),
+          allowStatusOverride: truthyOption(options.allowStatusOverride),
           metadata: { checkpointId: candidate.checkpointId, sessionId: candidate.sessionId, sourceCandidateIndex: candidate.index },
         });
       });
