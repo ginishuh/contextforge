@@ -36,6 +36,53 @@ export function contentHash(value) {
   return createHash('sha256').update(String(value || '')).digest('hex');
 }
 
+const CONSULT_REASONS = new Set([
+  'startup',
+  'resume',
+  'compaction_recovery',
+  'agent_switch',
+  'targeted_search',
+  'live_state_check',
+  'active_session',
+  'unknown',
+]);
+
+export function normalizeConsultReason(value) {
+  const reason = String(value || 'unknown')
+    .trim()
+    .toLowerCase()
+    .replace(/[-\s]+/g, '_');
+  if (!CONSULT_REASONS.has(reason)) {
+    throw new Error(`consultReason must be one of: ${Array.from(CONSULT_REASONS).join(', ')}.`);
+  }
+  return reason;
+}
+
+export function requireOption(value, name) {
+  if (value == null || value === '') {
+    throw new Error(`${name} is required.`);
+  }
+}
+
+export function truthyOption(value) {
+  return value === true || value === 'true' || value === '1' || value === 1;
+}
+
+// Serializes an error for a stored/returned payload. Returns null for a falsy
+// error, and only carries `code`/`retryable` when the error actually has them —
+// callers persist this shape, so the fields and their omission are contract.
+// The near-identical variants under src/memory/ are deliberately separate; do
+// not fold them together.
+export function errorSummary(error) {
+  if (!error) return null;
+  return {
+    name: error.name || 'Error',
+    message: error.message || String(error),
+    ...(error.code ? { code: error.code } : {}),
+    ...(typeof error.retryable === 'boolean' ? { retryable: error.retryable } : {}),
+  };
+}
+
 // Matches vocabulary that names mutable live state (branches, PRs, CI, deploys,
 // migrations, queues) in English or Korean. Used both to flag a bootstrap
 // result as needing live verification and to classify a correction query.

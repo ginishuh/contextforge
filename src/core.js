@@ -20,9 +20,13 @@ import {
 import {
   clampImportance,
   contentHash,
+  errorSummary,
   liveStateTermsMatch,
+  normalizeConsultReason,
   normalizeToken,
+  requireOption,
   summarySnippet,
+  truthyOption,
 } from './common.js';
 import {
   errorUsageMetadata,
@@ -47,6 +51,16 @@ import {
   tokenOverlapScore,
 } from './memory/candidate_text.js';
 import { buildMemoryCandidateBacklog } from './memory/candidate_backlog.js';
+import {
+  buildMemoryCluster,
+  buildMemoryMap,
+  fullClusterMemory,
+  memoryClusterId,
+  memoryClusterText,
+  memoryMapEmbeddingState,
+  mergeWarnings,
+  vectorRelationScore,
+} from './memory/memory_map.js';
 import {
   AUDIT_CANDIDATE_CATEGORIES,
   AUDIT_CANDIDATE_SKIP_WARNING_CODES,
@@ -97,21 +111,12 @@ import {
 import { runWithRequestContext } from './runtime/request_context.js';
 import { normalizeScopeOptions } from './scopes/index.js';
 import { ContextForgeStore } from './storage/sqlite.js';
+import { workspaceProfileMethods } from './workspaces/methods.js';
 import {
   normalizeWorkspaceKey,
-  normalizeWorkspaceMemberInput,
   normalizeWorkspaceMode,
-  normalizeWorkspaceProfileInput,
-  normalizeWorkspaceRoutingRuleInput,
-  normalizeScopeType,
   resolveWorkspaceScopePlan,
 } from './workspaces/resolve.js';
-
-function requireOption(value, name) {
-  if (value == null || value === '') {
-    throw new Error(`${name} is required.`);
-  }
-}
 
 function executionKey(...parts) {
   return parts.map((part) => JSON.stringify(part == null ? null : String(part))).join(':');
@@ -298,28 +303,6 @@ function positiveInteger(value, name) {
   return parsed;
 }
 
-const CONSULT_REASONS = new Set([
-  'startup',
-  'resume',
-  'compaction_recovery',
-  'agent_switch',
-  'targeted_search',
-  'live_state_check',
-  'active_session',
-  'unknown',
-]);
-
-function normalizeConsultReason(value) {
-  const reason = String(value || 'unknown')
-    .trim()
-    .toLowerCase()
-    .replace(/[-\s]+/g, '_');
-  if (!CONSULT_REASONS.has(reason)) {
-    throw new Error(`consultReason must be one of: ${Array.from(CONSULT_REASONS).join(', ')}.`);
-  }
-  return reason;
-}
-
 function withStore(config, fn) {
   const store = new ContextForgeStore({ dataDir: config.dataDir, migrationBackupKeep: config.migrationBackupKeep });
   try {
@@ -352,16 +335,6 @@ function checkpointText(checkpoint) {
   ]
     .filter(Boolean)
     .join('\n');
-}
-
-function errorSummary(error) {
-  if (!error) return null;
-  return {
-    name: error.name || 'Error',
-    message: error.message || String(error),
-    ...(error.code ? { code: error.code } : {}),
-    ...(typeof error.retryable === 'boolean' ? { retryable: error.retryable } : {}),
-  };
 }
 
 function rethrowExternalProviderTestError(error) {
@@ -700,274 +673,8 @@ function compactAgentCloseoutResult({ status, checkpoint, audit, suggestions, au
   };
 }
 
-function clampNumber(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
-
 function memoryMapLimit(value, fallback, name) {
   return Math.min(20, positiveInteger(value == null ? fallback : Number(value), name));
-}
-
-function memoryClusterId(scope, memory) {
-  return `cluster:${contentHash(`${scope.scopeType}:${scope.scopeKey}:${memory.key || memory.id}`).slice(0, 12)}`;
-}
-
-function memoryClusterText(memory) {
-  return [
-    memory.key,
-    memory.category,
-    ...(Array.isArray(memory.tags) ? memory.tags : []),
-    memory.content,
-  ]
-    .filter(Boolean)
-    .join('\n');
-}
-
-function memoryCompact(memory, maxChars = 260) {
-  return {
-    memoryId: memory.id,
-    key: memory.key,
-    category: memory.category,
-    content: summarySnippet(memory.content, maxChars),
-    tags: Array.isArray(memory.tags) ? memory.tags : [],
-    importance: memory.importance,
-    updatedAt: memory.updatedAt,
-  };
-}
-
-function memoryTagOverlap(left, right) {
-  const leftTags = new Set((left.tags || []).map((tag) => normalizeToken(tag)).filter(Boolean));
-  const rightTags = new Set((right.tags || []).map((tag) => normalizeToken(tag)).filter(Boolean));
-  if (!leftTags.size || !rightTags.size) return 0;
-  let shared = 0;
-  for (const tag of leftTags) {
-    if (rightTags.has(tag)) shared += 1;
-  }
-  return shared / Math.max(leftTags.size, rightTags.size);
-}
-
-function memoryKeyAffinity(left, right) {
-  const leftParts = String(left.key || '').split(/[._:/-]+/).filter(Boolean);
-  const rightParts = String(right.key || '').split(/[._:/-]+/).filter(Boolean);
-  if (!leftParts.length || !rightParts.length) return 0;
-  if (left.key === right.key) return 1;
-  if (leftParts[0] && leftParts[0] === rightParts[0]) return 0.3;
-  return 0;
-}
-
-function memoryRelationScore(seed, memory, hitScore = 0, vectorScore = 0) {
-  if (seed.id === memory.id) return 1 + hitScore + vectorScore;
-  const overlap = tokenOverlapScore(memoryClusterText(seed), memoryClusterText(memory));
-  const category = seed.category && seed.category === memory.category ? 0.16 : 0;
-  const tags = memoryTagOverlap(seed, memory) * 0.22;
-  const key = memoryKeyAffinity(seed, memory) * 0.18;
-  const vector = Math.min(0.34, vectorScore * 0.34);
-  return overlap + category + tags + key + Math.min(0.16, hitScore / 10000) + vector;
-}
-
-function vectorRelationScore(distance) {
-  const parsed = Number(distance);
-  if (!Number.isFinite(parsed)) return 0;
-  return 1 / (1 + Math.max(0, parsed));
-}
-
-function memoryMapEmbeddingState(storage, { queryEmbedding = null, relationEmbeddingsUsed = false } = {}) {
-  const vectorUsable = Boolean(storage.vectorReady && (queryEmbedding || relationEmbeddingsUsed));
-  const degraded = !vectorUsable || storage.vectorState !== 'ready';
-  const reasons = [];
-  if (!queryEmbedding && !relationEmbeddingsUsed) reasons.push('query_embedding_unavailable');
-  if (!relationEmbeddingsUsed) reasons.push('relation_embeddings_unavailable');
-  if (!storage.vectorReady) reasons.push('vector_index_not_ready');
-  if (storage.vectorStaleSources > 0) reasons.push('embedding_sources_stale');
-  if (storage.vectorPendingJobs > 0) reasons.push('embedding_jobs_pending');
-  if (storage.vectorFailedJobs > 0) reasons.push('embedding_jobs_failed');
-  return {
-    provider: storage.embeddingProvider,
-    vectorReady: storage.vectorReady,
-    vectorState: storage.vectorState,
-    used: vectorUsable,
-    relationEmbeddingsUsed,
-    degraded,
-    reasons,
-    staleSources: storage.vectorStaleSources,
-    pendingJobs: storage.vectorPendingJobs,
-    failedJobs: storage.vectorFailedJobs,
-  };
-}
-
-function buildMemoryCluster({
-  scope,
-  seed,
-  allMemories,
-  hitScores,
-  vectorRelations = new Map(),
-  limit,
-  embedding,
-  canonicalMemory = null,
-}) {
-  const seedVectorRelations = vectorRelations.get(seed.id) || new Map();
-  const scored = allMemories
-    .map((memory) => {
-      const vectorRelation = seedVectorRelations.get(memory.id) || null;
-      return {
-        memory,
-        relationScore: memoryRelationScore(
-          seed,
-          memory,
-          hitScores.get(memory.id) || 0,
-          vectorRelation?.score || 0,
-        ),
-        vectorRelation,
-      };
-    })
-    .filter((item) => seed.id === item.memory.id || item.relationScore >= 0.18)
-    .sort(
-      (a, b) =>
-        b.relationScore - a.relationScore ||
-        (Number(b.memory.importance) || 0) - (Number(a.memory.importance) || 0) ||
-        String(b.memory.updatedAt || '').localeCompare(String(a.memory.updatedAt || '')),
-    )
-    .slice(0, limit);
-  const canonical =
-    canonicalMemory ||
-    scored
-      .map((item) => item.memory)
-      .sort(
-        (a, b) =>
-          (Number(b.importance) || 0) - (Number(a.importance) || 0) ||
-          (hitScores.get(b.id) || 0) - (hitScores.get(a.id) || 0) ||
-          String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')),
-      )[0] ||
-    seed;
-  const confidenceBase = embedding.degraded ? 0.56 : 0.76;
-  const confidence = clampNumber(confidenceBase + Math.min(0.18, scored.length * 0.03), 0.3, 0.95);
-  return {
-    clusterId: memoryClusterId(scope, canonical),
-    scope: {
-      scopeType: scope.scopeType,
-      scopeKey: scope.scopeKey,
-    },
-    canonicalKey: canonical.key,
-    category: canonical.category,
-    confidence: Number(confidence.toFixed(2)),
-    degraded: embedding.degraded,
-    degradedReasons: embedding.reasons,
-    consolidatedMemory: {
-      ...memoryCompact(canonical, 420),
-      coverageCount: scored.length,
-      relatedKeys: scored.map((item) => item.memory.key).filter((key) => key !== canonical.key),
-    },
-    members: scored.map((item) => ({
-      ...memoryCompact(item.memory, 220),
-      relationScore: Number(item.relationScore.toFixed(3)),
-      vectorDistance: item.vectorRelation?.distance ?? null,
-      vectorScore: item.vectorRelation ? Number(item.vectorRelation.score.toFixed(3)) : null,
-      canonical: item.memory.id === canonical.id,
-    })),
-    retrievalHooks: {
-      expand: {
-        tool: 'expand_memory_cluster',
-        method: 'expandMemoryCluster',
-        clusterId: memoryClusterId(scope, canonical),
-      },
-      searches: [
-        canonical.key,
-        canonical.category,
-        ...(Array.isArray(canonical.tags) ? canonical.tags : []),
-      ].filter(Boolean).slice(0, 6),
-    },
-  };
-}
-
-function buildMemoryMap(
-  store,
-  scope,
-  { query, searchResults = [], storage, queryEmbedding, vectorRelations = new Map(), limit = 5, clusterSize = 6 },
-) {
-  const embedding = memoryMapEmbeddingState(storage, {
-    queryEmbedding,
-    relationEmbeddingsUsed: vectorRelations.size > 0,
-  });
-  const allMemories = store.listMemories(scope);
-  const memoryResults = searchResults.filter((result) => result.type === 'memory' && result.memory);
-  const hitScores = new Map(memoryResults.map((result) => [result.memory.id, Number(result.score) || 0]));
-  const seeds = memoryResults.map((result) => result.memory);
-  const clusters = [];
-  const coveredIds = new Set();
-  for (const seed of seeds) {
-    if (coveredIds.has(seed.id)) continue;
-    const cluster = buildMemoryCluster({
-      scope,
-      seed,
-      allMemories,
-      hitScores,
-      vectorRelations,
-      limit: clusterSize,
-      embedding,
-    });
-    const overlap = cluster.members.some((member) => coveredIds.has(member.memoryId));
-    if (overlap && cluster.members.length > 1) {
-      continue;
-    }
-    clusters.push(cluster);
-    for (const member of cluster.members) coveredIds.add(member.memoryId);
-    if (clusters.length >= limit) break;
-  }
-  return {
-    kind: 'memory_map',
-    scope: {
-      scopeType: scope.scopeType,
-      scopeKey: scope.scopeKey,
-    },
-    query,
-    policy: {
-      navigation: 'map_first_expand_on_demand',
-      detail: 'Use consolidatedMemory for orientation, expand a cluster only when atomic details are needed.',
-      provenance: 'Fetch provenance only when needed.',
-    },
-    embedding,
-    limits: {
-      clusters: limit,
-      clusterSize,
-      maxLimit: 20,
-      activeMemoryCount: allMemories.length,
-      seedCount: seeds.length,
-    },
-    clusters,
-    summary:
-      clusters.length === 0
-        ? 'No durable-memory clusters found for this query.'
-        : `Found ${clusters.length} durable-memory cluster(s); expand a cluster on demand for atomic memories.`,
-  };
-}
-
-function fullClusterMemory(memory) {
-  return {
-    memoryId: memory.id,
-    key: memory.key,
-    category: memory.category,
-    content: memory.content,
-    tags: Array.isArray(memory.tags) ? memory.tags : [],
-    importance: memory.importance,
-    createdAt: memory.createdAt,
-    updatedAt: memory.updatedAt,
-  };
-}
-
-function mergeWarnings(warnings, extraWarnings) {
-  const merged = [];
-  const seen = new Set();
-  for (const warning of [...warnings, ...extraWarnings].filter(Boolean)) {
-    const key = `${warning.code}:${warning.memoryId || ''}:${warning.memoryKey || ''}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    merged.push(warning);
-  }
-  return merged;
-}
-
-function truthyOption(value) {
-  return value === true || value === 'true' || value === '1' || value === 1;
 }
 
 const CLOSEOUT_TRIGGERS = new Set([
@@ -2410,6 +2117,7 @@ export function createContextForge(options = {}) {
     config,
     ...candidateDispositionMethods({ config, useStore }),
     ...candidateStaleSlaMethods({ config, useStore }),
+    ...workspaceProfileMethods({ useStore }),
     ...candidateBacklogAuditPlanMethods({
       config, useStore, getEffectiveRuntime, getAutoPromoteAuditor, normalizeAllowedCategories,
       auditCategories: AUDIT_CANDIDATE_CATEGORIES, auditCandidateWarnings, scorePromotionCandidate,
@@ -2470,110 +2178,6 @@ export function createContextForge(options = {}) {
           dryRun: options.dryRun == null ? true : truthyOption(options.dryRun),
         }),
       );
-    },
-
-    upsertWorkspaceProfile(options = {}) {
-      const profile = normalizeWorkspaceProfileInput(options);
-      return useStore((store) => store.upsertWorkspaceProfile(profile));
-    },
-
-    getWorkspaceProfile(options = {}) {
-      const workspaceKey = normalizeWorkspaceKey(options.workspaceKey);
-      const includeInactive = truthyOption(options.includeInactive);
-      return useStore((store) => {
-        const profile = store.getWorkspaceProfileByKey({ workspaceKey, includeInactive });
-        if (!profile) {
-          return null;
-        }
-        return {
-          ...profile,
-          members: store.listWorkspaceMembers({ workspaceKey }),
-          routingRules: store.listWorkspaceRoutingRules({
-            workspaceKey,
-            status: includeInactive ? 'all' : 'active',
-          }),
-        };
-      });
-    },
-
-    listWorkspaceProfiles(options = {}) {
-      return useStore((store) =>
-        store.listWorkspaceProfiles({
-          status: options.status || 'active',
-          limit: options.limit == null ? 100 : Number(options.limit),
-        }),
-      );
-    },
-
-    deleteWorkspaceProfile(options = {}) {
-      const workspaceKey = normalizeWorkspaceKey(options.workspaceKey);
-      return useStore((store) => {
-        const profile = store.setWorkspaceProfileStatus({ workspaceKey, status: 'inactive' });
-        if (!profile) {
-          throw new Error(`Workspace profile not found: ${workspaceKey}`);
-        }
-        return profile;
-      });
-    },
-
-    deactivateWorkspaceProfile(options = {}) {
-      return this.deleteWorkspaceProfile(options);
-    },
-
-    upsertWorkspaceMember(options = {}) {
-      const member = normalizeWorkspaceMemberInput(options);
-      return useStore((store) => store.upsertWorkspaceMember(member));
-    },
-
-    removeWorkspaceMember(options = {}) {
-      const workspaceKey = normalizeWorkspaceKey(options.workspaceKey);
-      const name = options.memberName || options.name || null;
-      const scopeType = options.scope || options.scopeType ? normalizeScopeType(options.scope || options.scopeType) : null;
-      const scopeKey = options.scopeKey || null;
-      return useStore((store) =>
-        store.removeWorkspaceMember({
-          workspaceKey,
-          name,
-          scopeType,
-          scopeKey,
-        }),
-      );
-    },
-
-    upsertWorkspaceRoutingRule(options = {}) {
-      const rule = normalizeWorkspaceRoutingRuleInput(options);
-      return useStore((store) => store.upsertWorkspaceRoutingRule(rule));
-    },
-
-    removeWorkspaceRoutingRule(options = {}) {
-      const workspaceKey = normalizeWorkspaceKey(options.workspaceKey);
-      requireOption(options.ruleKey, 'ruleKey');
-      return useStore((store) => store.removeWorkspaceRoutingRule({ workspaceKey, ruleKey: options.ruleKey }));
-    },
-
-    resolveWorkspace(options = {}) {
-      const mode = normalizeWorkspaceMode(options.workspaceMode || options.mode || 'auto');
-      const workspaceKey = normalizeWorkspaceKey(options.workspaceKey);
-      const primaryScope = options.primaryScope || options.primaryScopeType || options.scope || options.scopeType || 'repo';
-      const primaryScopeKey = options.primaryScopeKey || options.scopeKey;
-      requireOption(primaryScopeKey, 'primaryScopeKey');
-      const consultReason = options.consultReason ? normalizeConsultReason(options.consultReason) : 'unknown';
-      return useStore((store) => {
-        const workspace = store.getWorkspaceProfileByKey({ workspaceKey, includeInactive: true });
-        const members = workspace ? store.listWorkspaceMembers({ workspaceKey }) : [];
-        const routingRules = workspace ? store.listWorkspaceRoutingRules({ workspaceKey, status: 'all' }) : [];
-        return resolveWorkspaceScopePlan({
-          workspace,
-          members,
-          routingRules,
-          primaryScope,
-          primaryScopeKey,
-          query: options.query || '',
-          consultReason,
-          mode,
-          includeShared: truthyOption(options.includeShared),
-        });
-      });
     },
 
     getRuntimeSettings() {
