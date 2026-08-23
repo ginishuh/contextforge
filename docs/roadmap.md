@@ -80,12 +80,13 @@ Remaining:
   and the gap is narrower than it first looks. Scope isolation in retrieval is
   real: `repo+shared` never includes `local`, workspace members need
   `allowLocal`, and a token scoped to `repo` gets a 403 writing to `local`.
-  What has no rule is whether a machine-local note should reach a shared server
-  at all — a remote client writing `scope: 'local'` lands in the server's local
-  scope, and nothing says whether that is intended. `docs/architecture.md` is
-  explicit that remote mode does not change scope semantics, so this is a
-  product question about `local` in a networked deployment rather than a
-  contradiction between documents.
+  What is open is narrower: `docs/architecture.md` and `docs/runtime-modes.md`
+  both describe the current design — remote mode does not change scope
+  semantics, and the server owns reads and writes for all three — so a remote
+  client writing `scope: 'local'` lands in the server's local scope as
+  designed. Whether that design suits a scope whose stated purpose is
+  machine-specific state is the undecided part, not a contradiction between
+  documents.
 - No regression test covers the server being unreachable. The visible-failure
   guarantee is tested for authorization failures (401) but not for connection
   refusal or client timeout.
@@ -242,9 +243,10 @@ Initial implementation:
 
 Grown well past the original goals since:
 
-The registry classifies 24 of 88 registered operations as `review` capability,
-which makes this the largest area of the operation surface after plain reads.
-None of the following was in the goals above. It is recorded here rather than
+The registry classifies 24 of 88 registered operations as `review` capability —
+four times the entire `write` surface (6), and level with `operator` (25).
+Reviewing memory now takes about as much API as running the system does. None
+of the following was in the goals above. It is recorded here rather than
 left implicit, because a reader deciding what to work on next should see where
 the code actually went.
 

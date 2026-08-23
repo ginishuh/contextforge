@@ -37,6 +37,32 @@ test('the roadmap states the operation counts the registry actually has', async 
   );
 });
 
+test('the roadmap compares review against the capability counts that exist', async () => {
+  const roadmap = await fs.readFile('docs/roadmap.md', 'utf8');
+  const counts = {};
+  for (const entry of OPERATION_REGISTRY) {
+    counts[entry.capability] = (counts[entry.capability] || 0) + 1;
+  }
+  // The earlier wording called review the largest surface after reads, which
+  // stopped being true the moment the count was corrected downward. Comparisons
+  // drift as quietly as counts do, so the numbers behind them are pinned too.
+  const writeClaim = roadmap.match(/entire `write` surface \((\d+)\)/);
+  const operatorClaim = roadmap.match(/level with `operator` \((\d+)\)/);
+  assert.ok(writeClaim && operatorClaim, 'the roadmap should cite the write and operator counts it compares against');
+  assert.equal(Number(writeClaim[1]), counts.write, `roadmap says write is ${writeClaim[1]}, registry has ${counts.write}`);
+  assert.equal(
+    Number(operatorClaim[1]),
+    counts.operator,
+    `roadmap says operator is ${operatorClaim[1]}, registry has ${counts.operator}`,
+  );
+  // "level with" has to stay honest: review must not overtake operator without
+  // the sentence being rewritten.
+  assert.ok(
+    Math.abs(counts.review - counts.operator) <= 2,
+    `review ${counts.review} and operator ${counts.operator} are no longer level; reword the comparison`,
+  );
+});
+
 test('no milestone is left describing shipped work as in progress', async () => {
   const roadmap = await fs.readFile('docs/roadmap.md', 'utf8');
   // Not a style rule: this exact phrase is what went stale, and it stayed
