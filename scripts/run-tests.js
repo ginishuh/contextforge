@@ -24,6 +24,23 @@ await fs.mkdir(artifactDir, { recursive: true });
 await fs.rm(junitPath, { force: true });
 await fs.rm(summaryPath, { force: true });
 
+// Enumerate real paths rather than handing the runner a glob: Node only expands
+// glob arguments from v21 on, and the supported floor is Node 20, where the same
+// string is taken literally and the run dies with "Could not find".
+async function collectTestFiles(dir) {
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+  const files = [];
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    const entryPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...(await collectTestFiles(entryPath)));
+    } else if (entry.isFile() && entry.name.endsWith('.test.js')) {
+      files.push(entryPath);
+    }
+  }
+  return files;
+}
+
 const testArgs = [
   '--test',
   '--test-reporter=spec',
@@ -44,6 +61,17 @@ if (live && !hasExplicitTestPath) {
     process.exit(2);
   }
   testArgs.push(...liveTests);
+} else if (!hasExplicitTestPath) {
+  // Node's default glob treats every `.js` file under `test/` as a test file, so
+  // shared helper modules would be reported as empty test files. Name the suite
+  // explicitly instead; this selects the same files the default glob found.
+  const testDir = path.resolve('test');
+  const testFiles = await collectTestFiles(testDir);
+  if (testFiles.length === 0) {
+    console.error(`No tests found in ${testDir}.`);
+    process.exit(2);
+  }
+  testArgs.push(...testFiles);
 }
 
 const startedAt = Date.now();
