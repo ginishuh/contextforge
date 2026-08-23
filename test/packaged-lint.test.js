@@ -28,11 +28,14 @@ test('packed package can run the documented source lint', async () => {
     const budgetFile = path.join(packageDir, 'scripts', 'line-budgets.json');
     const budgets = JSON.parse(await fs.readFile(budgetFile, 'utf8'));
     assert.ok(Object.keys(budgets.budgets).length > 0, 'packed budget manifest is empty');
-    assert.ok(
-      Object.keys(budgets.budgets).some((file) => file.startsWith('test/')),
-      'expected a budgeted path under a root the package omits',
-    );
     await assert.rejects(fs.stat(path.join(packageDir, 'test')), 'package unexpectedly ships test/');
+
+    // No repository file under test/ is large enough to carry a budget any
+    // more, so the omitted-root tolerance is exercised by writing the entry the
+    // package would leave unreachable instead of relying on the real manifest
+    // to happen to contain one.
+    budgets.budgets['test/omitted-root.test.js'] = 4096;
+    await fs.writeFile(budgetFile, `${JSON.stringify(budgets, null, 2)}\n`);
 
     const lint = await execFileAsync('node', ['scripts/lint-source.js'], { cwd: packageDir });
     assert.match(lint.stdout, /Source lint passed/);

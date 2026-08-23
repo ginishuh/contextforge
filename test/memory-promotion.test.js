@@ -989,3 +989,24 @@ test('auditMemoryDuplicates limits persisted update candidates after sorting and
     1,
   );
 });
+
+test('memory tags are normalized before FTS indexing', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+
+  const memory = app.remember({
+    scope: 'repo',
+    scopeKey: 'repo-tags',
+    key: 'string-tags',
+    content: 'String tags should not break memory indexing.',
+    tags: 'not-an-array',
+  });
+
+  assert.deepEqual(memory.tags, []);
+  const results = app.search({
+    scope: 'repo',
+    scopeKey: 'repo-tags',
+    query: 'indexing',
+  });
+  assert.equal(results[0].memory.key, 'string-tags');
+});
