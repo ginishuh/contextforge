@@ -991,3 +991,39 @@ test('a block comment closed on the same line leaves the check running', async (
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
+
+test('snake_case bindings are checked in both directions', async () => {
+  const directory = await makeWorkspace({});
+  try {
+    await fs.writeFile(
+      path.join(directory, 'src/dep.js'),
+      'export default 1;\nexport const dead_name = 2;\nexport const used_name = 3;\n',
+    );
+    // `_` is ID_Continue, so these work already; the test pins that against a
+    // future narrowing of the identifier pattern.
+    await fs.writeFile(
+      path.join(directory, 'src/app.js'),
+      "import dead_name from './dep.js';\n\nconsole.log(1);\n",
+    );
+    const defaultUnused = await runLint(directory);
+    assert.equal(defaultUnused.code, 1);
+    assert.match(defaultUnused.stderr, /unused import dead_name/);
+
+    await fs.writeFile(
+      path.join(directory, 'src/app.js'),
+      "import { dead_name } from './dep.js';\n\nconsole.log(1);\n",
+    );
+    const namedUnused = await runLint(directory);
+    assert.equal(namedUnused.code, 1);
+    assert.match(namedUnused.stderr, /unused import dead_name/);
+
+    await fs.writeFile(
+      path.join(directory, 'src/app.js'),
+      "import { used_name } from './dep.js';\n\nconsole.log(used_name);\n",
+    );
+    const used = await runLint(directory);
+    assert.equal(used.code, 0, used.stderr);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
