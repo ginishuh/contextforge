@@ -4,9 +4,9 @@
 
 - Corrected the roadmap. Milestones 2 and 3 still said "initial implementation
   in progress" months after shipping, workspace federation had no entry, and
-  the candidate lifecycle that grew out of fixing automatic promotion (#208) was
-  not recorded anywhere. Whether that lifecycle is more than the problem needed
-  is now an open decision.
+  the candidate lifecycle that grew out of fixing automatic promotion (#208) had
+  no roadmap entry. Whether that lifecycle is more than the problem needed is
+  now an open decision.
 - Bounded pre-migration backups. Each schema migration copies the whole
   database and nothing ever removed those copies, so on a 400KB database the
   backups had already grown to nearly twice the live data. They are now pruned

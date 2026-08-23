@@ -275,7 +275,7 @@ returns a separate block.
 
 ## Follow-Up Issue Split
 
-Each milestone after v0 has a focused tracking issue:
+Most milestones after v0 have a focused tracking issue:
 
 - #5: provider abstraction hardening
 - #8: remote storage mode
