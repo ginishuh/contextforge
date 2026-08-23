@@ -24,11 +24,9 @@ await fs.mkdir(artifactDir, { recursive: true });
 await fs.rm(junitPath, { force: true });
 await fs.rm(summaryPath, { force: true });
 
-// Enumerate real paths rather than handing the runner a glob. The original
-// reason was the Node 20 floor, which took the glob literally and died with
-// "Could not find"; the floor is Node 22 now, so that no longer applies. The
-// enumeration stays because it fixes the execution order (sorted, depth-first),
-// which keeps the per-file duration artifacts comparable between runs.
+// Enumerate real paths rather than handing the runner a glob: the fixed
+// execution order (sorted, depth-first) keeps the per-file duration
+// artifacts comparable between runs.
 async function collectTestFiles(dir) {
   const entries = await fs.readdir(dir, { withFileTypes: true });
   const files = [];

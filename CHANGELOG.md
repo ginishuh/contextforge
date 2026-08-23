@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Raised the supported Node floor from 20 to 22 and upgraded better-sqlite3
+  to 13.x. The 13.x native addon targets Node-API 10, which Node 20 does not
+  provide — loading it there segfaults rather than failing cleanly — and
+  Node 20 reached end of life in April 2026. The CI test matrix now covers
+  Node 22 and 24.
+
 - Corrected the roadmap. Milestones 2 and 3 still said "initial implementation
   in progress" months after shipping, workspace federation had no entry, and
   the candidate lifecycle that grew out of fixing automatic promotion (#208) had
