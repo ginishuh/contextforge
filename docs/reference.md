@@ -260,7 +260,7 @@ effort `low` before any automatic durable-memory promotion.
 
 Requirements:
 
-- Node.js 20 or newer
+- Node.js 22 or newer
 
 Install dependencies:
 
@@ -506,7 +506,7 @@ Use this path on the VPS or always-on machine that should own the canonical
 ContextForge database. Client machines should use the later "New Machine Setup"
 section instead.
 
-1. Install Node.js 20 or newer and git. Install a reverse proxy such as nginx
+1. Install Node.js 22 or newer and git. Install a reverse proxy such as nginx
 or Caddy if this server will be exposed on the public internet.
 
 2. Create a dedicated runtime user and directories:

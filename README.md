@@ -50,7 +50,7 @@ version in CI.
 
 ## Quick Start
 
-Requirements: Node.js 20 or newer.
+Requirements: Node.js 22 or newer.
 
 ```bash
 npm install

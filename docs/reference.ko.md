@@ -303,7 +303,7 @@ timeout 조정 기준은 [Memory candidate lifecycle](memory-candidate-lifecycle
 
 요구사항:
 
-- Node.js 20 이상
+- Node.js 22 이상
 
 설치:
 
