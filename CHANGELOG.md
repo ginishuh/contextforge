@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Bounded pre-migration backups. Each schema migration copies the whole
+  database and nothing ever removed those copies, so on a 400KB database the
+  backups had already grown to nearly twice the live data. They are now pruned
+  to the newest `CONTEXTFORGE_MIGRATION_BACKUP_KEEP` (default `3`) after a
+  migration succeeds, never below one, and `dbInfo` reports the remaining
+  count and bytes. A failed migration prunes nothing, and only files matching
+  the `pre-migration-v*` naming are considered.
 - Started decomposing the core facade and changed how its size is enforced.
   LLM usage accounting moved out of `src/core.js` into
   `src/application/llm_usage.js`, which removes 324 lines from the facade

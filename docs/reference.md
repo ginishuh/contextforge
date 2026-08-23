@@ -113,6 +113,10 @@ See [docs/architecture.md](architecture.md) for the full product model and
 [docs/roadmap.md](roadmap.md) for the implementation roadmap. For the
 operator-facing distinction between local all-in-one, HTTP server, and external
 remote client roles, see [ContextForge Runtime Modes](runtime-modes.md).
+`CONTEXTFORGE_MIGRATION_BACKUP_KEEP` (default `3`) bounds how many
+`pre-migration-v*.bak` copies are kept after a successful migration. See
+`docs/operations.md` for what is pruned and what never is.
+
 For readiness, metrics, verified backup/restore, and graceful shutdown, see
 [ContextForge Operations](operations.md).
 
