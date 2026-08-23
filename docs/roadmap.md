@@ -46,7 +46,8 @@ Goals:
 - server-backed canonical memory
 - client auth
 - one canonical store shared by every machine, with scope keys that resolve to
-  the same scope regardless of checkout path
+  the same scope across checkouts when a supported git remote or an explicit
+  scope key is available
 - visible failure when the server is unreachable, rather than an offline cache
   or silent local write
 - clear shared/repo/local write policy
@@ -75,14 +76,23 @@ Implemented:
 
 Remaining:
 
-- `clear shared/repo/local write policy` is prose, not code.
-  `docs/architecture.md` says `local` should not leak into shared or remote
-  scopes, while `docs/runtime-modes.md` says the remote server owns reads and
-  writes for all three. Nothing enforces either, and a remote client writing
-  `scope: 'local'` lands in the server's local scope.
+- `clear shared/repo/local write policy` is partly enforced and partly absent,
+  and the gap is narrower than it first looks. Scope isolation in retrieval is
+  real: `repo+shared` never includes `local`, workspace members need
+  `allowLocal`, and a token scoped to `repo` gets a 403 writing to `local`.
+  What has no rule is whether a machine-local note should reach a shared server
+  at all — a remote client writing `scope: 'local'` lands in the server's local
+  scope, and nothing says whether that is intended. `docs/architecture.md` is
+  explicit that remote mode does not change scope semantics, so this is a
+  product question about `local` in a networked deployment rather than a
+  contradiction between documents.
 - No regression test covers the server being unreachable. The visible-failure
   guarantee is tested for authorization failures (401) but not for connection
   refusal or client timeout.
+- Scope keys only survive a change of checkout path when a supported git remote
+  is present or a scope key is configured. Without either, the key falls back to
+  a path-derived hash, and the same repository checked out at two paths reads
+  and writes two different scopes.
 
 ## Milestone 3: Shared + Repo Retrieval
 
@@ -96,7 +106,8 @@ Goals:
 - allow querying `repo` and `shared` together
 - keep `local` opt-in
 - provide result source metadata
-- favor exact repo memory while including useful shared rules
+- prefer repo memory over equally relevant shared memory, while still
+  returning useful shared rules
 
 Implemented:
 
@@ -110,11 +121,11 @@ Implemented:
 
 Remaining:
 
-- Repo preference is a tie-breaker, not a ranking policy. `scopeBoost` sorts
-  after relevance, so a shared result outranks a repo result whenever their
-  scores differ at all, and scoring itself never looks at scope.
-  `docs/architecture.md` states this accurately ("ahead of equally relevant
-  shared memory"); the goal wording above promises more than that.
+- The goal above was reworded to match this: repo preference is a tie-breaker,
+  not a ranking policy. `scopeBoost` sorts after relevance, so a shared result
+  outranks a repo result whenever their scores differ at all, and scoring
+  itself never looks at scope. Whether a scope-aware ranking signal is wanted
+  is still undecided.
 - The scope-leakage slice in the quality eval exercises `bootstrapContext`'s
   `includeShared` merge, not `searchScopes`. The `repo+shared` exclusion of
   `local` rests on a single unit test.
@@ -320,12 +331,15 @@ Implemented:
 - a federation block on `search` and `bootstrapContext` carrying per-member
   results with role and workspace metadata
 - member-level scope permissions, including `allowLocal` gating
-- workspace-scoped repository aliases and scope migration
 
 Remaining:
 
 - no tracking issue, and no entry in the follow-up split below
 - the relationship to Milestone 3 is undocumented outside this paragraph
+- scope aliases and `migrateScope` are global rather than workspace-scoped:
+  `CONTEXTFORGE_SCOPE_ALIASES` is read once into config and `migrateScope` is
+  an ordinary scope operation. A workspace cannot carry its own alias table or
+  migration contract.
 
 ## Open Decisions
 
@@ -344,9 +358,11 @@ Remaining:
   sits on top of has not moved in comparison. Deciding this is a prerequisite
   for planning anything else, because it determines whether the next work
   extends the review surface or deliberately stops.
-- Should `local` scope be writable through a remote server? Milestone 2 records
-  the contradiction; resolving it means picking one of the two documented
-  positions and enforcing it in code.
+- Should `local` scope be writable through a remote server? Scope semantics are
+  deliberately unchanged by remote mode, so today a machine-local note goes to
+  the shared server like anything else. Whether that is right for a scope whose
+  stated purpose is machine-specific state is undecided; Milestone 2 records
+  what is and is not enforced.
 - Should embedding queue dead-letter/max-attempt behavior preserve stale reset
   attempts, reset them, or introduce a separate retry budget?
 - Should large-store coverage and `dbInfo` checks move to SQL aggregation or
