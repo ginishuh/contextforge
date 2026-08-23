@@ -208,73 +208,74 @@ function baseBudgetViolations(baseBudgets, candidate, measured, budgetFile) {
   return violations;
 }
 
-// Marks which lines *begin* in code rather than inside a block comment or a
-// template literal. A column-0 `import` inside either is text, not a statement,
-// and treating it as one would fail the lint over a name that was never
-// imported. Regex literals are not tracked: only `/*` matters here, and a
-// regex containing it is vanishingly rare next to a code-generating template.
-function codeContextLines(lines) {
-  const inCode = [];
-  let blockComment = false;
-  let template = false;
-  for (const line of lines) {
-    inCode.push(!blockComment && !template);
-    for (let index = 0; index < line.length; index += 1) {
-      const pair = line.slice(index, index + 2);
-      if (blockComment) {
-        if (pair === '*/') { blockComment = false; index += 1; }
-        continue;
-      }
-      if (template) {
-        if (line[index] === '\\') index += 1;
-        else if (line[index] === '`') template = false;
-        continue;
-      }
-      if (pair === '//') break;
-      if (pair === '/*') { blockComment = true; index += 1; continue; }
-      if (line[index] === '`') { template = true; continue; }
-      if (line[index] === "'" || line[index] === '"') {
-        const quote = line[index];
-        index += 1;
-        while (index < line.length && line[index] !== quote) {
-          if (line[index] === '\\') index += 1;
-          index += 1;
-        }
-      }
-    }
-  }
-  return inCode;
-}
+// Reading arbitrary JavaScript with regular expressions kept producing both
+// misses and — worse — false failures on valid code: a block comment between
+// specifiers, a regex literal holding a backtick, an attribute clause ended by
+// ASI. Each fix grew the patterns and opened another hole.
+//
+// So the scan no longer tries to find imports anywhere in a file. It reads only
+// the leading run of imports at the top, stopping at the first line that is not
+// blank, a line comment, or an import statement. A template literal, a regex,
+// or a commented-out import cannot appear in that run, which removes the whole
+// class of context-tracking bugs rather than patching them one at a time.
+//
+// The cost is that an import placed after other code is not checked. That is a
+// miss, never a false failure, and this repository puts imports at the top.
 
-// Drops a line's trailing comment without being fooled by one inside a string,
-// so a path like './a//b.js' survives while `// from './fake.js'` does not.
-function stripComment(line) {
+// Strips comments from one line while carrying block-comment state across
+// lines. String literals are preserved, since the `from '...'` clause has to
+// survive for the end test.
+function stripCommentsStateful(line, state) {
+  let code = '';
   for (let index = 0; index < line.length; index += 1) {
-    const character = line[index];
-    if (character === "'" || character === '"' || character === '`') {
-      index += 1;
-      while (index < line.length && line[index] !== character) {
-        if (line[index] === '\\') index += 1;
+    if (state.blockComment) {
+      if (line.slice(index, index + 2) === '*/') {
+        state.blockComment = false;
         index += 1;
       }
       continue;
     }
+    const character = line[index];
+    if (character === "'" || character === '"' || character === '`') {
+      code += character;
+      index += 1;
+      while (index < line.length && line[index] !== character) {
+        if (line[index] === '\\') {
+          code += line[index];
+          index += 1;
+        }
+        code += line[index];
+        index += 1;
+      }
+      if (index < line.length) code += line[index];
+      continue;
+    }
     const pair = line.slice(index, index + 2);
-    if (pair === '//' || pair === '/*') return line.slice(0, index);
+    if (pair === '//') break;
+    if (pair === '/*') {
+      state.blockComment = true;
+      index += 1;
+      code += ' ';
+      continue;
+    }
+    code += character;
   }
-  return line;
+  return code;
 }
 
-const IMPORT_FROM_END = /\bfrom\s+['"][^'"]+['"]\s*$/;
+const IMPORT_FROM_CLAUSE = /\bfrom\s+['"][^'"]+['"]/;
+const IMPORT_SIDE_EFFECT = /^\s*import\s+['"][^'"]+['"]/;
 
-// Finds the line a statement ends on, reading only code: comments are stripped
-// first, and braces are counted so a multi-line attribute clause (`with {` on
-// its own line) keeps the statement open. Falling back to a bare `from '...'`
-// tail covers a statement written without a semicolon.
+// Returns the line a statement ends on, or -1. A statement closes at a
+// semicolon outside braces, or — when the source relies on ASI — at the end of
+// the line where its `from` clause sits and every brace is balanced, which is
+// what keeps a multi-line attribute clause open.
 function statementEnd(lines, start) {
+  const state = { blockComment: false };
   let depth = 0;
+  let tail = false;
   for (let index = start; index < lines.length; index += 1) {
-    const code = stripComment(lines[index]);
+    const code = stripCommentsStateful(lines[index], state);
     for (let position = 0; position < code.length; position += 1) {
       const character = code[position];
       if (character === "'" || character === '"' || character === '`') {
@@ -289,22 +290,27 @@ function statementEnd(lines, start) {
       else if (character === '}') depth -= 1;
       else if (character === ';' && depth <= 0) return index;
     }
-    if (depth <= 0 && IMPORT_FROM_END.test(code.trimEnd())) return index;
+    if (IMPORT_FROM_CLAUSE.test(code) || IMPORT_SIDE_EFFECT.test(code)) tail = true;
+    if (tail && depth <= 0) return index;
   }
   return -1;
 }
 
+// The leading run of import statements. Anything else ends the run.
 function importStatements(lines) {
-  const inCode = codeContextLines(lines);
   const statements = [];
-  for (let index = 0; index < lines.length; index += 1) {
-    // Indented is still top-level as far as the module is concerned; the code
-    // context check above is what keeps a quoted `import` line out.
-    if (!inCode[index] || !/^\s*import\s/.test(lines[index])) continue;
+  let index = lines[0] && lines[0].startsWith('#!') ? 1 : 0;
+  while (index < lines.length) {
+    const trimmed = lines[index].trim();
+    if (trimmed === '' || trimmed.startsWith('//')) {
+      index += 1;
+      continue;
+    }
+    if (!/^\s*import\s/.test(lines[index])) break;
     const end = statementEnd(lines, index);
-    if (end === -1) continue;
+    if (end === -1) break;
     statements.push({ start: index, end });
-    index = end;
+    index = end + 1;
   }
   return statements;
 }
@@ -314,13 +320,12 @@ function importStatements(lines) {
 const IDENTIFIER = '[\\w$]+';
 
 // The local names a statement binds. For `x as y` the binding is `y`, which is
-// the name the rest of the file has to use. Comments are stripped per line
-// first: a `// note` after a specifier would otherwise swallow the comma and
-// hide the specifier that follows it.
+// the name the rest of the file has to use.
 function importBindings(text) {
+  const commentState = { blockComment: false };
   const withoutComments = text
     .split('\n')
-    .map((line) => stripComment(line))
+    .map((line) => stripCommentsStateful(line, commentState))
     .join('\n');
   // Specifiers live before the `from` clause. Anything after it is the module
   // path and possibly an attribute clause, whose braces would otherwise be
