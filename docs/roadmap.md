@@ -388,6 +388,7 @@ Most milestones after v0 have a focused tracking issue:
 
 Those issues should stay narrow enough to produce reviewable PRs.
 
-Two areas have none. Milestone 9 (workspace federation) was built without one,
-and so was the candidate review workflow that grew out of Milestone 6 — which
+Milestone 9 (workspace federation) has none. The candidate review workflow has
+#10, but that issue is scoped to explicit promotion; the audit, routing, and
+lifecycle machinery built on top of it has no tracking issue of its own, which
 is why its scope was never weighed against anything.
