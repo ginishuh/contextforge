@@ -59,7 +59,7 @@
     "test": "node scripts/run-tests.js",
     "test:live": "node scripts/run-tests.js --live",
     "verify:release": "node scripts/check-release.js",
-    "verify": "npm run lint && npm run lint:mcp-surface && npm test"
+    "verify": "npm run lint && npm test"
   },
   "license": "MIT",
   "dependencies": {

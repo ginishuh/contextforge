@@ -51,10 +51,25 @@ export function readSurfaceBudgets(file = budgetFile) {
   return { profiles, slackRatio, note: parsed.note || '' };
 }
 
+// The two variables that pick a surface are stripped before measuring. With
+// CONTEXTFORGE_MCP_TOOLS set in the shell every profile measures as that
+// allowlist instead, and an --update run would then overwrite the manifest with
+// those numbers — the ratchet would be recording the developer's environment
+// rather than the repository's surface.
+function measurementEnv() {
+  const {
+    CONTEXTFORGE_MCP_PROFILE: _profile,
+    CONTEXTFORGE_MCP_TOOLS: _tools,
+    ...rest
+  } = process.env;
+  return rest;
+}
+
 export async function measureSurfaces() {
   const measurements = {};
+  const env = measurementEnv();
   for (const profile of Object.keys(MCP_TOOL_PROFILES)) {
-    const server = createContextForgeMcpServer({ profile });
+    const server = createContextForgeMcpServer({ profile, env });
     try {
       const surface = getContextForgeMcpSurfaceInfo(server);
       const measured = {};
@@ -78,6 +93,18 @@ export function surfaceBudgetViolations(budgets, measurements) {
     for (const field of BUDGET_FIELDS) {
       const actual = measured[field];
       const allowed = budget[field];
+      // A profile's tool list is an explicit contract, so its size is pinned
+      // exactly. Slack would let a profile lose a tool and regain a different
+      // one with the manifest none the wiser.
+      if (field === 'toolCount') {
+        if (actual !== allowed) {
+          violations.push(
+            `${profile}.toolCount: ${actual} does not match the recorded ${allowed};`
+              + " re-record with 'node scripts/check-mcp-surface.js --update' and say why in the commit",
+          );
+        }
+        continue;
+      }
       if (actual > allowed) {
         violations.push(
           `${profile}.${field}: ${actual} exceeds the recorded budget ${allowed};`

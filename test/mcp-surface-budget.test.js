@@ -54,10 +54,33 @@ test('a surface that grows past its budget is rejected', () => {
   assert.match(violations[0], /--update/);
 });
 
-test('a profile silently gaining a tool is rejected', () => {
-  const violations = surfaceBudgetViolations(budgets(), measured({ toolCount: 25 }));
-  assert.equal(violations.length, 1);
-  assert.match(violations[0], /agent-core\.toolCount: 25 exceeds the recorded budget 24/);
+test('a tool count that no longer matches is rejected in either direction', () => {
+  const gained = surfaceBudgetViolations(budgets(), measured({ toolCount: 25 }));
+  assert.equal(gained.length, 1);
+  assert.match(gained[0], /agent-core\.toolCount: 25 does not match the recorded 24/);
+
+  // Losing a tool has to be recorded too, or a profile could drop one and pick
+  // up a different one with the manifest none the wiser.
+  const lost = surfaceBudgetViolations(budgets(), measured({ toolCount: 23 }));
+  assert.equal(lost.length, 1);
+  assert.match(lost[0], /agent-core\.toolCount: 23 does not match the recorded 24/);
+});
+
+test('the surface selection env vars cannot skew a measurement', async () => {
+  // With CONTEXTFORGE_MCP_TOOLS set, every profile used to measure as that
+  // allowlist — and an --update run would have written those numbers into the
+  // manifest, recording the developer's shell instead of the repository.
+  const previous = process.env.CONTEXTFORGE_MCP_TOOLS;
+  process.env.CONTEXTFORGE_MCP_TOOLS = 'db_info,search';
+  try {
+    const measurements = await measureSurfaces();
+    assert.equal(measurements['agent-core'].toolCount, 24);
+    assert.notEqual(measurements['all'].toolCount, measurements['agent-core'].toolCount);
+    assert.deepEqual(surfaceBudgetViolations(readSurfaceBudgets(), measurements), []);
+  } finally {
+    if (previous === undefined) delete process.env.CONTEXTFORGE_MCP_TOOLS;
+    else process.env.CONTEXTFORGE_MCP_TOOLS = previous;
+  }
 });
 
 test('reclaimed room must be tightened rather than left to be respent', () => {

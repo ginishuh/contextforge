@@ -25,10 +25,10 @@
   to 1.30.0 and `zod` to 4.4.3, and pinned `overrides` now force patched
   transitive `fast-uri`, `hono`, and `ip-address` versions that the SDK does not
   yet request directly. `npm audit --omit=dev --audit-level=moderate` reports no
-  vulnerabilities. Recorded a current MCP surface measurement: the default
-  `agent-core` profile is 4 estimated tokens under its 6,700 regression cap, so
-  the next schema addition needs a description trim or an explicit budget
-  decision.
+  vulnerabilities. Recorded a current MCP surface measurement, which showed the
+  default profile 4 estimated tokens under its cap and the other profiles
+  growing unwatched; the surface is now ratcheted per profile in
+  `scripts/mcp-surface-budgets.json`.
 - Updated the packaged `contextforge-memory` skill with explicit scope-backlog
   review, durable audit routing, snooze/wake/stale handling, and supervised
   candidate lifecycle operations. The skill now distinguishes the bounded MCP

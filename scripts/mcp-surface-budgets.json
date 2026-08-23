@@ -1,5 +1,5 @@
 {
-  "note": "Ratchet budgets for the MCP initialization surface, in bytes and estimated tokens. Budgets may only go down. Run 'node src/mcp.js --update-surface-budgets' after a measured change and explain it in the commit.",
+  "note": "Ratchet budgets for the MCP initialization surface, in bytes and estimated tokens. Budgets may only go down. Run 'node scripts/check-mcp-surface.js --update' after a measured change and explain it in the commit.",
   "slackRatio": 0.05,
   "profiles": {
     "agent-core": {
