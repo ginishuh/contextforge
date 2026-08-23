@@ -288,12 +288,16 @@ function statementEnd(lines, start) {
       }
       if (character === '{') depth += 1;
       else if (character === '}') depth -= 1;
-      else if (character === ';' && depth <= 0) return index;
+      else if (character === ';' && depth <= 0) {
+        // The column matters: code may follow the semicolon on this line, and
+        // blanking the whole line would hide a usage and fail valid code.
+        return { line: index, column: position + 1 };
+      }
     }
     if (IMPORT_FROM_CLAUSE.test(code) || IMPORT_SIDE_EFFECT.test(code)) tail = true;
-    if (tail && depth <= 0) return index;
+    if (tail && depth <= 0) return { line: index, column: lines[index].length };
   }
-  return -1;
+  return null;
 }
 
 // The leading run of import statements. Anything else ends the run.
@@ -308,16 +312,16 @@ function importStatements(lines) {
     }
     if (!/^\s*import\s/.test(lines[index])) break;
     const end = statementEnd(lines, index);
-    if (end === -1) break;
-    statements.push({ start: index, end });
-    index = end + 1;
+    if (end === null) break;
+    statements.push({ start: index, end: end.line, endColumn: end.column });
+    index = end.line + 1;
   }
   return statements;
 }
 
-// `$` is a valid identifier character, so the name pattern has to accept it or
-// a `$`-named binding is silently never checked.
-const IDENTIFIER = '[\\w$]+';
+// Identifiers are not ASCII-only in JavaScript, and `$` is legal too. Matching
+// `\\w` alone would skip a `café` or `이름` binding without a word of warning.
+const IDENTIFIER = '[\\p{ID_Start}$_][\\p{ID_Continue}$]*';
 
 // The local names a statement binds. For `x as y` the binding is `y`, which is
 // the name the rest of the file has to use.
@@ -338,18 +342,18 @@ function importBindings(text) {
     for (const part of braced[1].split(',')) {
       const trimmed = part.trim();
       if (!trimmed) continue;
-      const match = trimmed.match(new RegExp(`(?:${IDENTIFIER})\\s+as\\s+(${IDENTIFIER})$`))
-        || trimmed.match(new RegExp(`^(${IDENTIFIER})$`));
+      const match = trimmed.match(new RegExp(`(?:${IDENTIFIER})\\s+as\\s+(${IDENTIFIER})$`, 'u'))
+        || trimmed.match(new RegExp(`^(${IDENTIFIER})$`, 'u'));
       if (match) names.push(match[1]);
     }
   }
-  const namespace = head.match(new RegExp(`\\*\\s+as\\s+(${IDENTIFIER})`));
+  const namespace = head.match(new RegExp(`\\*\\s+as\\s+(${IDENTIFIER})`, 'u'));
   if (namespace) names.push(namespace[1]);
   // `head` already stops before the `from` clause, so a default binding is
   // followed by a comma or nothing at all.
   const defaultBinding = head
     .replace(/^\s*import\s+/, '')
-    .match(new RegExp(`^(${IDENTIFIER})\\s*(?:,|$)`));
+    .match(new RegExp(`^(${IDENTIFIER})\\s*(?:,|$)`, 'u'));
   if (defaultBinding) names.push(defaultBinding[1]);
   return names;
 }
@@ -365,11 +369,15 @@ function importBindings(text) {
 // than the cost of missing one dead import.
 function unusedImportErrors(file, lines) {
   const statements = importStatements(lines);
-  const importLines = new Set();
+  // Blank out exactly the span each statement occupies, so anything sharing its
+  // last line stays in the body and still counts as a usage.
+  const remaining = [...lines];
   for (const statement of statements) {
-    for (let index = statement.start; index <= statement.end; index += 1) importLines.add(index);
+    for (let index = statement.start; index < statement.end; index += 1) remaining[index] = '';
+    const lastLine = remaining[statement.end];
+    remaining[statement.end] = lastLine.slice(statement.endColumn);
   }
-  const body = lines.filter((_, index) => !importLines.has(index)).join('\n');
+  const body = remaining.join('\n');
   const errors = [];
   for (const statement of statements) {
     const text = lines.slice(statement.start, statement.end + 1).join('\n');
@@ -377,7 +385,7 @@ function unusedImportErrors(file, lines) {
       // `\b` does not hold at a `$` boundary and `$` is a regex metacharacter,
       // so the boundary is spelled out and the name escaped.
       const escaped = name.replace(/\$/g, '\\$');
-      if (!new RegExp(`(?<![\\w$])${escaped}(?![\\w$])`).test(body)) {
+      if (!new RegExp(`(?<![\\p{ID_Continue}$])${escaped}(?![\\p{ID_Continue}$])`, 'u').test(body)) {
         errors.push(`${file}:${statement.start + 1}: unused import ${name}`);
       }
     }

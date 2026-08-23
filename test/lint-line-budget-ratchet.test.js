@@ -894,3 +894,63 @@ test('an import below other code is out of scope rather than a false failure', a
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
+
+test('code sharing a line with the import still counts as usage', async () => {
+  const directory = await makeWorkspace({});
+  try {
+    await fs.writeFile(
+      path.join(directory, 'src/dep.js'),
+      'export const used = 1;\nexport const dead = 2;\n',
+    );
+    // Blanking the whole line used to remove this usage along with the import.
+    await fs.writeFile(
+      path.join(directory, 'src/app.js'),
+      "import { used } from './dep.js'; console.log(used);\n",
+    );
+    const ok = await runLint(directory);
+    assert.equal(ok.code, 0, ok.stderr);
+
+    await fs.writeFile(
+      path.join(directory, 'src/app.js'),
+      "import { dead } from './dep.js'; console.log(1);\n",
+    );
+    const failing = await runLint(directory);
+    assert.equal(failing.code, 1);
+    assert.match(failing.stderr, /unused import dead/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('a non-ASCII binding is checked like any other', async () => {
+  const directory = await makeWorkspace({});
+  try {
+    await fs.writeFile(path.join(directory, 'src/dep.js'), 'export default 1;\nexport const value = 2;\n');
+    await fs.writeFile(
+      path.join(directory, 'src/app.js'),
+      "import café from './dep.js';\n\nconsole.log(1);\n",
+    );
+    const unused = await runLint(directory);
+    assert.equal(unused.code, 1);
+    assert.match(unused.stderr, /unused import café/);
+
+    // Using it must clear the error, so the boundary has to be Unicode-aware
+    // on both sides of the probe.
+    await fs.writeFile(
+      path.join(directory, 'src/app.js'),
+      "import café from './dep.js';\n\nconsole.log(café);\n",
+    );
+    const used = await runLint(directory);
+    assert.equal(used.code, 0, used.stderr);
+
+    await fs.writeFile(
+      path.join(directory, 'src/app.js'),
+      "import { value as 이름 } from './dep.js';\n\nconsole.log(1);\n",
+    );
+    const renamed = await runLint(directory);
+    assert.equal(renamed.code, 1);
+    assert.match(renamed.stderr, /unused import 이름/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
