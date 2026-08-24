@@ -45,7 +45,12 @@ Design for three storage modes:
 Do not recommend git as the live storage backend for SQLite or raw runtime data. Git may be used for source code, examples, docs, and reviewed exports only.
 
 ## Build, Test, and Development Commands
-- `npm test`: run the Node test suite.
+- `npm run lint`: run the source gate (syntax, whitespace, line-budget ratchet).
+- `npm run lint:eslint`: run the CI-only ESLint gate (`no-undef`,
+  `no-unused-vars`, `no-shadow`). No devDependency; fetches a pinned `eslint`
+  through `npx`, so it needs network access.
+- `npm test`: run the Node test suite. Tests are organized by topic, one file
+  per subject area, with shared helpers in `test/helpers/`.
 - `node src/cli.js dbInfo`: inspect the configured storage backend.
 - `node src/server.js`: run the HTTP server entrypoint when needed.
 - `node src/mcp.js`: run the MCP server entrypoint when needed.

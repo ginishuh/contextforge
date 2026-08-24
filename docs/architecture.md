@@ -117,7 +117,25 @@ Reusable application plumbing begins under `src/application/`; bounded list
 pagination and LLM usage accounting live there rather than inside the core
 facade. `src/application/llm_usage.js` owns provider usage extraction, usage
 event recording, and distill/rollup usage summaries; the core facade imports the
-five entry points it actually calls and keeps none of the intermediate helpers.
+three entry points it still calls directly, while the extracted distill,
+consolidation, and promotion modules import the rest for themselves.
+
+Decomposition of the facade continued by operation cluster, not by line count.
+Workspace profile/member/routing CRUD lives in `src/workspaces/methods.js`, the
+memory-map and cluster builders in `src/memory/memory_map.js`, the embedding
+queue helpers and operations in `src/embeddings/jobs.js` and
+`src/embeddings/methods.js`, the consolidation window/plan/operations in
+`src/memory/consolidation.js`, and `distillCheckpoint` in
+`src/distill/methods.js`. Clusters that capture nothing from the
+`createContextForge` closure move to plain module scope; the rest keep their
+closure dependencies and receive them through a `*Methods()` factory whose
+result is spread into the app object, so `src/mcp.js` can keep dispatching every
+operation by name off that object. Leaf helpers with no ContextForge
+imports belong in `src/common.js`; per-layer shared leaves live in
+`src/storage/common.js`, `src/ingest/common.js`, and
+`src/memory/candidate_lifecycle_common.js`. Helper variants whose bodies are not
+identical are deliberately left duplicated rather than merged, because
+`errorSummary` and `contentHash` differences change stored payloads and hashes.
 
 Core facade size is enforced as a ratchet rather than a ceiling.
 `scripts/line-budgets.json` records the current line count of each large file,
@@ -128,16 +146,34 @@ entry. This makes decomposition the cheap path and budget inflation the visible
 one.
 
 SQLite compatibility migrations begin under `src/storage/migrations/` as
-ordered, versioned manifests. The current v19 manifest preserves the existing
-idempotent additive-column behavior. New schema work should add a new ordered manifest together with a
+ordered, versioned manifests. The v19 manifest preserves the existing
+idempotent additive-column behavior; `v20-memory-candidate-lifecycle` and
+`v21-operation-worker-freshness` follow it, and `SCHEMA_VERSION` is 21. New
+schema work should add a new ordered manifest together with a
 `SCHEMA_VERSION` bump, migration backup coverage, and downgrade fail-fast tests.
 
-Domain contract tests live outside the legacy monolith under `test/contracts/`.
+Tests are organized by topic, one file per subject area, with shared helpers in
+`test/helpers/`. Domain contract tests live under `test/contracts/`, offline
+quality evals under `test/eval/`, and opt-in provider smoke tests under
+`test/live/`. There is no monolithic suite file. `scripts/run-tests.js`
+enumerates the real `*.test.js` paths depth-first in sorted order rather than
+handing the runner a glob, which keeps the per-file duration artifacts
+comparable between runs and keeps helper modules from being reported as empty
+test files.
+
 `npm run lint` syntax-checks project JavaScript, rejects tabs/trailing
 whitespace, and enforces the ratchet budgets described above: a budgeted file
 may not grow, a budget may not be left loose after a file shrinks, and an
-unbudgeted file may not pass 1,500 lines. CI runs this source gate separately;
-`npm run verify` runs it before the complete test suite.
+unbudgeted file may not pass 1,500 lines. `npm run lint:eslint` adds the checks
+a hand-rolled linter cannot do — `no-undef`, `no-unused-vars`, `no-shadow` —
+against `eslint.config.mjs`. It is a CI-only gate: the package keeps zero
+devDependencies, so the script fetches a pinned `eslint` through `npx` instead
+of adding one, and the config lists Node and browser globals by hand for the
+same reason. `require-await` is intentionally off, because the codebase keeps
+`async` on functions whose signature is part of an awaited API surface, and
+`no-shadow` allows `options`, which `createContextForge(options = {})` shadows
+by design. CI runs both source gates in the same job; `npm run verify` runs the
+hand-rolled one before the complete test suite.
 
 ## Scope Model
 

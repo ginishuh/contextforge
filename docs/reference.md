@@ -4,7 +4,7 @@ Self-hosted memory and distillation runtime for coding agents.
 
 [한국어 README](../README.ko.md)
 
-Current package version: `0.5.1`
+Current package version: `0.6.0`
 
 This is not another memory file. ContextForge is a scoped memory runtime for
 coding agents.
@@ -21,7 +21,11 @@ ContextForge is a sidecar memory runtime. It complements existing agent memory
 systems by providing canonical project/repo memory, evidence retention, and
 LLM-backed distillation.
 
-Current 0.5.1 builds add periodic checkpoint consolidation for richer
+Current 0.6.0 builds add a supervised candidate lifecycle worker, operation
+worker freshness on `/readyz` with operational candidate and retrieval metrics,
+bounded pre-migration backups, and a progressive-disclosure packaged
+`contextforge-memory` skill. They also raise the supported Node floor to 22.
+The 0.5.1 builds before them added periodic checkpoint consolidation for richer
 bootstrap context, `handoff.latestConsolidation`, `memoryLifecycle` visibility,
 and refreshed packaged `contextforge-memory` skill guidance. They also include
 the 0.5.0 structured checkpoint handoff payloads, deterministic
@@ -32,6 +36,33 @@ separate auto-promotion audit runners including the experimental
 `codex_sdk_python` audit provider, remote-first MCP workflows, correction
 reconciliation, hybrid retrieval, and an embedding job queue so vector indexing
 can recover independently from memory or checkpoint writes.
+
+## What's New In 0.6.0
+
+- A supervised candidate lifecycle worker walks an explicit repo registry,
+  wakes expired snoozes, queues idle small-session audits, applies bounded
+  stale SLA transitions, and processes audit jobs per canonical scope. The CLI
+  defaults to dry-run; the systemd installer opts into mutation explicitly.
+- `/readyz` reports operation-worker freshness with a bounded startup grace
+  period and an explicit `operation_worker_stale` reason. Operational metrics
+  add candidate throughput and latency, audit decision and routing
+  distributions, correction/deactivation rates, quality slices, and the share
+  of active durable memories actually returned by retrieval.
+- Pre-migration backups are pruned to the newest
+  `CONTEXTFORGE_MIGRATION_BACKUP_KEEP` (default `3`) after a migration
+  succeeds, never below one, and `dbInfo` reports the remaining count and
+  bytes.
+- The packaged `contextforge-memory` skill moved to a router-and-references
+  structure with explicit scope-backlog review, durable audit routing, and
+  snooze/wake/stale handling.
+- Production dependency advisories are cleared, and the MCP surface is
+  ratcheted per profile in `scripts/mcp-surface-budgets.json`.
+- The supported Node floor is 22 and better-sqlite3 is 13.x, whose N-API
+  prebuilds drop 85 transitive packages.
+- `npm run lint:eslint` adds a CI-only gate for undefined identifiers, unused
+  bindings, and shadowed variables. The core facade is down from 7,169 to
+  4,839 lines, and the test suite is organized by topic instead of one
+  monolithic file.
 
 ## What's New In 0.5.1
 
@@ -276,6 +307,21 @@ npm test
 # or run both
 npm run verify
 ```
+
+`npm run lint` is the hand-rolled source gate: syntax, tabs/trailing
+whitespace, and the line-budget ratchet in `scripts/line-budgets.json`.
+`npm run lint:eslint` is a separate CI gate for `no-undef`, `no-unused-vars`,
+and `no-shadow`. It is not part of `npm run verify` and adds no
+devDependency — it fetches a pinned `eslint` through `npx` against the
+`eslint.config.mjs` flat config in the repository root, so it needs network
+access on first run. Both gates run in CI's source-lint job.
+
+Tests are organized by topic, one file per subject area, with shared helpers
+in `test/helpers/`. Contract tests live in `test/contracts/`, the offline
+quality eval in `test/eval/`, and opt-in provider smoke tests in `test/live/`.
+`scripts/run-tests.js` enumerates the real `*.test.js` paths depth-first in
+sorted order instead of passing a glob, so run-to-run duration artifacts stay
+comparable and helper modules are not reported as empty test files.
 
 Run the deterministic memory-quality baseline with `npm run eval:quality`. It
 covers retrieval, distillation persistence/source-link contracts, and candidate
@@ -2280,7 +2326,7 @@ Local validation still runs after the provider response is parsed.
 
 ## Status
 
-0.5.1 runtime. The current implementation includes SQLite migrations, scoped
+0.6.0 runtime. The current implementation includes SQLite migrations, scoped
 durable memories, raw event capture, rolling working summaries, checkpoint
 distillation with `mock`, `codex_exec`, and `openai_compatible` providers,
 remote HTTP mode for server-backed canonical memory, an operator UI, stdio and

@@ -5,7 +5,7 @@
 [English README](README.md) · [전체 참조](docs/reference.ko.md) ·
 [아키텍처](docs/architecture.md) · [운영 가이드](docs/operations.md)
 
-현재 package version: `0.5.1`
+현재 package version: `0.6.0`
 
 ContextForge는 scope가 분리된 durable memory, raw evidence, distilled
 checkpoint handoff를 자체 호스팅 런타임에 보관한다. Codex, Claude Code,
@@ -33,15 +33,20 @@ Storage mode는 세 가지다.
 
 SQLite나 raw runtime data의 live backend로 Git을 쓰지 않는다.
 
-## 0.5.1에서 좋아진 점
+## 0.6.0에서 좋아진 점
 
-- thread/repo 주기 checkpoint consolidation과 memory lifecycle 가시성.
-- mutable state 재검증 힌트를 가진 structured checkpoint handoff.
-- durable distill/audit job, provider concurrency control, retry fencing.
-- bounded indexed retrieval, Unicode/한국어 lexical search, pagination,
-  embedding lifecycle maintenance.
-- MCP tool profile, capability·scope API token, readiness/metrics, 검증된
-  backup/restore, deterministic offline memory-quality gate.
+- snooze wake, idle audit 큐잉, bounded stale SLA 전이를 수행하는 supervised
+  candidate lifecycle worker. 기본값은 dry-run이다.
+- `/readyz`의 operation-worker freshness와 candidate throughput·audit
+  routing·correction·retrieval coverage 지표.
+- bounded pre-migration backup, production dependency advisory 해소,
+  profile별 MCP surface ratchet.
+- scope backlog review와 durable audit routing을 명시한 progressive-disclosure
+  구조의 packaged `contextforge-memory` skill.
+- Node 22 floor와 better-sqlite3 13.x. N-API prebuild로 transitive package
+  85개가 빠졌다.
+- CI 전용 ESLint gate, 7,169 → 4,839줄로 분해된 core facade, 주제별로 재편한
+  테스트 스위트.
 
 전체 unreleased·historical 기록은 [CHANGELOG.md](CHANGELOG.md)에 있다. English와
 Korean release summary가 package version과 맞는지는 CI가 검사한다.
@@ -164,6 +169,11 @@ npm test
 npm run eval:quality
 npm run verify:release
 ```
+
+`npm run lint`는 직접 만든 source gate다. `npm run lint:eslint`는 undefined
+identifier, 미사용 binding, shadowing을 보는 별도 CI gate로 devDependency를 추가하지
+않고 고정 버전 `eslint`를 `npx`로 받아 실행하므로 네트워크가 필요하다. 테스트는
+주제별로 파일이 나뉘어 있고 공용 helper는 `test/helpers/`에 있다.
 
 `npm run verify:release`는 README/docs link, command reference, version drift,
 npm package 구성과 size budget을 검사한다. 자세한 정책은

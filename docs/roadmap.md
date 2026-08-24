@@ -252,6 +252,23 @@ Workspace profiles, members, and routing rules, with a federation block on
 mechanism: `searchScopes` merges scopes into one ranked list, while federation
 returns a separate block.
 
+## Codebase Health
+
+Not a product milestone, but tracked here because it changed how the repository
+is worked on.
+
+- #239 (closed): the hand-rolled source lint could not see undefined
+  identifiers, unused bindings, or shadowed variables. A CI-only ESLint gate
+  now covers them without adding a devDependency.
+- #240 (closed): `src/core.js` went from 7,169 to 4,839 lines by extracting
+  operation clusters into `src/workspaces/methods.js`,
+  `src/memory/memory_map.js`, `src/embeddings/jobs.js`,
+  `src/embeddings/methods.js`, `src/memory/consolidation.js`, and
+  `src/distill/methods.js`. `test/core.test.js` (17,098 lines) was split by
+  topic and deleted.
+- #241 (closed): byte-identical helper copies were folded into shared modules,
+  and better-sqlite3 moved to 13.x with the supported Node floor at 22.
+
 ## Open Decisions
 
 - Default repo scope keys now infer from git remotes when possible, normalize
@@ -267,7 +284,9 @@ returns a separate block.
 - Is the candidate lifecycle built after #208 more than the problem needed? The
   problem was to get candidates audited and safely promoted reliably; what
   exists now is a multi-state workflow. Reviewing that for over-design comes
-  before extending it further.
+  before extending it further. Tracked in #256, which is waiting on real usage
+  distribution data and a snooze-wake confirmation on 2026-08-26. Still open —
+  do not treat it as decided.
 - Should embedding queue dead-letter/max-attempt behavior preserve stale reset
   attempts, reset them, or introduce a separate retry budget?
 - Should large-store coverage and `dbInfo` checks move to SQL aggregation or
