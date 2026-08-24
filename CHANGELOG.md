@@ -2,6 +2,67 @@
 
 ## Unreleased
 
+- Closed the lint gap the hand-rolled source gate could not cover. Undefined
+  identifiers, unused bindings, and shadowed variables had been reaching `main`
+  unnoticed, so `npm run lint:eslint` now runs `no-undef`, `no-unused-vars`,
+  and `no-shadow` against a flat config in the repository root. Adding ESLint
+  as a devDependency was not an option — the package ships with zero of them on
+  purpose — so the CI job fetches a pinned `eslint` through `npx`, which leaves
+  `package.json` and `package-lock.json` untouched, and `eslint.config.mjs`
+  lists Node and browser globals by hand for the same reason. Two holes are
+  deliberate: `require-await` stays off because the codebase keeps `async` on
+  functions whose signature is part of an awaited API surface, and `no-shadow`
+  allows `options`, which `createContextForge(options = {})` shadows by design
+  in dozens of inner helpers. The first run found four real defects — an unused
+  helper and three shadowed bindings that made an inner value read as the outer
+  one — all fixed with the gate.
+- Finished decomposing the core facade. `src/core.js` went from 7,169 to 4,839
+  lines by moving whole operation clusters out: workspace profile, member, and
+  routing CRUD to `src/workspaces/methods.js`; the memory-map and cluster
+  builders to `src/memory/memory_map.js`; the embedding queue helpers and the
+  five embedding operations to `src/embeddings/jobs.js` and
+  `src/embeddings/methods.js`; the consolidation window, plan, and operations to
+  `src/memory/consolidation.js`; and `distillCheckpoint`, the widest injection
+  surface of the set, to `src/distill/methods.js`. Every body moved
+  byte-identically — the only edits were `export` keywords, import headers, and
+  uniform dedents — so no public operation changed. Clusters that captured
+  nothing from the `createContextForge` closure became plain module scope; the
+  rest take their dependencies through a `*Methods()` factory whose result is
+  spread into the app object, which keeps `this`-delegation and
+  `app[operation.name](args)` dispatch working unchanged.
+- Reorganized the test suite by topic. `test/core.test.js` had reached 17,098
+  lines; its blocks moved out into subject-area files — memory promotion,
+  retrieval and embeddings, candidate suggestion/audit, auto-promotion,
+  reconciliation, bootstrap and consolidation, distill lifecycle, raw evidence,
+  durable jobs, storage schema, scope resolution, remote storage, workspace and
+  remote dispatch, agent lifecycle and CLI, MCP HTTP, HTTP auth and admin UI,
+  and repo hygiene — leaving 39 `*.test.js` files with shared fixtures,
+  temp-directory, and schema helpers in `test/helpers/`. The candidate blocks
+  split three ways rather than landing one 2,375-line file past the
+  unbudgeted ceiling, and the last split retired `core.test.js` along with its
+  8,792-line budget entry. `scripts/run-tests.js` now enumerates the real
+  `*.test.js` paths depth-first in sorted order instead of passing a glob,
+  which keeps per-file duration artifacts comparable and stops helper modules
+  from being counted as empty test files. Counts held at 397 tests, 396
+  passing, 1 skipped, with an identical JUnit name set.
+- Consolidated copied helpers. Thirty-five duplicate definitions were folded
+  into modules that already owned them or into new shared leaves —
+  `src/storage/common.js` for `nowIso`/`json`/`parseJson`,
+  `src/memory/candidate_lifecycle_common.js` for
+  `boundedLimit`/`codedError`/`lifecycleMetadata`, `src/common.js` for
+  `truthyOption`, `requireOption`, `stableJsonValue`, `positiveInteger`,
+  `scopeIdentity`, and `average`, `src/ingest/common.js` for
+  `textFromContent`, and `test/helpers/temp.js` for eight copies of
+  `makeTempDir` that differed only in a `mkdtemp` prefix no test asserts on.
+  Only byte-identical bodies were merged, so equivalence is verifiable by
+  source comparison — these helpers are module-private and have no direct
+  tests. Variants that differ were deliberately kept: `errorSummary` and
+  `contentHash` because merging them would change stored error payloads and
+  `content_hash` values, three `positiveInteger` variants because their
+  fallbacks and caps set different validation ranges, the stricter
+  `textFromContent` in `ingest/claude_code.js`, and `truncateText` under
+  `distill/`, which is equivalent but would have needed a layer-inverting
+  import.
 - Raised the supported Node floor from 20 to 22 and upgraded better-sqlite3
   to 13.x. The 13.x native addon targets Node-API 10, which Node 20 does not
   provide — loading it there segfaults rather than failing cleanly — and
