@@ -9,7 +9,7 @@ ContextForge는 단순한 메모리 파일이 아니다. Codex, Claude Code, Ope
 LLM으로 최근 작업 상태를 checkpoint로 압축해 다음 에이전트가 이어받을 수
 있게 만드는 사이드카 런타임이다.
 
-현재 package version: `0.5.1`
+현재 package version: `0.6.0`
 
 ![ContextForge 설명 만화](https://raw.githubusercontent.com/ginishuh/contextforge/main/docs/assets/contextforge-explainer-comic-ko.jpg)
 
@@ -30,6 +30,30 @@ LLM으로 최근 작업 상태를 checkpoint로 압축해 다음 에이전트가
 ```text
 live source > durable memory > checkpoint handoff > memory_candidate
 ```
+
+## 0.6.0에서 좋아진 점
+
+- supervised candidate lifecycle worker가 명시적 repo registry를 돌면서 만료된
+  snooze를 깨우고, idle small-session audit를 큐잉하고, bounded stale SLA
+  전이를 적용하고, canonical scope별로 audit job을 처리한다. CLI 기본값은
+  dry-run이고 systemd installer만 mutation을 명시적으로 켠다.
+- `/readyz`가 bounded startup grace period와 `operation_worker_stale` 사유로
+  operation-worker freshness를 보고한다. 운영 지표에 candidate throughput·
+  latency, audit decision·routing 분포, correction/deactivation 비율, quality
+  slice, 실제 retrieval에 반환되는 active durable memory 비율이 추가됐다.
+- pre-migration backup은 migration 성공 후 최신
+  `CONTEXTFORGE_MIGRATION_BACKUP_KEEP`(기본 `3`)개까지만 남기고 정리된다.
+  최소 1개는 보존하며 `dbInfo`가 남은 개수와 bytes를 보고한다.
+- packaged `contextforge-memory` skill이 router-and-references 구조로 바뀌고
+  scope backlog review, durable audit routing, snooze/wake/stale 처리를
+  명시한다.
+- production dependency advisory를 해소했고 MCP surface를
+  `scripts/mcp-surface-budgets.json`에서 profile별로 ratchet한다.
+- 지원 Node floor가 22, better-sqlite3가 13.x다. N-API prebuild로 transitive
+  package 85개가 빠졌다.
+- `npm run lint:eslint`가 undefined identifier·미사용 binding·shadowing을 보는
+  CI 전용 gate로 추가됐다. core facade는 7,169 → 4,839줄로 줄었고 테스트
+  스위트는 단일 파일 대신 주제별로 재편됐다.
 
 ## 0.5.1에서 좋아진 점
 

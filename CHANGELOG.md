@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 - 2026-08-24
 
 - Closed the lint gap the hand-rolled source gate could not cover. Undefined
   identifiers, unused bindings, and shadowed variables had been reaching `main`
@@ -29,7 +29,7 @@
   nothing from the `createContextForge` closure became plain module scope; the
   rest take their dependencies through a `*Methods()` factory whose result is
   spread into the app object, which keeps `this`-delegation and
-  `app[operation.name](args)` dispatch working unchanged.
+  the by-name dispatch in `src/mcp.js` working unchanged.
 - Reorganized the test suite by topic. `test/core.test.js` had reached 17,098
   lines; its blocks moved out into subject-area files — memory promotion,
   retrieval and embeddings, candidate suggestion/audit, auto-promotion,

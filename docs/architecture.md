@@ -129,7 +129,7 @@ queue helpers and operations in `src/embeddings/jobs.js` and
 `createContextForge` closure move to plain module scope; the rest keep their
 closure dependencies and receive them through a `*Methods()` factory whose
 result is spread into the app object, so `src/mcp.js` can keep dispatching every
-operation as `app[operation.name](args)`. Leaf helpers with no ContextForge
+operation by name off that object. Leaf helpers with no ContextForge
 imports belong in `src/common.js`; per-layer shared leaves live in
 `src/storage/common.js`, `src/ingest/common.js`, and
 `src/memory/candidate_lifecycle_common.js`. Helper variants whose bodies are not

@@ -5,7 +5,7 @@ Self-hosted memory and distillation runtime for coding agents.
 [한국어 README](README.ko.md) · [Full reference](docs/reference.md) ·
 [Architecture](docs/architecture.md) · [Operations](docs/operations.md)
 
-Current package version: `0.5.1`
+Current package version: `0.6.0`
 
 ContextForge keeps scoped durable memory, raw evidence, and distilled checkpoint
 handoffs in a self-hosted runtime. It gives Codex, Claude Code, OpenCode, Grok,
@@ -34,15 +34,20 @@ ContextForge supports three storage modes:
 
 Do not use Git as the live backend for SQLite or raw runtime data.
 
-## What's New In 0.5.1
+## What's New In 0.6.0
 
-- Periodic thread/repo checkpoint consolidation and lifecycle visibility.
-- Structured checkpoint handoffs with verification hints for mutable state.
-- Durable distill/audit jobs, provider concurrency controls, and retry fencing.
-- Bounded indexed retrieval, Unicode/Korean lexical search, pagination, and
-  embedding lifecycle maintenance.
-- MCP tool profiles, capability-scoped API tokens, readiness/metrics, verified
-  backup/restore, and deterministic offline memory-quality gates.
+- A supervised candidate lifecycle worker that wakes snoozes, queues idle
+  audits, and applies bounded stale SLA transitions, dry-run by default.
+- Operation-worker freshness on `/readyz` plus candidate throughput, audit
+  routing, correction, and retrieval-coverage metrics.
+- Bounded pre-migration backups, cleared production dependency advisories, and
+  a per-profile MCP surface ratchet.
+- A progressive-disclosure packaged `contextforge-memory` skill with explicit
+  scope-backlog review and durable audit routing.
+- Node 22 floor and better-sqlite3 13.x, whose N-API prebuilds drop 85
+  transitive packages.
+- A CI-only ESLint gate, a core facade decomposed from 7,169 to 4,839 lines,
+  and a test suite reorganized by topic.
 
 See [CHANGELOG.md](CHANGELOG.md) for the complete unreleased and historical
 record. English and Korean release summaries are checked against the package
