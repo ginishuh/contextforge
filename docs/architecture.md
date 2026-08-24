@@ -117,7 +117,8 @@ Reusable application plumbing begins under `src/application/`; bounded list
 pagination and LLM usage accounting live there rather than inside the core
 facade. `src/application/llm_usage.js` owns provider usage extraction, usage
 event recording, and distill/rollup usage summaries; the core facade imports the
-five entry points it actually calls and keeps none of the intermediate helpers.
+three entry points it still calls directly, while the extracted distill,
+consolidation, and promotion modules import the rest for themselves.
 
 Decomposition of the facade continued by operation cluster, not by line count.
 Workspace profile/member/routing CRUD lives in `src/workspaces/methods.js`, the

@@ -2326,7 +2326,7 @@ Local validation still runs after the provider response is parsed.
 
 ## Status
 
-0.5.1 runtime. The current implementation includes SQLite migrations, scoped
+0.6.0 runtime. The current implementation includes SQLite migrations, scoped
 durable memories, raw event capture, rolling working summaries, checkpoint
 distillation with `mock`, `codex_exec`, and `openai_compatible` providers,
 remote HTTP mode for server-backed canonical memory, an operator UI, stdio and
