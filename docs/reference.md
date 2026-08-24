@@ -277,6 +277,21 @@ npm test
 npm run verify
 ```
 
+`npm run lint` is the hand-rolled source gate: syntax, tabs/trailing
+whitespace, and the line-budget ratchet in `scripts/line-budgets.json`.
+`npm run lint:eslint` is a separate CI gate for `no-undef`, `no-unused-vars`,
+and `no-shadow`. It is not part of `npm run verify` and adds no
+devDependency — it fetches a pinned `eslint` through `npx` against the
+`eslint.config.mjs` flat config in the repository root, so it needs network
+access on first run. Both gates run in CI's source-lint job.
+
+Tests are organized by topic, one file per subject area, with shared helpers
+in `test/helpers/`. Contract tests live in `test/contracts/`, the offline
+quality eval in `test/eval/`, and opt-in provider smoke tests in `test/live/`.
+`scripts/run-tests.js` enumerates the real `*.test.js` paths depth-first in
+sorted order instead of passing a glob, so run-to-run duration artifacts stay
+comparable and helper modules are not reported as empty test files.
+
 Run the deterministic memory-quality baseline with `npm run eval:quality`. It
 covers retrieval, distillation persistence/source-link contracts, and candidate
 quality without external providers; live LLM writing quality remains a separate

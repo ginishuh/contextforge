@@ -165,6 +165,11 @@ npm run eval:quality
 npm run verify:release
 ```
 
+`npm run lint`는 직접 만든 source gate다. `npm run lint:eslint`는 undefined
+identifier, 미사용 binding, shadowing을 보는 별도 CI gate로 devDependency를 추가하지
+않고 고정 버전 `eslint`를 `npx`로 받아 실행하므로 네트워크가 필요하다. 테스트는
+주제별로 파일이 나뉘어 있고 공용 helper는 `test/helpers/`에 있다.
+
 `npm run verify:release`는 README/docs link, command reference, version drift,
 npm package 구성과 size budget을 검사한다. 자세한 정책은
 [Release·package 정책](docs/releases.md)에 있다.

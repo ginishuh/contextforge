@@ -170,6 +170,12 @@ npm run eval:quality
 npm run verify:release
 ```
 
+`npm run lint` is the hand-rolled source gate. `npm run lint:eslint` is a
+separate CI gate for undefined identifiers, unused bindings, and shadowed
+variables; it adds no devDependency and fetches a pinned `eslint` through
+`npx`, so it needs network access. Tests are organized by topic, one file per
+subject area, with shared helpers in `test/helpers/`.
+
 `npm run verify:release` checks README/docs links, command references, version
 drift, npm package contents, and package size budgets. See
 [Release and package policy](docs/releases.md).

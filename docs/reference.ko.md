@@ -320,6 +320,20 @@ npm test
 npm run verify
 ```
 
+`npm run lint`는 직접 만든 source gate로 syntax, tab/trailing whitespace,
+`scripts/line-budgets.json` line budget ratchet을 검사한다. `npm run lint:eslint`는
+`no-undef`, `no-unused-vars`, `no-shadow`를 보는 별도 CI gate다. `npm run verify`에는
+포함되지 않고 devDependency도 추가하지 않는다. repository root의 `eslint.config.mjs`
+flat config에 대해 고정 버전 `eslint`를 `npx`로 내려받아 실행하므로 최초 실행에는
+네트워크가 필요하다. CI의 source-lint job은 두 gate를 함께 돌린다.
+
+테스트는 주제별로 파일이 나뉘어 있고 공용 helper는 `test/helpers/`에 있다. Contract
+test는 `test/contracts/`, offline quality eval은 `test/eval/`, opt-in provider smoke
+test는 `test/live/`에 있다. `scripts/run-tests.js`는 glob을 넘기지 않고 실제
+`*.test.js` 경로를 depth-first·정렬 순서로 열거한다. 실행 순서가 고정돼야 per-file
+duration artifact를 실행 간에 비교할 수 있고, helper module이 빈 테스트 파일로
+보고되지 않는다.
+
 외부 provider 없이 retrieval·distillation persistence/source-link contract·candidate
 품질 baseline을 검증하려면 `npm run eval:quality`를 실행한다. Live LLM 생성 품질은
 별도 opt-in eval 범위다. 지표, fixture, threshold와 CI report는
@@ -989,6 +1003,7 @@ Package에 포함되는 문서가 가리키는 로컬 파일도 inventory에 없
 테스트:
 
 ```bash
+npm run lint
 npm test
 ```
 
