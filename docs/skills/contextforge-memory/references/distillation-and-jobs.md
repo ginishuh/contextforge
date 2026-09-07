@@ -5,11 +5,11 @@ semantics, cost tracking, or checkpoint consolidation.
 
 ## Distillation
 
-Call `session_status` before expensive distillation. It reports raw counts,
-latest checkpoint, candidate counts, thresholds, and whether distillation is
-currently useful.
+Call `distill_checkpoint` when a meaningful user or work boundary needs a
+handoff. `session_status` is available in the review profile when its counts or
+policy are useful; ordinary agent work does not need it first.
 
-Call `distill_checkpoint` at meaningful boundaries:
+Useful boundaries include:
 
 - after a feature is implemented and tested;
 - after a PR, issue, or incident reaches a stable state;

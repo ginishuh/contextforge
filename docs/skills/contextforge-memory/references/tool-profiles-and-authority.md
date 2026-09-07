@@ -8,16 +8,18 @@ server surface, or when deciding scope and storage authority.
 Treat a missing MCP tool as a possible profile choice, not proof that the core
 or remote API lacks the operation.
 
-- `agent-core` (default): bootstrap, scoped retrieval, manual evidence,
-  checkpointing, durable distill submission/status, and ordinary closeout.
-- `review`: `agent-core` plus candidate backlog planning, audit inventory and
+- `agent-core` (default): `db_info`, `bootstrap_context`, `search`,
+  `get_memory`, `remember`, `list_checkpoints`, `list_memory_candidates`,
+  `distill_checkpoint`, `correct_memory`, and `deactivate_memory`.
+- `review` (45 tools): `agent-core` plus all former workflow tools, candidate
+  backlog planning, audit inventory and
   submission, snooze/wake/stale review actions, duplicate/update review,
   correction, promotion, and deactivation.
-- `operator`: runtime operations except workspace mutations; use for job
+- `operator` (67 tools): runtime operations except workspace mutations; use for job
   workers, due distills/consolidations, mutating candidate lifecycle stages,
   retention, embeddings, usage, and `migrate_scope`.
-- `workspace-admin`: workspace profiles/members/routing and scope migration.
-- `all`: compatibility surface that exposes every tool.
+- `workspace-admin` (11 tools): workspace profiles/members/routing and scope migration.
+- `all` (73 tools): compatibility surface that exposes every tool.
 
 Inspect the selected surface with `node src/mcp.js --describe-surface`. Configure
 `CONTEXTFORGE_MCP_PROFILE` on stdio or HTTP server processes, or use
@@ -30,8 +32,8 @@ registration when the client supports it.
 Set scope intentionally:
 
 - `repo`: project-specific memory. Prefer a canonical `scopeKey` such as
-  `github.com/owner/repo`; pass `repoPath` or `cwd` when the MCP process cwd is
-  not the checkout.
+  `github.com/owner/repo`; pass authoritative per-turn repo context when it is
+  available. The host process cwd alone does not prove the semantic target.
 - `shared`: cross-repo or user-wide conventions. Include only when relevant.
 - `local`: machine-specific context. Opt in only when appropriate.
 

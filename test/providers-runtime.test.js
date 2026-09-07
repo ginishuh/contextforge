@@ -126,7 +126,7 @@ test('codex_exec provider distills synthetic raw events through a runner', async
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.model, 'gpt-test');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.reasoningEffort, 'low');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.timeoutMs, 1234);
-  assert.equal(checkpoint.metadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v9');
+  assert.equal(checkpoint.metadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v10');
   assert.equal(checkpoint.metadata.providerMetadata.codexExec.outputSchemaVersion, 'contextforge.checkpoint.v6');
   assert.equal(checkpoint.structured.schemaVersion, STRUCTURED_CHECKPOINT_SCHEMA_VERSION);
   assert.equal(checkpoint.metadata.structured.schemaVersion, STRUCTURED_CHECKPOINT_SCHEMA_VERSION);
@@ -205,9 +205,9 @@ test('codex_exec provider distills synthetic raw events through a runner', async
     sessionId: 'codex-session',
   });
   assert.equal(runs[0].status, 'succeeded');
-  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v9');
+  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v10');
   assert.equal(runs[0].inputMetadata.providerMetadata.outputSchemaVersion, 'contextforge.checkpoint.v6');
-  assert.equal(runs[0].outputMetadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v9');
+  assert.equal(runs[0].outputMetadata.providerMetadata.codexExec.promptVersion, 'codex_exec.prompt.v10');
 });
 
 test('codex_exec records JSON brace fallback recovery metadata', async () => {
@@ -959,6 +959,6 @@ test('codex_exec parse failures preserve raw evidence', async () => {
   });
   assert.equal(runs[0].status, 'failed');
   assert.equal(runs[0].outputMetadata.providerFailed, true);
-  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v9');
-  assert.equal(runs[0].outputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v9');
+  assert.equal(runs[0].inputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v10');
+  assert.equal(runs[0].outputMetadata.providerMetadata.promptVersion, 'codex_exec.prompt.v10');
 });

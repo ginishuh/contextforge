@@ -9,6 +9,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { authorizeAndBindScope, createTokenAuthorizer } from './auth/token_authorization.js';
 import { createContextForge } from './core.js';
 import { createContextForgeMcpServer } from './mcp.js';
+import { validateAdapterSessionId } from './application/adapter_session.js';
 import { REMOTE_METHODS } from './remote/client.js';
 import { runtimeChildSnapshot, terminateRuntimeChildren } from './runtime/child_processes.js';
 import { runWithRequestContext } from './runtime/request_context.js';
@@ -814,6 +815,13 @@ export function createContextForgeServer({ app, env = process.env, tokenAuthoriz
         return;
       }
       response.setHeader('x-contextforge-auth-id', identity.id);
+      let adapterSessionId;
+      try {
+        adapterSessionId = validateAdapterSessionId(request.headers['x-contextforge-session-id']);
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+        return;
+      }
       const mcpServer = createContextForgeMcpServer({
         app: createRemoteAccessApp(serverApp, 'http-mcp', recordOperationMetrics, {
           requestId,
@@ -821,6 +829,7 @@ export function createContextForgeServer({ app, env = process.env, tokenAuthoriz
           authorizer,
         }),
         env,
+        adapterSessionId,
       });
       try {
         const transport = new StreamableHTTPServerTransport({

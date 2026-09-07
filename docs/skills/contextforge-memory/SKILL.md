@@ -1,80 +1,46 @@
 ---
 name: contextforge-memory
 description: >-
-  Use when working with ContextForge MCP as an agent memory runtime: scoped
-  bootstrap/search, storage authority checks, repo/shared/local scopes,
-  resume/handoff context, raw evidence capture, Codex/Claude session IDs,
-  distillation checkpoints, working summaries, memory candidates, scope backlog
-  review, candidate audit lifecycle, snooze/stale handling, supervised lifecycle
-  workers, closeout promotion, automatic promotion, memory
-  correction/reconciliation, embeddings, or debugging
-  sessionId/checkpointId/missing_closeout_source behavior.
+  Use ContextForge for scoped memory retrieval, session continuity, and deliberate
+  memory updates. Consult advanced references for evidence capture, candidate
+  review, or runtime maintenance when the task needs them.
 ---
 
 # ContextForge Memory
 
-Use ContextForge as a scoped memory and distillation sidecar. Keep this file as
-the decision router; load only the reference needed for the current operation.
-Do not preload every reference.
+Use ContextForge as a scoped memory and distillation sidecar. Read only the
+reference needed for the current operation.
 
-If a linked file is unavailable, the runtime skill installation is incomplete;
-reinstall it before performing that operation rather than improvising omitted
-safety rules.
+## Everyday Rules
 
-## Core Invariants
-
-- Verify mutable repo, GitHub, CI, deployment, database, and runtime facts from
-  their live source before acting.
-- Use this trust order: live source > reviewed durable `memory` > recent
-  `checkpoint` handoff > unreviewed `memory_candidate`.
-- Treat raw evidence and working summaries as session material, not durable
-  memory. Treat provider recommendations as review input, not approval.
-- Set `repo`, `shared`, or `local` scope intentionally. Inspect
-  `connection.accessMode` and `storageMode` before assuming storage authority.
-- Pass `workspaceKey` explicitly only for intended cross-repo retrieval; there
-  is no inferred or process-global workspace default.
-- `bootstrap_context` does not create a session.
-- Preserve adapter session IDs such as `codex:<id>` and `claude_code:<id>`. Do
-  not create a fresh `cf_...` session at closeout for adapter-ingested evidence.
-- Do not propose memory promotions during startup or resume.
+- Trust live state over reviewed `memory`, checkpoint handoff, and candidates.
+- Check `connection.accessMode` before treating a store as remote canonical
+  memory rather than checkout-local context.
+- Keep `repo`, `shared`, and `local` scope explicit. `workspaceKey` is opt-in;
+  neither membership nor host cwd proves or broadens the target scope.
+- `bootstrap_context` does not create a session. Preserve an adapter session ID
+  for save/resume; otherwise pass `sessionId` and never guess a latest session.
+- Raw evidence is retained source material; working context is mutable session
+  state. Durable memory needs a deliberate reviewed write; a provider
+  recommendation is not approval.
 - Distillation failure must not erase raw evidence.
-- Candidate disposition, audit approval, and durable promotion are separate
-  states. An audited approval is not itself a durable write.
-- Never broaden an empty closeout into a scope backlog scan; ordinary closeout
-  is session/checkpoint scoped. Automatic audit is limited to the current
-  `sessionId` or explicit `checkpointId`; it never scans the whole scope backlog.
-- `audit_memory_candidates` must not promote or mutate durable memory.
-- Promote only reviewed, stable, scoped, non-secret facts. Prefer a reviewed
-  update proposal over duplicate durable memory.
 
-## Core Workflow
+Use the default `agent-core` surface for ordinary coding work. Its ten tools
+are `db_info`, `bootstrap_context`, `search`, `get_memory`, `remember`,
+`list_checkpoints`, `list_memory_candidates`, `distill_checkpoint`,
+`correct_memory`, and `deactivate_memory`.
 
-### Start Or Resume
+Use `bootstrap_context` for a task-relevant start or resume, then `search` and
+detail pointers when needed. It does not create a session. Check mutable state
+from its live source before acting.
 
-1. Inspect storage authority and choose scope.
-2. Call `bootstrap_context` with a task-derived query and `consultReason` of
-   `startup`, `resume`, `compaction_recovery`, or `agent_switch`.
-3. Read relevant results; for resume, pass the matching session ID and read its handoff.
-4. Verify live-state fields and warnings before editing or reporting status.
-5. Use targeted `search` only when more detail is needed.
+Distill when the user or work boundary makes a checkpoint useful; this is not a
+required daily lifecycle. With an adapter binding, omit `sessionId` for the
+current session. Without a binding, supply the known session ID explicitly.
 
-### Work
-
-- Continue from current conversation context during an uninterrupted session;
-  do not repeatedly consult the latest handoff for self-confirmation.
-- Capture only meaningful user/assistant evidence. Preserve the original
-  adapter session ID throughout status, distillation, and closeout calls.
-- Use live tools for current runtime, DB, git, GitHub, CI, and deployment state.
-
-### Distill And Close Out
-
-1. Call `session_status` before expensive distillation.
-2. Distill at a meaningful boundary and retain the `checkpointId`.
-3. Audit only the current session/checkpoint candidate batch unless the task
-   explicitly requests scope-wide backlog review.
-4. Review audit evidence, then promote, reject, or route an update proposal.
-5. Keep write-side automatic promotion disabled unless explicitly intended,
-   server-enabled, and invoked with `dryRun: false`.
+Use `remember`, `correct_memory`, and `deactivate_memory` deliberately for
+durable reviewed facts. Candidate review, audit, jobs, evidence ingestion, and
+workspace administration belong to the advanced references below.
 
 ## Reference Router
 
@@ -83,18 +49,17 @@ Read only references relevant to the current task:
 - [Tool Profiles And Storage Authority](references/tool-profiles-and-authority.md):
   missing MCP tools, profile/allowlist selection, scope choice, or authority
   diagnosis.
-- [Bootstrap, Search, And Resume](references/bootstrap-and-retrieval.md): startup,
-  resume, handoff interpretation, related scopes, or targeted retrieval.
-- [Sessions And Evidence](references/sessions-and-evidence.md): session ID origin,
-  manual versus adapter-ingested evidence, raw capture, or CLI lifecycle wrappers.
+- [Bootstrap, Search, And Resume](references/bootstrap-and-retrieval.md): retrieval,
+  detail pointers, handoff, or related scopes.
+- [Sessions And Evidence](references/sessions-and-evidence.md): binding, raw capture,
+  manual or adapter sessions, or CLI lifecycle wrappers.
 - [Distillation And Durable Jobs](references/distillation-and-jobs.md): checkpoint
-  boundaries, provider jobs, retries/cancellation, or checkpoint consolidation.
+  timing, provider jobs, retries, or consolidation.
 - [Closeout, Promotion, And Corrections](references/closeout-and-corrections.md):
   ordinary closeout audit, promotion/update decisions, duplicates, automatic
   promotion, or user corrections.
 - [Candidate Backlog And Lifecycle Operations](references/candidate-lifecycle.md):
-  explicit scope backlog review, routing audited candidates, snooze/wake/stale,
-  or lifecycle workers.
+  scope backlog review, audit routing, snooze/wake/stale, or lifecycle workers.
 - [Workspaces, Scope Migration, And Storage Authority](references/workspaces-and-scope-migration.md):
   workspace federation, repository aliases/migration, or detailed connection
   diagnostics.

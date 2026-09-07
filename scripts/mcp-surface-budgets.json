@@ -3,34 +3,34 @@
   "slackRatio": 0.05,
   "profiles": {
     "agent-core": {
-      "toolCount": 24,
-      "instructionsBytes": 1423,
-      "toolSchemaBytes": 24824,
-      "estimatedInitialTokens": 6562
+      "toolCount": 10,
+      "instructionsBytes": 991,
+      "toolSchemaBytes": 9981,
+      "estimatedInitialTokens": 2743
     },
     "all": {
       "toolCount": 73,
-      "instructionsBytes": 1423,
-      "toolSchemaBytes": 70506,
-      "estimatedInitialTokens": 17983
+      "instructionsBytes": 991,
+      "toolSchemaBytes": 70154,
+      "estimatedInitialTokens": 17787
     },
     "operator": {
       "toolCount": 67,
-      "instructionsBytes": 1423,
-      "toolSchemaBytes": 65408,
-      "estimatedInitialTokens": 16708
+      "instructionsBytes": 991,
+      "toolSchemaBytes": 65056,
+      "estimatedInitialTokens": 16512
     },
     "review": {
       "toolCount": 45,
-      "instructionsBytes": 1423,
-      "toolSchemaBytes": 44845,
-      "estimatedInitialTokens": 11567
+      "instructionsBytes": 991,
+      "toolSchemaBytes": 44493,
+      "estimatedInitialTokens": 11371
     },
     "workspace-admin": {
       "toolCount": 11,
-      "instructionsBytes": 1423,
+      "instructionsBytes": 991,
       "toolSchemaBytes": 8888,
-      "estimatedInitialTokens": 2578
+      "estimatedInitialTokens": 2470
     }
   }
 }

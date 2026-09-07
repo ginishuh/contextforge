@@ -28,8 +28,8 @@ bounded pre-migration backups, and a progressive-disclosure packaged
 The 0.5.1 builds before them added periodic checkpoint consolidation for richer
 bootstrap context, `handoff.latestConsolidation`, `memoryLifecycle` visibility,
 and refreshed packaged `contextforge-memory` skill guidance. They also include
-the 0.5.0 structured checkpoint handoff payloads, deterministic
-`handoff.latestHandoff` bootstrap state, preserved memory-candidate review
+the 0.5.0 structured checkpoint handoff payloads and session-bound handoff
+state, preserved memory-candidate review
 fields, a server-hosted operator UI, DB-backed runtime settings,
 OpenAI-compatible distillation for DeepSeek-style Chat Completions APIs,
 separate auto-promotion audit runners including the experimental
@@ -81,9 +81,8 @@ can recover independently from memory or checkpoint writes.
 
 - Checkpoints can include an optional structured handoff object with work
   status, observed live state, verification, risks, and next actions.
-- `bootstrapContext` and `syncResumeContext` expose
-  `handoff.latestHandoff` separately from ordinary search results, so agents can
-  read recent continuation state even when the query is narrow or unrelated.
+- `bootstrapContext` and `syncResumeContext` expose matching-session handoff
+  state separately from ordinary search results.
 - Memory candidates preserve v2 review fields such as `durabilityReason`,
   `riskReason`, `evidenceRefs`, and `suggestedAction` for audit and closeout
   review surfaces.
@@ -417,7 +416,7 @@ clients that need it:
 
 | Profile | Tools | Intended caller |
 | --- | ---: | --- |
-| `agent-core` | 24 | normal agent bootstrap, retrieval, evidence, distillation, and closeout |
+| `agent-core` | 10 | normal bootstrap, retrieval, durable memory, and checkpointing |
 | `review` | 45 | candidate and durable-memory review |
 | `operator` | 67 | queues, retention, embeddings, usage, and server maintenance |
 | `workspace-admin` | 11 | workspace topology and scope migration |
@@ -446,6 +445,16 @@ workflow guidance lives in the packaged `contextforge-memory` skill; profile
 selection does not depend on that skill being installed.
 See [MCP Surface Budget](mcp-surface-budget.md) for the reproducible
 transport measurements, selection contract, and host-token caveat.
+
+For stdio MCP, session binding uses a complete `CONTEXTFORGE_SESSION_ID`, then
+`CODEX_THREAD_ID`, `CODEX_SESSION_ID` as `codex:<id>`, or
+`CLAUDE_CODE_SESSION_ID` as `claude_code:<id>`. CLI session-specific commands
+use the same sources, while an explicit `sessionId` or `checkpointId` wins. If
+both Codex and Claude source variables are present without
+`CONTEXTFORGE_SESSION_ID`, binding fails as ambiguous. Direct HTTP MCP instead
+accepts a namespaced `x-contextforge-session-id` per request and never infers
+identity from a shared server environment. Without a binding, save/resume
+requires an explicit `sessionId`.
 
 ### Local-Only Mode
 
@@ -1473,15 +1482,14 @@ acting. Memory candidates can include optional review fields such as
 fields are preserved in the candidate index for suggestion and audit surfaces.
 
 `bootstrapContext` includes recent checkpoint handoff separately from ordinary
-query results. By default it returns the latest ordinary session checkpoint for
-the requested scope in `handoff.latestCheckpoints`, even when that checkpoint
-does not win semantic search ranking. Set `--latestCheckpointLimit 0` to disable
-this lane, or a value up to `3` to preload more recent checkpoints per scope.
+query results when a matching `sessionId` is supplied. Without it, use a scoped
+task query rather than treating a scope-wide latest checkpoint as continuation.
 It also exposes `handoff.latestConsolidation.thread` and
 `handoff.latestConsolidation.repo` when periodic checkpoint consolidation exists,
 so agents can see a richer period summary without loading raw evidence by
-default. For multi-repo work, pass comma-separated repo `--relatedScopeKeys` so a
-subrepo can also receive the suite/root repo's latest handoff.
+default. For multi-repo work, pass comma-separated repo `--relatedScopeKeys`
+only when that related scope is relevant; this does not select a continuation
+session for the primary repo.
 For configured workspace profiles, pass `--workspaceKey` to add a separate
 `workspace` block with a scope plan, bounded supplemental member-scope results,
 and compact per-scope memory overview. Top-level `results` remain the primary
@@ -1521,16 +1529,10 @@ only when last-mile transcript continuity is needed.
 
 The bootstrap response keeps these channels separate:
 
-- `handoff.latestByAgent`: latest visible checkpoint per `sourceAgent`, useful
-  when Codex, Claude Code, OpenCode, Grok, and Cursor CLI are all contributing
-  to the same repo scope.
-- `handoff.latestCheckpoints`: latest recent handoff checkpoints loaded
-  independently of query ranking; read these before durable memory for current
-  work status, recent decisions, open todos, branch/PR/CI flow, and next
-  actions.
-- `handoff.latestHandoff`: the first latest checkpoint in deterministic handoff
-  order, including structured handoff payload and live-state stale warnings when
-  available.
+- `handoff`: checkpoint and working context for the matching `sessionId`. It is
+  continuity evidence, not a query-independent guess at the current task.
+- `handoff.latestCheckpoints`: recent checkpoints for that matching session;
+  use a scoped query when session identity is unknown.
 - `handoff.latestConsolidation`: latest thread and repo time-window
   consolidation checkpoints, when available; use these for period context, not
   as durable memory.
@@ -1541,7 +1543,7 @@ The bootstrap response keeps these channels separate:
   `consolidatedMemory` first, then expand a cluster only when atomic memories
   are needed.
 - `results`: durable memories, checkpoints, and memory candidates from search.
-- `workingSummary`: latest rolling handoff state for the requested session.
+- `workingSummary`: rolling handoff state for the requested session.
 - `rawTail`: newest raw events for last-mile continuity.
 
 To expand one memory-map cluster:
@@ -2123,18 +2125,15 @@ explicit normalized GitHub key such as `github.com/example/contextforge` when a
 checkout has no useful remote, points at a fork, or may live at different local
 paths.
 
-Agents should use `search` for scoped retrieval on demand, call `get_memory`
-only when they know the durable key they need, append raw evidence for later
-distillation, and call `remember` when the user or agent intentionally decides
-that an important fact, preference, decision, or runbook note should become
-durable memory. Use `promote_memory` only after a checkpoint candidate or
-decision has been reviewed, or `promote_memory_candidate` when promoting a
-reviewed candidate directly by candidate id. Use
-`correct_memory` to preserve the previous value while changing a durable key,
-and `deactivate_memory` to remove stale memories from retrieval without
-deleting their history. `distill_checkpoint` returns `memoryCandidateCount`,
-and `session_status` reports `latestCheckpointMemoryCandidateCount`; agents
-should call `list_memory_candidates` when either count is greater than zero.
+The default `agent-core` profile has ten everyday tools: `db_info`,
+`bootstrap_context`, `search`, `get_memory`, `remember`, `list_checkpoints`,
+`list_memory_candidates`, `distill_checkpoint`, `correct_memory`, and
+`deactivate_memory`. Use `search` for scoped retrieval and detail pointers;
+use `get_memory` for a known durable key. Use durable-memory writes deliberately.
+Distill when a user or work boundary needs a handoff, not as a required daily
+lifecycle. `session_status`, raw evidence capture, jobs, audit, and promotion
+remain available through the review or operator profiles when their detail is
+needed.
 
 For agent runtime workflow guidance, use the installed `contextforge-memory`
 skill. It is written as an agent-neutral reusable guide for ContextForge MCP
@@ -2164,23 +2163,11 @@ state the expected connection mode and storage authority directly in
 server's env files, service manager, or local database. When available, use
 `db_info` or `bootstrap_context` `connection.summary` or `connection.accessMode`
 as the live access-path check.
-For loose continuation prompts like "yesterday", "continue", "previous work",
-issue/PR follow-up, context compaction, or cross-agent handoff, agents should
-call `bootstrap_context` or `bootstrapContext` early with an explicit
-`consultReason` such as `resume`, `compaction_recovery`, or `agent_switch`.
-The bootstrap response includes `handoff.latestCheckpoints` independently of
-search ranking, then reviews repo-scoped `memory`, `checkpoint`, and
-`memory_candidate` hits as context candidates, optionally includes up to three
-shared-scope hits, exposes `handoff.latestConsolidation` for thread/repo period
-context when available, and reports `memoryLifecycle` so agents can notice
-stale or missing candidate/promotion flow. It then reminds the agent to verify
-current branch, issue/PR, CI, migration, and runtime state against live sources
-before acting. Only for startup, resume, compaction recovery, or agent switch,
-agents should read latest checkpoints and consolidation before durable memory
-for fast-moving work status; durable memory remains the stable
-policy/contract/runbook layer. Legacy calls that omit `consultReason` are
-treated as `unknown`: latest handoff is still returned for compatibility, but
-the response warns callers to pass an explicit reason.
+For a known continuation, pass its matching `sessionId` to
+`bootstrap_context` or `bootstrapContext`; compact handoff and working context
+then remain session-bound. Without it, use a task-relevant scoped query and do
+not infer the task from an unrelated latest handoff. Verify current branch,
+issue/PR, CI, migration, and runtime state from live sources before acting.
 
 Inside the same uninterrupted active session, current conversation context is
 the source for current intent. Do not call `bootstrap_context` merely to
@@ -2189,9 +2176,8 @@ domain lookups, and use `db_info`, SQL, git, GitHub, health checks, or service
 manager state for mutable runtime facts.
 
 When resuming a known session, pass `sessionId` to `bootstrap_context` or
-`bootstrapContext`. ContextForge will include the session's latest
-`workingSummary` separately from search results so agents can see current task
-state without treating it as canonical memory.
+`bootstrapContext`. Without a bound or explicit ID, save/resume operations must
+not guess a latest session.
 
 ## codex_exec Provider
 

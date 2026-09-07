@@ -26,6 +26,7 @@ import { processCandidateLifecycle, watchCandidateLifecycle } from './memory/can
 import { startContextForgeServer } from './server.js';
 import { backupSqliteDatabase, restoreSqliteDatabase, verifySqliteBackup } from './storage/backup.js';
 import { CONTEXTFORGE_VERSION } from './version.js';
+import { withCliAdapterSession } from './application/adapter_session.js';
 
 function parseArgs(argv) {
   const command = argv[2];
@@ -537,7 +538,7 @@ async function main() {
   }
 
   const app = createContextForge();
-  const coreOptions = toCoreOptions(options);
+  const coreOptions = withCliAdapterSession(command, toCoreOptions(options), process.env);
   const handler = commands[command];
   if (!handler) {
     throw new Error(`Unknown command: ${command}`);
