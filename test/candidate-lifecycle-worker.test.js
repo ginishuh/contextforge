@@ -48,6 +48,10 @@ function fakeLifecycleApp(calls, { failScope = null } = {}) {
       calls.push(['stale', options]);
       return { dueCount: 3, staled: options.dryRun ? 0 : 2, skipped: 1, failed: 0 };
     },
+    async processApprovedMemoryCandidates(options) {
+      calls.push(['promotion', options]);
+      return { enabled: true, processed: 1, promoted: options.dryRun ? 0 : 1, updated: 0, linked: 0, held: 0, failed: 0 };
+    },
     async processJobs(options) {
       calls.push(['jobs', options]);
       return { claimed: 1, succeeded: 1, failed: 0, requeued: 0 };
@@ -65,7 +69,7 @@ test('candidate lifecycle iteration defaults to provider-free dry-run with one e
   assert.equal(result.dryRun, true);
   assert.equal(result.scopeCount, 1);
   assert.equal(result.failedScopes, 0);
-  assert.deepEqual(calls.map(([method]) => method), ['wake', 'audit', 'stale']);
+  assert.deepEqual(calls.map(([method]) => method), ['wake', 'audit', 'promotion', 'stale']);
   assert.equal(calls.every(([, options]) => options.dryRun === true), true);
   assert.equal(result.scopes[0].wakeups.dueCount, 2);
   assert.equal(result.scopes[0].audits.dueCount, 1);
@@ -119,7 +123,7 @@ test('candidate lifecycle watch runs bounded iterations and reports compact tota
   assert.equal(result.results.length, 2);
   assert.equal(emitted.length, 2);
   assert.equal(result.totals.scopes, 2);
-  assert.equal(calls.length, 6);
+  assert.equal(calls.length, 8);
 });
 
 test('unbounded candidate lifecycle watch rejects a busy-loop interval', async () => {

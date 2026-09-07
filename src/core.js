@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { pagedList } from './application/paged_list.js';
+import { compactBootstrap, compactRetrievalRequested, compactRetrievalResponse } from './application/compact_retrieval.js';
 import {
   bootstrapConsultPolicy,
   bootstrapRawTailEvent,
@@ -94,6 +95,7 @@ import {
   warningForPromotionAssessment,
 } from './memory/candidate_promotion.js';
 import { candidateBacklogAuditPlanMethods } from './memory/candidate_backlog_audit_plan.js';
+import { processApprovedMemoryCandidates } from './memory/approved_candidate_promotion.js';
 import { candidateDispositionMethods } from './memory/candidate_dispositions.js';
 import { consolidationMethods } from './memory/consolidation.js';
 import { memoryCandidateRevisionHash } from './memory/candidate_revision.js';
@@ -1661,6 +1663,7 @@ export function createContextForge(options = {}) {
     },
 
     async bootstrapContext(options = {}) {
+      const compact = compactRetrievalRequested(options);
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.query, 'query');
       const limit = positiveNumber(options.limit == null ? 8 : Number(options.limit), 'limit');
@@ -1733,8 +1736,12 @@ export function createContextForge(options = {}) {
           workspaceBlock = buildWorkspaceFederationBlock(store, scope, options, {
             queryEmbedding,
             consultReason,
-            resultMapper: workspaceBootstrapResult,
+            resultMapper: compact ? workspaceSearchResult : workspaceBootstrapResult,
           });
+        }
+        if (compact) {
+          return compactBootstrap({ store, scope, options, storage, workspace: workspaceBlock, sharedSkippedReason,
+            results: [...repoResults, ...sharedResults, ...(workspaceBlock?.results || [])] });
         }
         const memoryMapSeeds = repoResults
           .filter((result) => result.type === 'memory' && result.memory)
@@ -2805,6 +2812,7 @@ export function createContextForge(options = {}) {
       }
       const filters = {
         ...scope,
+        ...(options.candidateId ? { candidateIds: [options.candidateId] } : {}),
         sessionId: options.sessionId || null,
         checkpointId: options.checkpointId || null,
         status: options.status || null,
@@ -2830,6 +2838,13 @@ export function createContextForge(options = {}) {
     memoryCandidateBacklog(options = {}) {
       const scope = normalizeScopeOptions(options, config);
       return useStore((store) => buildMemoryCandidateBacklog({ store, scope, options }));
+    },
+    processApprovedMemoryCandidates(options = {}) {
+      requireOption(options.scopeKey, 'scopeKey');
+      const scope = normalizeScopeOptions(options, config);
+      return useStore((store) => processApprovedMemoryCandidates({
+        store, scope, options, enabled: config.autoPromote.enabled, enqueueEmbeddings: enqueueEmbeddingSources,
+      }));
     },
     routeAuditedMemoryCandidates(options = {}) {
       const scope = normalizeScopeOptions(options, config);
@@ -3487,34 +3502,6 @@ export function createContextForge(options = {}) {
           model: auditor?.metadata?.model || null,
           reasoningEffort: auditor?.metadata?.reasoningEffort || null,
         };
-        if (options.sessionId && sourceMode === 'latest_checkpoint' && !checkpointId) {
-          return {
-            kind: 'memory_candidate_audit_suggestions',
-            trigger,
-            source: {
-              sessionId: options.sessionId,
-              checkpointId: null,
-              mode: sourceMode,
-            },
-            policy: {
-              minConfidence,
-              minStability,
-              allowedCategories: Array.from(allowedCategories),
-              scopeFallback: false,
-              mutatesDurableMemory: false,
-              persistsAuditMetadata: false,
-              audit: auditPolicy,
-            },
-            proposals: [],
-            skipped: [],
-            requestWarnings,
-            nextActions: [
-              'No latest checkpoint was found for this session; distill a checkpoint before auditing candidates.',
-              'No memory candidates were promoted.',
-            ],
-          };
-        }
-
         const allCandidates = store.listMemoryCandidates({
           ...scope,
           sessionId: options.sessionId || null,
@@ -4049,11 +4036,12 @@ export function createContextForge(options = {}) {
             }
           }
         }
-        const auditApproved = dryRun ? [] : audited.filter((item) => item.audit?.approved === true);
+        const approvedNew = (item) => item.audit?.approved === true && (!item.audit.promotion || item.audit.promotion.action === 'new');
+        const auditApproved = dryRun ? [] : audited.filter(approvedNew);
         const auditSkipped = dryRun
           ? []
           : audited
-              .filter((item) => item.audit?.approved !== true)
+              .filter((item) => !approvedNew(item))
               .map((item) => ({
                 candidateId: item.candidate.id,
                 reason: auditSkipReason(item.audit),
@@ -4571,29 +4559,17 @@ export function createContextForge(options = {}) {
     },
 
     search(options) {
+      const compact = compactRetrievalRequested(options);
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.query, 'query');
       const workspaceRequested = workspaceKeyRequested(options.workspaceKey);
+      const format = (value) => compact ? compactRetrievalResponse({ scope, options,
+        results: [...(Array.isArray(value) ? value : value.results), ...(value.workspace?.results || [])],
+        workspace: value.workspace }) : value;
       if (workspaceRequested) {
-        if (!embeddingProvider) {
-          return useStore((store) => {
-            const results = searchStoreWithScope(store, scope, options);
-            return {
-              kind: 'workspace_search',
-              scope,
-              query: options.query,
-              results,
-              ...(options.includeDiagnostics ? { diagnostics: results.diagnostics } : {}),
-              workspace: buildWorkspaceFederationBlock(store, scope, options, {
-                resultMapper: workspaceSearchResult,
-              }),
-            };
-          });
-        }
-        return useStore(async (store) => {
-          const [queryEmbedding] = await embeddingProvider.embed([options.query]);
+        const retrieve = (store, queryEmbedding = null) => {
           const results = searchStoreWithScope(store, scope, options, queryEmbedding);
-          return {
+          return format({
             kind: 'workspace_search',
             scope,
             query: options.query,
@@ -4603,10 +4579,14 @@ export function createContextForge(options = {}) {
               queryEmbedding,
               resultMapper: workspaceSearchResult,
             }),
-          };
-        });
+          });
+        };
+        return embeddingProvider
+          ? useStore(async (store) => retrieve(store, (await embeddingProvider.embed([options.query]))[0]))
+          : useStore((store) => retrieve(store));
       }
-      return searchWithScope(scope, options);
+      const result = searchWithScope(scope, options);
+      return result?.then ? result.then(format) : format(result);
     },
 
     appendRaw(options) {
@@ -4677,6 +4657,7 @@ export function createContextForge(options = {}) {
       const scope = normalizeScopeOptions(options, config);
       const filters = {
         ...scope,
+        checkpointId: options.checkpointId || null,
         sessionId: options.sessionId || null,
         level: options.level == null ? null : Number(options.level),
         sort: 'created_at_storage_sequence_desc',

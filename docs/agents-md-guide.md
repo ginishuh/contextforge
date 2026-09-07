@@ -103,10 +103,14 @@ Trust result types by role: `memory` is reviewed durable state, `checkpoint`
 is credible recent handoff state that still needs live verification, and
 `memory_candidate` is review material.
 
-Critical session invariant: `bootstrap_context` does not create a session. Use
-the adapter session id such as `codex:<id>` or `claude_code:<id>` for
-`session_status`, `distill_checkpoint`, and closeout. Use `begin_session` only
-for manual `append_raw` evidence streams.
+Keep scope explicit. A `workspaceKey` opts into cross-repo retrieval and is
+never inferred from workspace membership, process state, or cwd. The host cwd
+does not prove the semantic repository target.
+
+Critical session invariant: `bootstrap_context` does not create a session.
+Preserve an adapter-bound ID for save/resume. Without a binding, pass an
+explicit `sessionId`; do not guess a latest session. Use the installed skill for
+manual evidence capture and advanced lifecycle operations.
 
 For full ContextForge MCP workflow, use the installed `contextforge-memory`
 skill.
@@ -136,7 +140,7 @@ Before committing an `AGENTS.md` change, check:
 - Can an agent scan it quickly before work starts?
 - Is each rule specific to this repository or necessary before first action?
 - Are long workflows linked instead of pasted?
-- Does the ContextForge section mention the session invariant?
+- Does the ContextForge section keep scope and session identity explicit?
 - Does it point to the installed `contextforge-memory` skill instead of a
   downstream-only relative path?
 - Are private references, secrets, and local-only assumptions absent?

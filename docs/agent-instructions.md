@@ -19,71 +19,25 @@ use:
 
 ## Minimal AGENTS.md Snippet
 
-Use this when a repository only needs a short ContextForge bootstrap pointer.
+Use this when a repository only needs a short ContextForge operating contract.
 Replace `github.com/example/repo` when a canonical scope key is required.
 
 ```text
 Use ContextForge MCP for scoped project memory when it is available.
 
-At task start, after context compaction, or when resuming prior work, call
-`bootstrap_context` with this task, `scope: "repo"`, this repo path or the
-canonical scope key `github.com/example/repo`, and an explicit
-`consultReason` such as `startup`, `resume`, `compaction_recovery`, or
-`agent_switch`. Include shared memory only when cross-repo or user-wide policy
-may matter.
+Use `bootstrap_context` for a task-relevant start or resume with explicit repo
+scope. Use `search` for targeted lookup and its detail pointers for detail.
+`memory` is reviewed durable state; `checkpoint` is handoff context that needs
+live verification; `memory_candidate` is review material.
 
-If the repository belongs to a configured multi-repo workspace, use
-`resolve_workspace` first to inspect the scope plan, or pass `workspaceKey` to
-`bootstrap_context` when cross-repo context is needed during startup/resume.
-ContextForge does not infer this key from the current repo or workspace
-membership. Creating the profile does not activate federation by itself, so
-repo-local instructions or an adapter/wrapper must supply the intended
-`workspaceKey` on each relevant `resolve_workspace`, `bootstrap_context`, or
-`search` call. Core callers use `resolveWorkspace`; the corresponding CLI
-command is `workspaceResolve`. `bootstrapContext`, `search`, and `agentStart`
-also accept the option on their core/CLI surfaces. There is no process-global
-default workspace. Without the key, retrieval remains single-repo.
-Workspace profiles do not change storage mode; they only define which existing
-scopes are consulted together. Keep ordinary single-repo bootstrap as the
-default unless the task needs cross-repo context. When workspace bootstrap is
-enabled, read top-level `results` as the primary-scope view and
-`workspace.results` as bounded supplemental member-scope context. Top-level
-`includeShared=true` does not by itself enable workspace shared retrieval;
-workspace shared results require a workspace routing rule with `includeShared`.
-During active work, targeted `search` calls may also pass `workspaceKey` when a
-file/API/error/domain lookup needs cross-repo memory. Without `workspaceKey`,
-`search` keeps its ordinary scoped array response; with `workspaceKey`, inspect
-the separate `workspace` block for supplemental member-scope results.
+Keep scope explicit. `workspaceKey` opts into cross-repo retrieval; ContextForge
+never infers it from membership, process state, or cwd. Check mutable git, CI,
+runtime, and deployment facts from their live source.
 
-Do not call `bootstrap_context` just to re-confirm current intent inside the
-same uninterrupted active session. For active-session file/API/error/domain
-lookups, use targeted `search`. For runtime, DB, git, GitHub, CI, health, or
-deployment state, use live checks such as `db_info`, SQL, git, GitHub,
-`/healthz`, or the service manager.
-
-Before relying on retrieval, distinguish storage authority. Remote
-ContextForge storage is canonical shared memory for the configured scope;
-local or project-local storage is machine/check-out local context unless the
-user says otherwise.
-
-Interpret search result types by trust role: `memory` is reviewed durable
-state, `checkpoint` is credible recent handoff state that still needs live
-verification, and `memory_candidate` is review material.
-
-Use `bootstrap_context.memoryMap` for durable-memory orientation before reading
-raw retrieval hits. Expand a cluster with `expand_memory_cluster` only when
-atomic memories or provenance are needed. The map covers the requested primary
-scope; include shared memory through search results when needed.
-
-Critical session invariant: `bootstrap_context` does not create a session. In
-Codex/Claude auto-ingest flows, use the adapter session id such as
-`codex:<id>` or `claude_code:<id>` for `session_status`,
-`distill_checkpoint`, and closeout promotion. Use `begin_session` only for a
-manual `append_raw` evidence stream. Do not create a fresh `cf_...` session at
-closeout to review candidates from an existing Codex/Claude session.
-
-For full ContextForge MCP workflow rules, use the installed
-`contextforge-memory` skill.
+`bootstrap_context` does not create a session. Preserve an adapter session ID
+for save/resume; without a binding, pass `sessionId` explicitly and never guess
+the latest session. For full session and advanced lifecycle guidance, use the
+installed `contextforge-memory` skill.
 ```
 
 ## Remote Canonical Variant
@@ -128,25 +82,16 @@ the selected adapter id and optional `workspaceKey`. `agentCloseout` requires
 review broad scope backlog unless an explicit lower-level closeout command is
 used for that purpose.
 
-Read `handoff.latestCheckpoints` before durable memory for recent work status,
-recent decisions, open todos, branch/PR/CI flow, and next actions. Treat
-`handoff.latestConsolidation` as optional thread/repo period context when
-bootstrap would otherwise show only a thin latest checkpoint. Inspect
-`memoryLifecycle` for candidate/promotion freshness, pending candidate counts,
-and recent candidate/promotion flow. Treat
-`memory` as reviewed durable state for stable contracts, policies, and
-runbooks; treat `checkpoint` as credible recent handoff state that still needs
-live verification; and treat `memory_candidate` as review material.
-Use `memoryMap` as the compact durable-memory overview and call
-`expand_memory_cluster` only for the cluster whose details are needed.
+MCP returns compact bootstrap and search results by default. Follow a result's
+detail pointer only when its summary is relevant; use `responseMode: "full"`
+only for diagnostics or legacy callers. Treat `memory` as reviewed durable
+state, `checkpoint` as recent continuity that still needs live verification,
+and `memory_candidate` as review material.
 
-For loose continuation prompts such as "yesterday", "continue", "previous
-work", issue/PR follow-up, or cross-agent handoff, call `bootstrap_context`
-first. It includes latest checkpoint handoff independently from semantic search
-ranking. Use `sync_resume_context` only when the exact session id is known and
-session working state or raw tail is needed. Use checkpoints for prior intent,
-recent decisions, and unfinished work, then verify current git/GitHub/CI/runtime
-state from live sources.
+For a known continuation session, pass its exact `sessionId` to
+`bootstrap_context` or `sync_resume_context`. Without that identity, use a
+task-relevant scoped search and do not treat an unrelated latest handoff as the
+current task. Verify mutable git/GitHub/CI/runtime state from live sources.
 
 Inside the same uninterrupted active session, current conversation context is
 the source for current intent. Do not use latest handoff as routine

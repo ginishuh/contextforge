@@ -3,7 +3,7 @@ import { validateDistillOutput } from '../validate.js';
 import { ProviderTimeoutError } from '../../runtime/provider_execution.js';
 import { assertExternalProviderAllowed } from '../../testing/external_provider.js';
 
-export const OPENAI_COMPATIBLE_PROMPT_VERSION = 'openai_compatible.prompt.v3';
+export const OPENAI_COMPATIBLE_PROMPT_VERSION = 'openai_compatible.prompt.v4';
 
 const DEFAULT_TIMEOUT_MS = 120000;
 const DEFAULT_BASE_URL = 'https://api.deepseek.com';

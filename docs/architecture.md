@@ -435,7 +435,18 @@ only be inserted after provider output passes validation.
 
 Default retrieval should be compact, explainable, scoped, and on demand.
 
-Recommended order:
+MCP `bootstrap_context` and `search` default to `responseMode: "compact"`.
+The serialized result has a 6000-character budget (configurable with `maxChars`
+from 2000 to 20000), scoped excerpts, and exact detail pointers. Startup does
+not attach a query-independent latest handoff. Resume requires a matching
+`sessionId`; a missing session never falls back to another session's work.
+Compact bootstrap skips memory-map construction and lifecycle summaries.
+Character budgets cover the result JSON, not the MCP protocol envelope or a
+model-specific token count. Budget omissions are reported explicitly.
+
+Core and CLI callers retain full responses by default. MCP callers needing
+the previous shape, diagnostics, raw tail, or memory map can request
+`responseMode: "full"`. The legacy full view retains this source order:
 
 1. current repository reality
 2. latest ContextForge checkpoints from `handoff.latestCheckpoints` for recent

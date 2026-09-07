@@ -54,6 +54,19 @@ headroom, so the next unrelated change would have failed its cap at a moment
 nobody chose. And the cap only ever guarded `agent-core`: the profiles that
 grew by roughly a fifth had nothing watching them at all.
 
+## 2026-09-07 Current Source Measurement
+
+This is a measurement of the checked-out source, not a claim about a deployed
+server. The historical tables above remain historical.
+
+| Profile | Tools | Instructions bytes | `tools/list` JSON bytes | Description bytes | Estimated tokens |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `agent-core` | 10 | 991 | 9,981 | 1,519 | 2,743 |
+| `review` | 45 | 991 | 44,493 | 8,210 | 11,371 |
+| `operator` | 67 | 991 | 65,056 | 12,055 | 16,512 |
+| `workspace-admin` | 11 | 991 | 8,888 | 2,061 | 2,470 |
+| `all` | 73 | 991 | 70,154 | 13,077 | 17,787 |
+
 ## Ratchet
 
 Budgets now live in `scripts/mcp-surface-budgets.json` and cover every profile.
@@ -83,8 +96,8 @@ Selection correctness is tested as a deterministic capability contract rather
 than an LLM benchmark:
 
 - every profile has an exact ordered tool set;
-- `agent-core` contains normal bootstrap, retrieval, evidence, checkpoint, and
-  closeout tools while excluding operator and workspace mutation tools;
+- `agent-core` contains the ten everyday bootstrap, retrieval, durable-memory,
+  and checkpoint tools while excluding workflow, operator, and workspace tools;
 - `review` adds candidate and durable-memory review operations;
 - `operator` contains runtime maintenance but excludes workspace mutations;
 - `workspace-admin` contains workspace topology and scope migration operations;

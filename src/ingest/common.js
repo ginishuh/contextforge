@@ -483,6 +483,9 @@ export async function readIncrementalJsonl(file, stateEntry = {}) {
     if (lines.at(-1) === '') {
       lines.pop();
     }
+    const lineByteLengths = (completeText.match(/[^\n]*(?:\n|$)/g) || [])
+      .filter(Boolean)
+      .map((line) => Buffer.byteLength(line));
     const completeBytes = Buffer.byteLength(completeText);
     return {
       file,
@@ -490,6 +493,7 @@ export async function readIncrementalJsonl(file, stateEntry = {}) {
       changed: true,
       reset,
       lines,
+      lineByteLengths,
       completeBytes,
       nextOffset: readOffset + completeBytes,
       nextLineNumber: startLineNumber + lines.length,

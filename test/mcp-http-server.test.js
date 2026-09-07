@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import fs from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -23,45 +22,22 @@ import { startContextForgeServer } from '../src/server.js';
 const execFileAsync = promisify(execFile);
 const packageManifest = createRequire(import.meta.url)('../package.json');
 
-test('MCP instructions keep embedding maintenance safety guidance compact', async () => {
-  const source = await fs.readFile(path.join(process.cwd(), 'src', 'mcp.js'), 'utf8');
-
-  assert.match(source, /Embedding maintenance is operator-profile work/);
-  assert.match(source, /inspect db_info coverage/);
-  assert.match(source, /packaged contextforge-memory skill/);
+test('default tools support explicit corrections and keep promotion in review', () => {
+  assert.ok(MCP_TOOL_PROFILES['agent-core'].includes('correct_memory'));
+  assert.ok(MCP_TOOL_PROFILES['agent-core'].includes('deactivate_memory'));
+  assert.equal(MCP_TOOL_PROFILES['agent-core'].includes('promote_memory_candidate'), false);
+  assert.ok(MCP_TOOL_PROFILES.review.includes('promote_memory_candidate'));
 });
 
 test('MCP tool profiles have exact bounded surfaces and reject invalid configuration', () => {
   const expectedAgentCore = [
-    'db_info',
-    'resolve_workspace',
-    'bootstrap_context',
-    'expand_memory_cluster',
-    'sync_resume_context',
-    'begin_session',
-    'session_status',
-    'submit_distill_job',
-    'get_job',
-    'search',
-    'get_memory',
-    'remember',
-    'append_raw',
-    'get_working_summary',
-    'list_checkpoints',
-    'get_session_working_context',
-    'upsert_session_working_context',
-    'distill_checkpoint',
-    'distill_usage',
-    'list_memory_candidates',
-    'suggest_memory_promotions',
-    'reconcile_memory',
-    'promote_memory_candidate',
-    'reject_memory_candidate',
-  ];
-  assert.deepEqual(MCP_TOOL_PROFILES['agent-core'], expectedAgentCore);
+    'db_info', 'bootstrap_context', 'search', 'get_memory', 'remember',
+    'list_checkpoints', 'distill_checkpoint', 'list_memory_candidates',
+    'correct_memory', 'deactivate_memory',
+  ];  assert.deepEqual(MCP_TOOL_PROFILES['agent-core'], expectedAgentCore);
   assert.deepEqual(
     Object.fromEntries(Object.entries(MCP_TOOL_PROFILES).map(([name, tools]) => [name, tools.length])),
-    { 'agent-core': 24, review: 45, operator: 67, 'workspace-admin': 11, all: 73 },
+    { 'agent-core': 10, review: 45, operator: 67, 'workspace-admin': 11, all: 73 },
   );
   assert.deepEqual(MCP_TOOL_PROFILES.all, ALL_MCP_TOOL_NAMES);
 
@@ -105,7 +81,7 @@ test('MCP default profile stays within the context budget without requiring an i
   try {
     const surface = getContextForgeMcpSurfaceInfo(defaultServer);
     const allSurface = getContextForgeMcpSurfaceInfo(allServer);
-    assert.equal(surface.toolCount, 24);
+    assert.equal(surface.toolCount, 10);
     assert.equal(allSurface.toolCount, 73);
     // Absolute caps moved to scripts/mcp-surface-budgets.json, which ratchets
     // every profile. What belongs here is the relation between them.
@@ -272,7 +248,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.ok(distillTool.inputSchema.properties.maxEvents);
     assert.ok(distillTool.inputSchema.properties.maxChars);
     assert.ok(distillTool.inputSchema.properties.level);
-    assert.ok(distillTool.description.includes('memoryCandidateCount'));
+    assert.equal(distillTool.inputSchema.required?.includes('sessionId') ?? false, false);
     const listCheckpointsTool = toolList.tools.find((tool) => tool.name === 'list_checkpoints');
     assert.ok(listCheckpointsTool.inputSchema.properties.level);
     const distillUsageTool = toolList.tools.find((tool) => tool.name === 'distill_usage');
@@ -323,8 +299,9 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.ok(bootstrapTool.inputSchema.properties.memoryMapLimit);
     assert.ok(bootstrapTool.inputSchema.properties.memoryMapClusterSize);
     assert.ok(bootstrapTool.description.includes('Does not create a session'));
-    assert.ok(bootstrapTool.description.includes('latest checkpoint handoff'));
-    assert.ok(bootstrapTool.description.includes('memoryMap'));
+    assert.deepEqual(bootstrapTool.inputSchema.properties.responseMode.enum, ['compact', 'full']);
+    assert.equal(bootstrapTool.inputSchema.properties.maxChars.minimum, 2000);
+    assert.equal(bootstrapTool.inputSchema.properties.maxChars.maximum, 20000);
     const searchTool = toolList.tools.find((tool) => tool.name === 'search');
     assert.ok(searchTool.inputSchema.properties.workspaceKey);
     assert.ok(searchTool.inputSchema.properties.limit);
@@ -335,7 +312,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.ok(searchTool.inputSchema.properties.workspaceResultLimit);
     assert.ok(searchTool.inputSchema.properties.workspacePerScopeLimit);
     assert.ok(searchTool.inputSchema.properties.includePrimaryInWorkspaceResults);
-    assert.ok(searchTool.description.includes('workspace federation'));
+    assert.deepEqual(searchTool.inputSchema.properties.responseMode.enum, ['compact', 'full']);
     const expandClusterTool = toolList.tools.find((tool) => tool.name === 'expand_memory_cluster');
     assert.ok(expandClusterTool.inputSchema.properties.clusterId);
     assert.ok(expandClusterTool.inputSchema.properties.includeProvenance);
@@ -417,7 +394,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
         query: 'retrieval demand',
       },
     });
-    assert.equal(searchResult.structuredContent.result[0].memory.key, 'mcp-rule');
+    assert.equal(searchResult.structuredContent.result.results[0].key, 'mcp-rule');
 
     const bootstrapResult = await client.callTool({
       name: 'bootstrap_context',
@@ -425,6 +402,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
         scope: 'repo',
         scopeKey: 'mcp-repo',
         query: 'retrieval demand previous work',
+        responseMode: 'full',
       },
     });
     assert.equal(bootstrapResult.structuredContent.result.scope.scopeKey, 'mcp-repo');
@@ -495,6 +473,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
         sessionId: 'mcp-session',
         query: 'session status before distilling',
         rawTailLimit: 0,
+        responseMode: 'full',
       },
     });
     assert.equal(zeroRawTailBootstrap.structuredContent.result.rawTailLimit, 0);
@@ -535,7 +514,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
   }
 });
 
-test('MCP streamable HTTP endpoint exposes core tools with bearer auth', async () => {
+test('MCP streamable HTTP endpoint exposes review workflow tools with bearer auth', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({
     env: {
@@ -567,6 +546,7 @@ test('MCP streamable HTTP endpoint exposes core tools with bearer auth', async (
     port: 0,
     env: {
       CONTEXTFORGE_REMOTE_TOKEN: 'test-token',
+      CONTEXTFORGE_MCP_PROFILE: 'review',
     },
   });
   const client = new Client({ name: 'contextforge-http-test-client', version: '0.0.0' }, { capabilities: {} });
@@ -585,11 +565,11 @@ test('MCP streamable HTTP endpoint exposes core tools with bearer auth', async (
     const toolList = await client.listTools();
     assert.deepEqual(
       toolList.tools.map((tool) => tool.name),
-      MCP_TOOL_PROFILES['agent-core'],
+      MCP_TOOL_PROFILES.review,
     );
     const reportedSurface = JSON.parse(
       (
-        await execFileAsync('node', ['src/mcp.js', '--describe-surface'], {
+        await execFileAsync('node', ['src/mcp.js', '--describe-surface', '--profile', 'review'], {
           env: { ...process.env, CONTEXTFORGE_DATA_DIR: dataDir },
         })
       ).stdout,
@@ -627,7 +607,7 @@ test('MCP streamable HTTP endpoint exposes core tools with bearer auth', async (
         query: 'canonical remote',
       },
     });
-    assert.equal(searched.structuredContent.result[0].memory.key, 'http-mcp-rule');
+    assert.equal(searched.structuredContent.result.results[0].key, 'http-mcp-rule');
 
     const bootstrap = await client.callTool({
       name: 'bootstrap_context',
@@ -635,6 +615,7 @@ test('MCP streamable HTTP endpoint exposes core tools with bearer auth', async (
         scope: 'repo',
         scopeKey: 'http-mcp-repo',
         query: 'canonical remote',
+        responseMode: 'full',
       },
     });
     assert.equal(bootstrap.structuredContent.result.storage.connection.mode, 'remote-client');

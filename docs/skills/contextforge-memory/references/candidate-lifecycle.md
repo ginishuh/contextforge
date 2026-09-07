@@ -9,6 +9,26 @@ Candidate v2 fields such as `durabilityReason`, `riskReason`, `evidenceRefs`, an
 `approve` decision is not itself a durable write. Candidate
 disposition, audit state, and durable promotion remain separate lifecycle state.
 
+## Approved-Candidate Finalization
+
+After a worker has processed audit jobs, its next bounded stage can call the
+HTTP/CLI operator API `processApprovedMemoryCandidates`. This is not an
+everyday MCP tool. It defaults to `dryRun=true`, processes at most 10 candidates
+per scope (maximum 100), and requires `CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true`
+on the server before `dryRun=false` can write durable memory.
+
+The result reports `new`, `duplicate`, `update`, and `hold` outcomes. A v2
+audit binds its action to the exact candidate revision hash and, for a target,
+the exact durable-memory ID and revision hash. An `update` must contain the
+complete approved replacement content. The finalizer reloads those values at
+write time; a changed candidate or target is held rather than inferred again.
+
+Historical approvals may still finalize a `new` memory through fresh safety
+checks. They never authorize a legacy duplicate or update: those remain held
+with `needs_action_audit`. Held metadata is tied to that audit attempt, so a
+held candidate does not starve later items in the batch. Re-audit the current
+candidate to retry after its content or target changes.
+
 ## Scope-Wide Candidate Review
 
 Never broaden an empty closeout proposal into an implicit scope scan.
@@ -69,6 +89,10 @@ dry-run first when operating manually.
   after the token file to force remote storage mode and the configured URL while
   keeping the URL out of the command line. If limits increase, scale the remote
   timeout for the worst-case provider-call count and concurrency.
+- The worker finalizes approved candidates only after its audit-job stage. Its
+  `--promotionLimit` defaults to 10 and is capped at 100; this is separate from
+  `--auditLimit`. A dry-run reports planned `new`, `duplicate`, `update`, or
+  `hold` outcomes without durable writes.
 - Keep registry scope ownership and token authorization explicit. Watch
   `/readyz` operation-worker freshness and operational metrics; one worker's
   scope fence must not be mistaken for ownership of jobs outside its registry.

@@ -7,9 +7,11 @@ import { z } from 'zod';
 import { candidateBacklogAuditPlanToolConfig } from './memory/candidate_backlog_audit_plan_mcp.js';
 import { auditedCandidateRoutingMcpToolConfig } from './memory/audited_candidate_routing.js';
 import { createContextForge } from './core.js';
-import { MCP_OPERATION_TOOL_NAMES, operationByMcpTool } from './operations/registry.js';
+import { operationByMcpTool } from './operations/registry.js';
+import { ALL_MCP_TOOL_NAMES, resolveMcpToolSelection } from './application/mcp_profiles.js';
+export { ALL_MCP_TOOL_NAMES, MCP_TOOL_PROFILES, resolveMcpToolSelection } from './application/mcp_profiles.js';
 import { CONTEXTFORGE_VERSION } from './version.js';
-
+import { adapterSessionFromEnv, usesAdapterSession, withAdapterSession } from './application/adapter_session.js';
 const scopeSchema = z.enum(['shared', 'repo', 'local']);
 const workspaceModeSchema = z.enum(['off', 'auto', 'strict']);
 const consultReasonSchema = z.enum([
@@ -37,126 +39,6 @@ const closeoutTriggerSchema = z.enum([
   'manual_closeout',
   'idle_closeout',
 ]);
-
-export const ALL_MCP_TOOL_NAMES = MCP_OPERATION_TOOL_NAMES;
-
-const AGENT_CORE_TOOLS = Object.freeze([
-  'db_info',
-  'bootstrap_context',
-  'expand_memory_cluster',
-  'resolve_workspace',
-  'sync_resume_context',
-  'begin_session',
-  'session_status',
-  'search',
-  'get_memory',
-  'remember',
-  'append_raw',
-  'get_working_summary',
-  'list_checkpoints',
-  'get_session_working_context',
-  'upsert_session_working_context',
-  'distill_checkpoint',
-  'submit_distill_job',
-  'get_job',
-  'distill_usage',
-  'list_memory_candidates',
-  'suggest_memory_promotions',
-  'promote_memory_candidate',
-  'reject_memory_candidate',
-  'reconcile_memory',
-]);
-
-const REVIEW_EXTRA_TOOLS = Object.freeze([
-  'submit_audit_job',
-  'plan_memory_candidate_backlog_audit', 'route_audited_memory_candidates',
-  'list_due_candidate_audits',
-  'list_due_candidate_stale_transitions',
-  'list_due_candidate_wakeups',
-  'snooze_memory_candidate',
-  'wake_memory_candidate',
-  'reopen_stale_memory_candidate',
-  'list_memory_events',
-  'list_preference_occurrences',
-  'list_memory_update_candidates',
-  'audit_memory_duplicates',
-  'apply_memory_update_candidate',
-  'reject_memory_update_candidate',
-  'skip_memory_update_candidate',
-  'auto_promote_memory_candidates',
-  'audit_memory_candidates',
-  'promote_memory',
-  'correct_memory',
-  'deactivate_memory',
-]);
-
-const WORKSPACE_ADMIN_TOOLS = Object.freeze([
-  'db_info',
-  'migrate_scope',
-  'list_workspaces',
-  'get_workspace',
-  'resolve_workspace',
-  'upsert_workspace_profile',
-  'deactivate_workspace_profile',
-  'upsert_workspace_member',
-  'remove_workspace_member',
-  'upsert_workspace_routing_rule',
-  'remove_workspace_routing_rule',
-]);
-
-const WORKSPACE_MUTATION_TOOLS = new Set([
-  'upsert_workspace_profile',
-  'deactivate_workspace_profile',
-  'upsert_workspace_member',
-  'remove_workspace_member',
-  'upsert_workspace_routing_rule',
-  'remove_workspace_routing_rule',
-]);
-const canonicalToolList = (names) => {
-  const selected = new Set(names);
-  return Object.freeze(ALL_MCP_TOOL_NAMES.filter((name) => selected.has(name)));
-};
-
-export const MCP_TOOL_PROFILES = Object.freeze({
-  'agent-core': canonicalToolList(AGENT_CORE_TOOLS),
-  review: canonicalToolList([...AGENT_CORE_TOOLS, ...REVIEW_EXTRA_TOOLS]),
-  operator: Object.freeze(ALL_MCP_TOOL_NAMES.filter((name) => !WORKSPACE_MUTATION_TOOLS.has(name))),
-  'workspace-admin': canonicalToolList(WORKSPACE_ADMIN_TOOLS),
-  all: ALL_MCP_TOOL_NAMES,
-});
-
-function normalizeToolAllowlist(value) {
-  const values = Array.isArray(value) ? value : String(value || '').split(',');
-  return Array.from(new Set(values.map((item) => String(item).trim()).filter(Boolean)));
-}
-
-export function resolveMcpToolSelection({ env = process.env, profile = null, tools = null } = {}) {
-  const explicitTools = normalizeToolAllowlist(tools ?? env.CONTEXTFORGE_MCP_TOOLS);
-  const requestedProfile = profile || env.CONTEXTFORGE_MCP_PROFILE || 'agent-core';
-  const knownProfile = Object.hasOwn(MCP_TOOL_PROFILES, requestedProfile);
-  if (!knownProfile && explicitTools.length === 0) {
-    throw new Error(
-      `Unknown ContextForge MCP profile: ${requestedProfile}. Available profiles: ${Object.keys(MCP_TOOL_PROFILES).join(', ')}.`,
-    );
-  }
-  const selectedToolNames = explicitTools.length > 0 ? explicitTools : [...MCP_TOOL_PROFILES[requestedProfile]];
-  const unknownTools = selectedToolNames.filter((name) => !ALL_MCP_TOOL_NAMES.includes(name));
-  if (unknownTools.length > 0) {
-    throw new Error(`Unknown ContextForge MCP tool(s): ${unknownTools.join(', ')}.`);
-  }
-  const enabledToolNames = canonicalToolList(selectedToolNames);
-  return {
-    profile: explicitTools.length > 0 ? 'custom' : requestedProfile,
-    requestedProfile,
-    explicitAllowlist: explicitTools.length > 0,
-    warnings: !knownProfile
-      ? [`Ignored unknown MCP profile ${requestedProfile} because an explicit tool allowlist was provided.`]
-      : [],
-    enabledToolNames,
-    disabledToolNames: ALL_MCP_TOOL_NAMES.filter((name) => !enabledToolNames.includes(name)),
-  };
-}
-
 const scopedSchema = {
   scope: scopeSchema.optional(),
   scopeKey: z.string().optional(),
@@ -164,22 +46,20 @@ const scopedSchema = {
   repoPath: z.string().optional(),
 };
 
-function jsonResult(result) {
+function jsonResult(result, { compact = false } = {}) {
   return {
-    content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+    content: [{ type: 'text', text: JSON.stringify(result, null, compact ? undefined : 2) }],
     structuredContent: { result },
   };
 }
 
 const MCP_INSTRUCTIONS = [
   'Use ContextForge for scoped memory retrieval on demand.',
-  'At non-trivial task start or resume, call bootstrap_context with repoPath/cwd or scopeKey and the matching consultReason. Use db_info to distinguish remote canonical storage from checkout-local context.',
-  'Trust roles differ: memory is reviewed durable state, checkpoint is recent handoff that needs live-state verification, and memory_candidate is unreviewed. Verify mutable git, CI, runtime, and migration claims at their live source.',
-  'bootstrap_context does not create sessions. Preserve adapter ids such as codex:<id> or claude_code:<id>; use begin_session only for manual append_raw streams. Keep local scope opt-in.',
-  'Distill failure must not erase raw evidence. At closeout, retain checkpointId and review candidates before promotion. Audit persists review metadata but does not itself promote durable memory.',
-  'Use durable submit/get job tools when provider work must survive disconnects; an operator must process queued jobs. Queued cancellation is guaranteed, running force-cancel is not, and candidate audit remains per-candidate rather than true provider batching.',
-  'Embedding maintenance is operator-profile work; inspect db_info coverage before handing it to an operator.',
-  'Profiles intentionally hide tools. Use the packaged contextforge-memory skill for detailed review, reconciliation, consolidation, embeddings, workspace administration, and closeout workflows.',
+  'Use bootstrap_context to start or resume a task, search for targeted lookup, and follow returned detail pointers. Supply the intended repo scope; shared and workspace retrieval stay explicit.',
+  'The client adapter can supply session identity. Omit sessionId for the bound session; provide it explicitly when no binding exists or when inspecting another session. Never guess the latest session.',
+  'Checkpoints are recent handoff state; memories are reviewed durable knowledge; candidates are unreviewed. Verify mutable facts at their live source.',
+  'Use distill_checkpoint to save work at meaningful boundaries, remember for intentional durable knowledge, and correct_memory or deactivate_memory for corrections. Distillation and durable promotion have separate policies.',
+  'Manual evidence capture and candidate review use the review profile; maintenance uses operator. Use the packaged contextforge-memory skill only for those detailed workflows.',
 ].join(' ');
 
 function mcpSurfaceInfo(toolRegistrations, selection) {
@@ -245,6 +125,7 @@ export function createContextForgeMcpServer({
   env = process.env,
   profile = null,
   tools = null,
+  adapterSessionId = null,
 } = {}) {
   const selection = resolveMcpToolSelection({ env, profile, tools });
   app ||= createContextForge({ env });
@@ -270,12 +151,20 @@ export function createContextForgeMcpServer({
     }
     const registeredConfig = {
       ...config,
+      ...(usesAdapterSession(operation.name) && config.inputSchema?.sessionId ? {
+        inputSchema: { ...config.inputSchema, sessionId: config.inputSchema.sessionId.optional() },
+      } : {}),
       annotations: {
         ...(config.annotations || {}),
         ...operation.mcp.annotations,
       },
     };
-    const handler = async (args = {}) => jsonResult(await app[operation.name](args));
+    const handler = async (args = {}) => {
+      const compact = name === 'bootstrap_context' || name === 'search';
+      const bound = withAdapterSession(operation.name, args, adapterSessionId);
+      const result = await app[operation.name](compact ? { ...bound, responseMode: bound.responseMode ?? 'compact' } : bound);
+      return jsonResult(result, { compact: compact && result.responseMode === 'compact' });
+    };
     toolRegistrations.push({ name, operation: operation.name, config: registeredConfig });
     return sdkRegisterTool(name, registeredConfig, handler);
   };
@@ -532,7 +421,7 @@ export function createContextForgeMcpServer({
     {
       title: 'Bootstrap Context',
       description:
-        'Resolve scoped ContextForge memory for startup/resume/compaction recovery in one call. Includes query-independent latest checkpoint handoff (default 1, max 3) before search results, plus a compact memoryMap for progressive durable-memory navigation. Pass workspaceKey to add a separate bounded workspace federation block; workspace profiles define which existing scopes are consulted together and do not change storage mode. Pass consultReason to distinguish startup/resume/compaction_recovery/agent_switch from active_session, targeted_search, or live_state_check. During active work, prefer search for file/API/error/domain lookups and live sources for mutable state. Does not create a session; pass a known Codex/Claude/ContextForge sessionId to load session working state. rawTailLimit defaults to 0; set a positive value to include raw tail.',
+        'Retrieve compact scoped context for startup or resume. Use result detail pointers for more data; use responseMode=full only for diagnostics or legacy callers. Does not create a session.',
       inputSchema: { ...scopedSchema,
         query: z.string(),
         consultReason: consultReasonSchema.optional(),
@@ -548,6 +437,8 @@ export function createContextForgeMcpServer({
         includeWorkspaceHandoffs: z.boolean().optional(),
         includePrimaryInWorkspaceResults: z.boolean().optional(),
         limit: z.number().int().positive().optional(),
+        responseMode: z.enum(['compact', 'full']).optional(),
+        maxChars: z.number().int().min(2000).max(20000).optional(),
         memoryMapLimit: z.number().int().positive().max(20).optional(),
         memoryMapClusterSize: z.number().int().positive().max(20).optional(),
         sharedScopeKey: z.string().optional(),
@@ -1008,11 +899,13 @@ export function createContextForgeMcpServer({
     {
       title: 'Search Memory',
       description:
-        'Search bounded indexed memory/checkpoint/memory_candidate results. includeDiagnostics preserves zero-hit metrics. Window=min(max(limit*4,50),candidateLimit), capped at 500; results at 100. legacyFullScan is diagnostic only. Use scope or workspaceKey for bounded workspace federation.',
+        'Search scoped memory in compact form. Follow each result detail pointer for more data; use responseMode=full only for diagnostics or legacy callers.',
       inputSchema: {
         ...scopedSchema,
         query: z.string(),
         limit: z.number().int().positive().optional(),
+        responseMode: z.enum(['compact', 'full']).optional(),
+        maxChars: z.number().int().min(2000).max(20000).optional(),
         candidateLimit: z.number().int().positive().optional(),
         legacyFullScan: z.boolean().optional(),
         includeDiagnostics: z.boolean().optional(),
@@ -1241,9 +1134,10 @@ export function createContextForgeMcpServer({
     {
       title: 'List Checkpoints',
       description:
-        'List scoped checkpoints, optionally filtered by sessionId and checkpoint level. Level 0 is the default session distill level.',
+        'List scoped checkpoints, optionally filtered by checkpointId, sessionId, or level.',
       inputSchema: {
         ...scopedSchema,
+        checkpointId: z.string().optional(),
         sessionId: z.string().optional(),
         level: z.number().int().nonnegative().optional(),
         ...pageSchema,
@@ -1309,7 +1203,7 @@ export function createContextForgeMcpServer({
     {
       title: 'Distill Checkpoint',
       description:
-        'Distill raw session evidence into a checkpoint with the configured provider. Returns checkpointId and memoryCandidateCount. Candidate audit runs automatically in scoped batches when auditTrigger is supplied or the batch threshold is reached; automatic promotion only writes approved strict-safe audit results when enabled. Periodic checkpoint consolidation is handled by process_consolidations.',
+        'Save a checkpoint from session evidence with the configured distillation provider. Uses the bound adapter session when sessionId is omitted. Returns checkpointId; durable promotion follows the separately configured review policy.',
       inputSchema: {
         ...scopedSchema,
         sessionId: z.string(),
@@ -1432,6 +1326,7 @@ export function createContextForgeMcpServer({
         'List memory candidates saved on distilled checkpoints without promoting them. At closeout, pass the same sessionId or checkpointId used for the current work; omitting both reviews the broader scope queue rather than the current closeout source.',
       inputSchema: {
         ...scopedSchema,
+        candidateId: z.string().optional(),
         sessionId: z.string().optional(),
         checkpointId: z.string().optional(),
         status: z.enum(['pending', 'promoted', 'rejected', 'stale', 'snoozed']).optional(),
@@ -1856,7 +1751,7 @@ export function createContextForgeMcpServer({
 }
 
 export async function startContextForgeMcpServer({ app, env = process.env, profile = null, tools = null } = {}) {
-  const server = createContextForgeMcpServer({ app, env, profile, tools });
+  const server = createContextForgeMcpServer({ app, env, profile, tools, adapterSessionId: adapterSessionFromEnv(env) });
   const transport = new StdioServerTransport();
   await server.connect(transport);
   return server;

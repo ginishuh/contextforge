@@ -97,14 +97,9 @@ test('packaged memory skill uses bounded progressive disclosure without losing l
     assert.ok(skill.includes(reference), `missing progressive-disclosure link: ${reference}`);
   }
   for (const contract of [
-    'If a linked file is unavailable, the runtime skill installation is incomplete',
     '`bootstrap_context` does not create a session.',
     '`connection.accessMode`',
-    'not create a fresh `cf_...` session at closeout',
-    'Never broaden an empty closeout',
-    'never scans the whole scope backlog.',
     'Distillation failure must not erase raw evidence.',
-    'must not promote or mutate durable memory.',
   ]) {
     assert.ok(skill.includes(contract), `missing always-loaded safety contract: ${contract}`);
   }
@@ -125,6 +120,7 @@ test('packaged memory skill uses bounded progressive disclosure without losing l
       'codex:<native-session-id>',
       'begin_session',
       'agentCloseout',
+      'Do not create a new `cf_...` session for an existing Codex or Claude Code run.',
     ],
     'references/distillation-and-jobs.md': [
       'submit_distill_job',
@@ -133,6 +129,8 @@ test('packaged memory skill uses bounded progressive disclosure without losing l
       'process_consolidations',
     ],
     'references/closeout-and-corrections.md': [
+      'never scan the whole scope backlog implicitly',
+      'must not promote or mutate durable memory',
       'auditTrigger',
       'promote_memory_candidate',
       'audit_memory_duplicates',

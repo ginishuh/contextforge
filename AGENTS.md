@@ -93,36 +93,17 @@ distinctions, follow `docs/runtime-modes.md`.
 
 ## ContextForge MCP Bootstrap
 
-Use ContextForge MCP for scoped project memory when it is available.
+Use ContextForge for task-relevant project memory when available. Start or
+resume with `bootstrap_context`, use `search` for targeted lookup, and follow
+returned detail pointers. Prefer scope `repo` with the canonical scope key
+`github.com/ginishuh/contextforge`. Shared and workspace retrieval remain opt-in.
 
-At task start, run a small bootstrap: search repo memory for this task, and
-search shared memory only when cross-repo or user-wide policy may matter. Use
-the inferred repo scope key, or an explicit `github.com/owner/repo` key when
-cross-machine continuity matters.
+Check `connection` metadata before treating a store as canonical. Memory is
+reviewed knowledge; checkpoints are recent handoff state and candidates are
+review material. Verify mutable Git, CI, runtime, and deployment state live.
 
-When a configured workspace profile is relevant, use `resolve_workspace` or pass
-`workspaceKey` to `bootstrap_context` for bounded supplemental cross-repo
-retrieval. During uninterrupted active work, prefer targeted `search`; pass
-`workspaceKey` there only when the lookup genuinely needs cross-repo memory.
-ContextForge does not infer the workspace from repo membership, and there is no
-process-global default workspace. Without an explicit `workspaceKey`, retrieval
-keeps its ordinary single-repo behavior.
-
-Before relying on retrieval, distinguish storage authority. Remote
-ContextForge storage is canonical shared memory for the configured scope;
-local or project-local storage is machine/check-out local context unless the
-user says otherwise.
-
-Interpret search result types by trust role: `memory` is reviewed durable
-state, `checkpoint` is credible recent handoff state that still needs live
-verification, and `memory_candidate` is review material.
-
-Critical session invariant: `bootstrap_context` does not create a session. In
-Codex/Claude auto-ingest flows, use the adapter session id such as
-`codex:<id>` or `claude_code:<id>` for `session_status`,
-`distill_checkpoint`, and closeout promotion. Use `begin_session` only for a
-manual `append_raw` evidence stream. Do not create a fresh `cf_...` session at
-closeout to review candidates from an existing Codex/Claude session.
-
-For full ContextForge MCP workflow rules, use the installed
-`contextforge-memory` skill.
+Use the adapter-bound session for save/resume. If no binding exists, pass the
+known session ID explicitly; never guess the latest session or create a new
+manual session for an existing adapter stream. Save a checkpoint when useful;
+durable memory writes remain deliberate. For manual capture, candidate review,
+or maintenance, consult the packaged `contextforge-memory` skill.

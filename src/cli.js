@@ -26,6 +26,7 @@ import { processCandidateLifecycle, watchCandidateLifecycle } from './memory/can
 import { startContextForgeServer } from './server.js';
 import { backupSqliteDatabase, restoreSqliteDatabase, verifySqliteBackup } from './storage/backup.js';
 import { CONTEXTFORGE_VERSION } from './version.js';
+import { withCliAdapterSession } from './application/adapter_session.js';
 
 function parseArgs(argv) {
   const command = argv[2];
@@ -116,6 +117,8 @@ function toCoreOptions(options) {
     tags: Array.isArray(tags) ? tags : typeof tags === 'string' ? tags.split(',').filter(Boolean) : [],
     importance: options.importance == null ? 0 : Number(options.importance),
     query: options.query,
+    responseMode: options.responseMode,
+    maxChars: options.maxChars == null ? undefined : Number(options.maxChars),
     candidateLimit: options.candidateLimit == null ? undefined : Number(options.candidateLimit),
     legacyFullScan: cliBooleanOption(options.legacyFullScan, 'legacyFullScan'),
     includeDiagnostics: cliBooleanOption(options.includeDiagnostics, 'includeDiagnostics'),
@@ -227,6 +230,7 @@ function toCoreOptions(options) {
     sinceMinutes: options.sinceMinutes == null ? undefined : Number(options.sinceMinutes),
     scanLimit: options.scanLimit == null ? undefined : Number(options.scanLimit),
     batchLimit: options.batchLimit == null ? undefined : Number(options.batchLimit),
+    promotionLimit: options.promotionLimit == null ? undefined : Number(options.promotionLimit),
     auditLimit: options.auditLimit == null ? undefined : Number(options.auditLimit),
     auditBatchLimit: options.auditBatchLimit == null ? undefined : Number(options.auditBatchLimit),
     wakeLimit: options.wakeLimit == null ? undefined : Number(options.wakeLimit),
@@ -391,6 +395,8 @@ async function main() {
       app.listDueCandidateStaleTransitions(preserveCoreLimitDefault(coreOptions, rawOptions)),
     processDueCandidateStaleTransitions: (app, coreOptions, rawOptions) =>
       app.processDueCandidateStaleTransitions(preserveCoreLimitDefault(coreOptions, rawOptions)),
+    processApprovedMemoryCandidates: (app, coreOptions, rawOptions) =>
+      app.processApprovedMemoryCandidates(preserveCoreLimitDefault(coreOptions, rawOptions)),
     candidateLifecycleWorker: (app, coreOptions) =>
       coreOptions.watch
         ? watchCandidateLifecycle(app, {
@@ -535,7 +541,7 @@ async function main() {
   }
 
   const app = createContextForge();
-  const coreOptions = toCoreOptions(options);
+  const coreOptions = withCliAdapterSession(command, toCoreOptions(options), process.env);
   const handler = commands[command];
   if (!handler) {
     throw new Error(`Unknown command: ${command}`);

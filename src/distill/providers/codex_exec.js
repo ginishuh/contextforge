@@ -7,7 +7,7 @@ import { registerRuntimeChild } from '../../runtime/child_processes.js';
 import { assertExternalProviderAllowed } from '../../testing/external_provider.js';
 import { STRUCTURED_CHECKPOINT_SCHEMA_VERSION } from '../validate.js';
 
-export const CODEX_EXEC_PROMPT_VERSION = 'codex_exec.prompt.v9';
+export const CODEX_EXEC_PROMPT_VERSION = 'codex_exec.prompt.v10';
 export const CODEX_EXEC_OUTPUT_SCHEMA_VERSION = 'contextforge.checkpoint.v6';
 
 function nullableStringSchema() {
@@ -353,6 +353,17 @@ function buildSourceCheckpointPayload(sourceCheckpoints, maxInputChars) {
   return { checkpoints, truncated };
 }
 
+function targetScopeFromInput(input) {
+  const explicitScope = input.scope && typeof input.scope === 'object' ? input.scope : null;
+  const sessionScope = input.session && typeof input.session === 'object' ? input.session : null;
+  const scope = explicitScope || sessionScope || {};
+  return {
+    scopeType: scope.scopeType || scope.scope || (typeof input.scope === 'string' ? input.scope : null),
+    scopeKey: scope.scopeKey || input.scopeKey || sessionScope?.scopeKey || null,
+    sessionId: scope.sessionId || sessionScope?.sessionId || input.sessionId || null,
+  };
+}
+
 export function buildCodexExecPrompt(input, options = {}) {
   const maxInputChars = options.maxInputChars || 12000;
   const isConsolidation = Boolean(input.consolidation);
@@ -369,6 +380,13 @@ export function buildCodexExecPrompt(input, options = {}) {
       'Return only JSON that matches the requested schema.',
       'Do not include Markdown, code fences, commentary, or private assumptions.',
       'Preserve uncertainty in openQuestions instead of inventing facts.',
+      'targetScope is the authoritative requested scope. Summaries, workingSummary, sessionWorkingContext, structured work, and memoryCandidates must concern that target scope.',
+      'The host process cwd is non-authoritative context and must not override targetScope. Do not infer the target repo, branch, runtime, or live state from it.',
+      'If evidence includes a detour into another repo or scope, preserve the paused target-scope work and do not make the detour the latest target-scope state.',
+      'Mention foreign work only when the evidence names a concrete effect on targetScope; identify it as external context rather than copying its task, runtime state, branch, or status into the target.',
+      'Never copy foreign runtime or repository state into structured.liveState. Include target liveState only when target-scoped evidence supports it.',
+      'Previous checkpoints and working context can be polluted by unrelated work. Do not perpetuate unrelated state; use target-scoped raw evidence and preserve uncertainty when the target state is unclear.',
+      'When scope attribution is uncertain, leave the content in raw evidence and, if needed, record only the uncertainty in openQuestions; do not turn it into a target-repo fact or memoryCandidate.',
       isConsolidation
         ? 'Use only the sourceCheckpoints and consolidation window supplied in this request.'
         : 'Use only the conversation events and previous checkpoint supplied in this request.',
@@ -414,6 +432,7 @@ export function buildCodexExecPrompt(input, options = {}) {
       'Use low confidence or low stability for guesses, temporary state, implementation-in-progress details, and facts that require current runtime verification.',
       'Use sensitivity high or restricted for any candidate that might contain secrets, personal data, customer data, private runtime paths, or credentials, and do not recommend promotion for it.',
     ],
+    targetScope: targetScopeFromInput(input),
     session: input.session,
     consolidation: input.consolidation || null,
     requestedOutputSchema: input.requestedOutputSchema,

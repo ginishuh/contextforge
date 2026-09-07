@@ -9,16 +9,16 @@ import {
   createWatchTotals,
   discoverFiles,
   ingestParsedSession,
+  isPathWithin,
   loadRepoRegistry,
   loadWatchState,
-  matchRepoForCwdOrGitRemote,
   readIncrementalJsonl,
   saveWatchState,
-  shouldSkipOutsideRepo,
   summarizeResults,
   textFromContent,
   truncate,
 } from './common.js';
+import { aggregateCodexScopeResults, rewindForPendingCodexUser, splitCodexEventsByRepo } from './codex_scope.js';
 
 const DEFAULT_MAX_CONTENT_CHARS = 8000;
 const DEFAULT_WATCH_INTERVAL_MS = 30000;
@@ -28,13 +28,23 @@ const CODEX_AGENT_PROVENANCE = {
   sourceAdapter: 'codex_rollout_jsonl',
 };
 
+function filterCodexEventsForRepoPath(parsed, repoPath) {
+  if (!repoPath) return { parsed, skippedEvents: 0 };
+  const events = parsed.events.filter((event) => isPathWithin(repoPath, event.metadata?.cwd || ''));
+  return { parsed: { ...parsed, events }, skippedEvents: parsed.events.length - events.length };
+}
+
 function incrementalCodexInitialContext(currentEntry = {}, chunk) {
+  if (chunk.reset) {
+    return { lineNumber: 0 };
+  }
   return {
     nativeSessionId: currentEntry.nativeSessionId,
     sessionId: currentEntry.sessionId,
     conversationId: currentEntry.conversationId,
     cwd: currentEntry.cwd,
-    lineNumber: chunk.reset ? 0 : currentEntry.lineNumber || 0,
+    turnId: currentEntry.turnId,
+    lineNumber: currentEntry.lineNumber || 0,
   };
 }
 
@@ -58,6 +68,13 @@ export function normalizeCodexRolloutRecord(record, context, options = {}) {
     return null;
   }
 
+  if (record.type === 'turn_context') {
+    context.cwd = record.payload?.cwd || context.cwd;
+    context.turnId = record.payload?.turn_id || null;
+    context.flushPendingUsers = true;
+    return null;
+  }
+
   if (record.type !== 'response_item') {
     return null;
   }
@@ -76,7 +93,7 @@ export function normalizeCodexRolloutRecord(record, context, options = {}) {
   }
 
   const content = truncate(normalized.content, options.maxContentChars || DEFAULT_MAX_CONTENT_CHARS);
-  return {
+  const event = {
     role: normalized.role,
     content: content.text,
     metadata: {
@@ -92,8 +109,11 @@ export function normalizeCodexRolloutRecord(record, context, options = {}) {
       rolloutTimestamp: record.timestamp || null,
       truncated: content.truncated,
       sourceFile: context.filePath || null,
+      cwd: context.cwd || null,
+      turnId: context.turnId || null,
     },
   };
+  return event;
 }
 
 export function parseCodexRolloutLines(filePath, lines, options = {}, initialContext = {}) {
@@ -107,9 +127,11 @@ export function parseCodexRolloutLines(filePath, lines, options = {}, initialCon
     conversationId:
       initialContext.conversationId || (options.conversationId ? codexSessionId(options.conversationId) : sessionId),
     cwd: initialContext.cwd || null,
+    turnId: initialContext.turnId || null,
     lineNumber: initialContext.lineNumber || 0,
   };
   const events = [];
+  const pendingUsers = [];
   const warnings = [];
 
   for (const line of lines) {
@@ -129,10 +151,28 @@ export function parseCodexRolloutLines(filePath, lines, options = {}, initialCon
       });
       continue;
     }
+    context.flushPendingUsers = false;
     const event = normalizeCodexRolloutRecord(record, context, options);
-    if (event) {
+    if (context.flushPendingUsers) {
+      for (const pending of pendingUsers.splice(0)) {
+        pending.event.metadata.cwd = context.cwd || null;
+        pending.event.metadata.turnId = context.turnId || null;
+        events.push(pending.event);
+      }
+    } else if (event?.role === 'user') {
+      pendingUsers.push({ event, lineNumber: context.lineNumber });
+    } else if (event) {
+      // Older rollout files have no turn_context, so their next assistant reply
+      // is the safe boundary that releases the pending user evidence.
+      for (const pending of pendingUsers.splice(0)) {
+        events.push(pending.event);
+      }
       events.push(event);
     }
+  }
+
+  if (!options.deferPendingUsers) {
+    for (const pending of pendingUsers) events.push(pending.event);
   }
 
   return {
@@ -141,6 +181,8 @@ export function parseCodexRolloutLines(filePath, lines, options = {}, initialCon
     conversationId: context.conversationId || context.sessionId,
     cwd: context.cwd,
     lineNumber: context.lineNumber,
+    turnId: context.turnId,
+    pendingUserLineNumber: options.deferPendingUsers ? pendingUsers[0]?.lineNumber || null : null,
     events,
     warnings,
   };
@@ -177,6 +219,7 @@ export async function parseCodexRolloutFile(filePath, options = {}) {
     sessionId: parsed.sessionId,
     conversationId: parsed.conversationId,
     cwd: parsed.cwd,
+    turnId: parsed.turnId,
     events: parsed.events,
     warnings,
   };
@@ -188,15 +231,41 @@ async function ingestParsedCodexRollout(app, parsed, options = {}) {
   });
 }
 
+async function ingestRoutedCodexParsed(app, parsed, options, repos) {
+  const routed = await splitCodexEventsByRepo(parsed, repos, options);
+  const scopeResults = [];
+  for (const group of routed.groups) {
+    const result = await ingestParsedCodexRollout(app, group.parsed, {
+      ...options,
+      scope: 'repo',
+      scopeKey: group.matchedRepo.scopeKey,
+      repoPath: undefined,
+      cwd: undefined,
+    });
+    scopeResults.push({ ...result, matchedRepo: group.matchedRepo });
+  }
+  const totals = aggregateCodexScopeResults(scopeResults, routed.unroutedEvents);
+  const single = scopeResults.length === 1 ? scopeResults[0] : {};
+  return {
+    ...single,
+    ...totals,
+    skipped: scopeResults.length === 0,
+    skippedReason: scopeResults.length === 0 ? (parsed.cwd ? 'unmatched_repo_cwd' : 'missing_cwd') : null,
+    matchedRepo: single.matchedRepo || null,
+    scopeResults,
+  };
+}
+
 export async function ingestCodexRolloutFile(app, options = {}) {
   if (!options.file) {
     throw new Error('file is required.');
   }
-  const parsed = await parseCodexRolloutFile(options.file, options);
+  const parsed = await parseCodexRolloutFile(options.file, { ...options, deferPendingUsers: true });
   if (!parsed.sessionId) {
     throw new Error('Codex rollout session id could not be determined.');
   }
-  if (shouldSkipOutsideRepo(parsed, options)) {
+  const filtered = filterCodexEventsForRepoPath(parsed, options.repoPath);
+  if (filtered.parsed.events.length === 0 && filtered.skippedEvents > 0) {
     return {
       source: 'codex_rollout_jsonl',
       file: options.file,
@@ -214,7 +283,7 @@ export async function ingestCodexRolloutFile(app, options = {}) {
       checkpoint: null,
     };
   }
-  const result = await ingestParsedCodexRollout(app, parsed, options);
+  const result = await ingestParsedCodexRollout(app, filtered.parsed, options);
 
   return {
     source: 'codex_rollout_jsonl',
@@ -223,6 +292,8 @@ export async function ingestCodexRolloutFile(app, options = {}) {
     conversationId: parsed.conversationId,
     warnings: parsed.warnings,
     ...result,
+    parsedEvents: parsed.events.length,
+    skippedEvents: result.skippedEvents + filtered.skippedEvents,
   };
 }
 
@@ -253,7 +324,7 @@ export async function ingestCodexSessions(app, options = {}) {
     parsedEvents: results.reduce((total, result) => total + result.parsedEvents, 0),
     appendedEvents: results.reduce((total, result) => total + result.appendedEvents, 0),
     skippedEvents: results.reduce((total, result) => total + result.skippedEvents, 0),
-    checkpointsCreated: results.filter((result) => result.checkpoint).length,
+    checkpointsCreated: results.reduce((total, result) => total + (result.checkpointsCreated || Number(Boolean(result.checkpoint))), 0),
     fileResults: results,
   };
 }
@@ -265,45 +336,13 @@ export async function ingestCodexRoutedSessions(app, options = {}) {
 
   for (const file of files) {
     const parsed = await parseCodexRolloutFile(file, options);
-    const matchedRepo = await matchRepoForCwdOrGitRemote(parsed.cwd, repos, options);
-    if (!matchedRepo) {
-      results.push({
-        source: 'codex_rollout_jsonl',
-        file,
-        sessionId: parsed.sessionId,
-        conversationId: parsed.conversationId,
-        parsedEvents: parsed.events.length,
-        appendedEvents: 0,
-        skippedEvents: parsed.events.length,
-        warnings: parsed.warnings,
-        skipped: true,
-        skippedReason: parsed.cwd ? 'unmatched_repo_cwd' : 'missing_cwd',
-        cwd: parsed.cwd,
-        matchedRepo: null,
-        status: null,
-        checkpoint: null,
-      });
-      continue;
-    }
-
-    const result = await ingestParsedCodexRollout(app, parsed, {
-      ...options,
-      scope: 'repo',
-      scopeKey: matchedRepo.scopeKey,
-      repoPath: undefined,
-      cwd: undefined,
-    });
+    const result = await ingestRoutedCodexParsed(app, parsed, options, repos);
     results.push({
       source: 'codex_rollout_jsonl',
       file,
       sessionId: parsed.sessionId,
       conversationId: parsed.conversationId,
       warnings: parsed.warnings,
-      matchedRepo: {
-        name: matchedRepo.name,
-        repoPath: matchedRepo.repoPath,
-        scopeKey: matchedRepo.scopeKey,
-      },
       ...result,
     });
   }
@@ -321,8 +360,8 @@ export async function ingestCodexRoutedSessions(app, options = {}) {
     parsedEvents: results.reduce((total, result) => total + result.parsedEvents, 0),
     appendedEvents: results.reduce((total, result) => total + result.appendedEvents, 0),
     skippedEvents: results.reduce((total, result) => total + result.skippedEvents, 0),
-    checkpointsCreated: results.filter((result) => result.checkpoint).length,
-    routedFiles: results.filter((result) => result.matchedRepo).length,
+    checkpointsCreated: results.reduce((total, result) => total + (result.checkpointsCreated || Number(Boolean(result.checkpoint))), 0),
+    routedFiles: results.filter((result) => result.scopeResults?.length || result.matchedRepo).length,
     skippedFiles: results.filter((result) => result.skipped).length,
     fileResults: results,
   };
@@ -373,7 +412,7 @@ async function processIncrementalCodexFile(app, file, options, state) {
   const parsed = parseCodexRolloutLines(
     file,
     chunk.lines,
-    { ...options, recoverMalformedJsonl: true },
+    { ...options, recoverMalformedJsonl: true, deferPendingUsers: true },
     incrementalCodexInitialContext(currentEntry, chunk),
   );
 
@@ -381,8 +420,9 @@ async function processIncrementalCodexFile(app, file, options, state) {
     throw new Error('Codex rollout session id could not be determined.');
   }
 
+  const filtered = filterCodexEventsForRepoPath(parsed, options.repoPath);
   let result;
-  if (shouldSkipOutsideRepo(parsed, options)) {
+  if (filtered.parsed.events.length === 0 && filtered.skippedEvents > 0) {
     result = {
       source: 'codex_rollout_jsonl',
       file,
@@ -400,23 +440,28 @@ async function processIncrementalCodexFile(app, file, options, state) {
       checkpoint: null,
     };
   } else {
+    const ingested = await ingestParsedCodexRollout(app, filtered.parsed, options);
     result = {
       source: 'codex_rollout_jsonl',
       file,
       sessionId: parsed.sessionId,
       conversationId: parsed.conversationId,
       warnings: parsed.warnings,
-      ...(await ingestParsedCodexRollout(app, parsed, options)),
+      ...ingested,
+      parsedEvents: parsed.events.length,
+      skippedEvents: ingested.skippedEvents + filtered.skippedEvents,
     };
   }
 
+  const rewind = rewindForPendingCodexUser(chunk, currentEntry, parsed);
   state.entries[file] = {
-    offset: chunk.nextOffset,
-    lineNumber: chunk.nextLineNumber,
+    offset: rewind?.offset ?? chunk.nextOffset,
+    lineNumber: rewind?.lineNumber ?? chunk.nextLineNumber,
     sessionId: parsed.sessionId,
     conversationId: parsed.conversationId,
     nativeSessionId: parsed.nativeSessionId,
     cwd: parsed.cwd,
+    turnId: parsed.turnId,
     size: chunk.stat.size,
     mtimeMs: chunk.stat.mtimeMs,
     updatedAt: new Date().toISOString(),
@@ -505,56 +550,27 @@ async function processIncrementalRoutedCodexFile(app, file, options, repos, stat
   const parsed = parseCodexRolloutLines(
     file,
     chunk.lines,
-    { ...options, recoverMalformedJsonl: true },
+    { ...options, recoverMalformedJsonl: true, deferPendingUsers: true },
     incrementalCodexInitialContext(currentEntry, chunk),
   );
-  const matchedRepo = await matchRepoForCwdOrGitRemote(parsed.cwd, repos, options);
-  let result;
-  if (!matchedRepo) {
-    result = {
-      source: 'codex_rollout_jsonl',
-      file,
-      sessionId: parsed.sessionId,
-      conversationId: parsed.conversationId,
-      parsedEvents: parsed.events.length,
-      appendedEvents: 0,
-      skippedEvents: parsed.events.length,
-      warnings: parsed.warnings,
-      skipped: true,
-      skippedReason: parsed.cwd ? 'unmatched_repo_cwd' : 'missing_cwd',
-      cwd: parsed.cwd,
-      matchedRepo: null,
-      status: null,
-      checkpoint: null,
-    };
-  } else {
-    result = {
-      source: 'codex_rollout_jsonl',
-      file,
-      sessionId: parsed.sessionId,
-      conversationId: parsed.conversationId,
-      warnings: parsed.warnings,
-      matchedRepo: {
-        name: matchedRepo.name,
-        repoPath: matchedRepo.repoPath,
-        scopeKey: matchedRepo.scopeKey,
-      },
-      ...(await ingestParsedCodexRollout(app, parsed, {
-        ...options,
-        scope: 'repo',
-        scopeKey: matchedRepo.scopeKey,
-        repoPath: undefined,
-        cwd: undefined,
-      })),
-    };
-  }
+  const routed = await ingestRoutedCodexParsed(app, parsed, options, repos);
+  const result = {
+    source: 'codex_rollout_jsonl',
+    file,
+    sessionId: parsed.sessionId,
+    conversationId: parsed.conversationId,
+    warnings: parsed.warnings,
+    ...routed,
+  };
+  const rewind = rewindForPendingCodexUser(chunk, currentEntry, parsed);
   state.entries[file] = {
-    offset: chunk.nextOffset,
-    lineNumber: chunk.nextLineNumber,
+    offset: rewind?.offset ?? chunk.nextOffset,
+    lineNumber: rewind?.lineNumber ?? chunk.nextLineNumber,
     sessionId: parsed.sessionId,
     conversationId: parsed.conversationId,
     nativeSessionId: parsed.nativeSessionId,
     cwd: parsed.cwd,
+    turnId: parsed.turnId,
     size: chunk.stat.size,
     mtimeMs: chunk.stat.mtimeMs,
     matchedRepo: result.matchedRepo || null,
@@ -595,8 +611,8 @@ export async function ingestCodexRoutedSessionsIncremental(app, options = {}) {
     parsedEvents: results.reduce((total, result) => total + result.parsedEvents, 0),
     appendedEvents: results.reduce((total, result) => total + result.appendedEvents, 0),
     skippedEvents: results.reduce((total, result) => total + result.skippedEvents, 0),
-    checkpointsCreated: results.filter((result) => result.checkpoint).length,
-    routedFiles: results.filter((result) => result.matchedRepo).length,
+    checkpointsCreated: results.reduce((total, result) => total + (result.checkpointsCreated || Number(Boolean(result.checkpoint))), 0),
+    routedFiles: results.filter((result) => result.scopeResults?.length || result.matchedRepo).length,
     skippedFiles: results.filter((result) => result.skipped).length,
     stateFile: descriptor.stateFile,
     stateLoaded,

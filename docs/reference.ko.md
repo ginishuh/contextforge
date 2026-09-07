@@ -35,8 +35,8 @@ live source > durable memory > checkpoint handoff > memory_candidate
 
 - supervised candidate lifecycle worker가 명시적 repo registry를 돌면서 만료된
   snooze를 깨우고, idle small-session audit를 큐잉하고, bounded stale SLA
-  전이를 적용하고, canonical scope별로 audit job을 처리한다. CLI 기본값은
-  dry-run이고 systemd installer만 mutation을 명시적으로 켠다.
+  전이를 적용하고, canonical scope별로 audit job 처리 뒤 승인 후보를 최종화한다.
+  CLI 기본값은 dry-run이고 systemd installer만 mutation을 명시적으로 켠다.
 - `/readyz`가 bounded startup grace period와 `operation_worker_stale` 사유로
   operation-worker freshness를 보고한다. 운영 지표에 candidate throughput·
   latency, audit decision·routing 분포, correction/deactivation 비율, quality
@@ -68,8 +68,8 @@ live source > durable memory > checkpoint handoff > memory_candidate
 ## 0.5.0에서 좋아진 점
 
 - checkpoint가 사람용 요약뿐 아니라 구조화된 handoff payload를 저장할 수 있다.
-- `bootstrapContext`와 `syncResumeContext`가 검색 결과와 별개로
-  `handoff.latestHandoff`를 제공한다.
+- `bootstrapContext`와 `syncResumeContext`가 검색 결과와 별개로 일치하는
+  session의 handoff를 제공한다.
 - `structured.liveState`에는 repo, branch, PR, head commit, CI, worktree
   같은 mutable state와 재검증 힌트를 담을 수 있다.
 - memory candidate v2 필드인 `durabilityReason`, `riskReason`,
@@ -231,8 +231,9 @@ node src/cli.js agentCloseout \
   --dryRun true
 ```
 
-`agentCloseout`은 broad scope backlog를 기본으로 훑지 않는다. durable promotion은
-기존 explicit promote 도구나 의도적으로 켠 auto-promotion policy를 따른다.
+`agentCloseout`은 broad scope backlog를 기본으로 훑지 않는다. audit 자체는
+read-only이며 durable promotion은 기존 explicit promote 도구나 별도로 켠
+lifecycle worker 최종화 policy를 따른다.
 
 여러 에이전트 session store를 한 번에 repo registry로 라우팅할 수 있다.
 
@@ -322,6 +323,35 @@ file은 token env 뒤에 로드되어 remote storage mode와 URL을 강제하고
 URL은 process command line에 노출하지 않는다. 세부 운영 contract와
 timeout 조정 기준은 [Memory candidate lifecycle](memory-candidate-lifecycle.md)과
 [Operations](operations.md)를 따른다.
+
+worker는 audit job 뒤에 HTTP/CLI operator API
+`processApprovedMemoryCandidates`를 실행한다. 이 API는 everyday MCP tool이
+아니다. scope당 기본 limit은 `10`이고 `--promotionLimit` 최대값은 `100`이다.
+stage 기본값은 dry-run이며 `new`, `duplicate`, `update`, `hold` count를
+보고한다. durable write는 server의
+`CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true`가 있어야 한다.
+
+```bash
+node src/cli.js processApprovedMemoryCandidates \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --dryRun true \
+  --limit 10
+
+CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true \
+node src/cli.js candidateLifecycleWorker \
+  --repoRegistry /srv/contextforge/repos.json \
+  --dryRun false \
+  --promotionLimit 10
+```
+
+v2 audit은 action을 정확한 candidate revision에 묶고, target이 있으면 target
+memory ID와 revision hash에도 묶는다. `update`에는 승인된 완전 replacement
+content가 있어야 한다. finalizer는 transaction 안에서 이를 다시 확인하며,
+candidate content나 target이 바뀌면 hold한다. Legacy approval은 fresh safety
+check를 통과한 `new` memory만 만들 수 있고, legacy duplicate/update는
+`needs_action_audit`으로 hold된다. Hold metadata는 audit attempt에 묶여 있어
+batch를 독점하지 않는다. 변경 후에는 현재 candidate를 다시 audit해서 재시도한다.
 
 ## 빠른 시작
 
@@ -458,12 +488,12 @@ node src/cli.js dbInfo
 
 ## MCP 도구 프로필
 
-MCP는 기본적으로 모든 유지보수·관리 schema를 preload하지 않고 24개 도구의
+MCP는 기본적으로 모든 유지보수·관리 schema를 preload하지 않고 10개 도구의
 `agent-core` 프로필만 노출한다.
 
 | 프로필 | 도구 수 | 용도 |
 | --- | ---: | --- |
-| `agent-core` | 24 | 일반 agent bootstrap, 검색, evidence, distill, closeout |
+| `agent-core` | 10 | 일반 agent bootstrap, 검색, durable memory, checkpoint |
 | `review` | 45 | candidate와 durable memory 검토 |
 | `operator` | 67 | job, retention, embedding, usage, 서버 유지보수 |
 | `workspace-admin` | 11 | workspace topology와 scope migration |
@@ -489,6 +519,16 @@ token 추정치를 보여준다. 프로필별 예산은 `scripts/mcp-surface-bud
 여부와 관계없이 profile 선택과 서버 startup은 동작한다.
 재현 가능한 transport 측정값과 host token 한계는
 [MCP Surface Budget](mcp-surface-budget.md)에 정리돼 있다.
+
+stdio MCP session binding은 완전한 `CONTEXTFORGE_SESSION_ID`, 그 다음
+`CODEX_THREAD_ID`, `codex:<id>`로 만드는 `CODEX_SESSION_ID`,
+`claude_code:<id>`로 만드는 `CLAUDE_CODE_SESSION_ID` 순서다. CLI의
+session-specific 명령도 같은 source를 쓰며 명시적 `sessionId` 또는
+`checkpointId`가 우선한다. `CONTEXTFORGE_SESSION_ID` 없이 Codex와 Claude의
+source variable이 함께 있으면 binding은 ambiguity 오류로 실패한다. Direct HTTP
+MCP는 요청별 namespaced `x-contextforge-session-id`만 받고 shared server env에서
+identity를 추론하지 않는다. binding이 없으면 save/resume에는 명시적 `sessionId`가
+필요하다.
 
 ## HTTP 서버
 
@@ -736,17 +776,15 @@ node src/cli.js bootstrapContext \
 
 응답의 주요 채널:
 
-- `handoff.latestHandoff`: 최신 checkpoint handoff. 검색 결과와 분리되어
-  deterministic하게 제공된다.
-- `handoff.latestByAgent`: 같은 repo scope에서 agent별 최신 checkpoint.
-  Codex, Claude Code, OpenCode, Grok, Cursor CLI가 섞여 작업할 때 각 원천의
-  최신 handoff를 구분해 볼 수 있다.
-- `handoff.latestCheckpoints`: 최근 checkpoint 목록.
+- `handoff`: 일치하는 `sessionId`의 checkpoint와 working context다. 현재
+  작업을 추정하는 query-independent handoff가 아니다.
+- `handoff.latestCheckpoints`: 같은 session의 최근 checkpoint 목록이다. session
+  identity가 없으면 scoped query를 사용한다.
 - `results`: durable memory, checkpoint, memory candidate 검색 결과.
 - `workspace`: `workspaceKey`를 넘겼을 때의 scope plan, bounded supplemental
   member-scope 결과, compact workspace memory map. top-level `results`는 계속
   primary scope view다.
-- `workingSummary`: sessionId를 알 때 가져오는 현재 세션 resume state.
+- `workingSummary`: 요청한 session의 resume state.
 - `rawTail`: 필요한 경우에만 요청하는 최근 raw event 꼬리.
 
 작업 중 targeted lookup에는 `search`에도 `--workspaceKey`를 넘길 수 있다.
@@ -755,8 +793,10 @@ node src/cli.js bootstrapContext \
 `results`는 primary scope 검색 결과, `workspace.results`는 provenance가 붙은
 bounded supplemental member-scope 결과다.
 
-에이전트는 `handoff.latestHandoff`를 먼저 읽고, `liveState.verifyHints`로
-branch/PR/CI/worktree를 재검증한 뒤 durable memory와 검색 결과를 참고해야 한다.
+알려진 continuation은 일치하는 `sessionId`를 `bootstrap_context`에 넘긴다.
+그 ID가 없으면 task-relevant scoped query를 사용하고, 관련 없는 최신 handoff를
+현재 작업으로 추정하지 않는다. mutable branch/PR/CI/worktree는 live source에서
+재검증한다.
 
 ## Memory Candidate와 감사
 
@@ -835,24 +875,17 @@ uv pip install --python /path/to/python3 \
 
 ContextForge MCP는 repo/shared/local scope를 명시적으로 다룬다.
 
-작업 시작:
+일상 `agent-core`는 `db_info`, `bootstrap_context`, `search`, `get_memory`,
+`remember`, `list_checkpoints`, `list_memory_candidates`,
+`distill_checkpoint`, `correct_memory`, `deactivate_memory`만 제공한다.
+의미 있는 사용자 또는 작업 경계에서만 distill을 선택한다. `session_status`, raw
+evidence, audit, promotion, job은 review/operator의 고급 도구다.
 
-1. `bootstrap_context`를 repo scope로 호출한다.
-2. `handoff.latestHandoff`와 `handoff.latestCheckpoints`를 먼저 읽는다.
-3. live state는 source에서 재검증한다.
-4. durable memory와 search results를 그 다음 참고한다.
-
-작업 종료:
-
-1. 필요하면 `session_status`로 distill 필요성을 확인한다.
-2. `distill_checkpoint`로 checkpoint를 만든다.
-3. `suggest_memory_promotions` 또는 `list_memory_candidates`로 후보를 검토한다.
-4. stable하고 비밀이 아닌 사실만 `promote_memory_candidate`로 승격한다.
-
-`bootstrap_context`는 세션을 만들지 않는다. adapter가 ingest한 세션을 닫을
-때는 새 `cf_...` 세션을 만들지 말고 기존 `codex:<id>`,
+`bootstrap_context`는 세션을 만들지 않는다. adapter가 ingest한 세션을 저장하거나
+resume할 때는 새 `cf_...` 세션을 만들지 말고 기존 `codex:<id>`,
 `claude_code:<id>`, `opencode:<id>`, `grok:<id>`, `cursor_cli:<id>` 같은
-adapter-prefixed session id를 사용해야 한다.
+adapter-prefixed session id를 사용해야 한다. binding이 없으면 명시적 `sessionId`가
+필요하며 latest session을 추정하지 않는다.
 
 ## Lexical retrieval
 

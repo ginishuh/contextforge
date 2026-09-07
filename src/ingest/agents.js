@@ -23,6 +23,7 @@ import {
 } from './common.js';
 import { discoverClaudeCodeFiles, parseClaudeCodeFile, parseClaudeCodeLines } from './claude_code.js';
 import { discoverCodexRolloutFiles, parseCodexRolloutFile, parseCodexRolloutLines } from './codex.js';
+import { aggregateCodexScopeResults, rewindForPendingCodexUser, splitCodexEventsByRepo } from './codex_scope.js';
 
 const DEFAULT_MAX_CONTENT_CHARS = 8000;
 const DEFAULT_WATCH_INTERVAL_MS = 30000;
@@ -687,7 +688,7 @@ export async function ingestAgentSessions(app, options = {}) {
     const results = [];
     for (const unit of units) {
       try {
-        const parsed = await adapter.parse(unit, options);
+        const parsed = await adapter.parse(unit, { ...options, deferPendingUsers: adapter.id === 'codex' });
         results.push(await ingestParsedForAdapter(app, adapter, unit, parsed, options));
       } catch (error) {
         results.push(errorUnitResult(adapter, unit, error));
@@ -720,7 +721,7 @@ async function ingestRoutedAdapter(app, adapter, options = {}) {
   const results = [];
   for (const unit of units) {
     try {
-      const parsed = await adapter.parse(unit, options);
+      const parsed = await adapter.parse(unit, { ...options, deferPendingUsers: adapter.id === 'codex' });
       results.push(await ingestParsedRoutedForAdapter(app, adapter, unit, parsed, options, repos));
     } catch (error) {
       results.push(errorUnitResult(adapter, unit, error));
@@ -741,8 +742,8 @@ async function ingestRoutedAdapter(app, adapter, options = {}) {
     parsedEvents: results.reduce((total, result) => total + result.parsedEvents, 0),
     appendedEvents: results.reduce((total, result) => total + result.appendedEvents, 0),
     skippedEvents: results.reduce((total, result) => total + result.skippedEvents, 0),
-    checkpointsCreated: results.filter((result) => result.checkpoint).length,
-    routedFiles: results.filter((result) => result.matchedRepo).length,
+    checkpointsCreated: results.reduce((total, result) => total + (result.checkpointsCreated || Number(Boolean(result.checkpoint))), 0),
+    routedFiles: results.filter((result) => result.scopeResults?.length || result.matchedRepo).length,
     skippedFiles: results.filter((result) => result.skipped).length,
     stateLoaded: false,
     stateUpdated: false,
@@ -752,13 +753,17 @@ async function ingestRoutedAdapter(app, adapter, options = {}) {
 }
 
 function incrementalInitialContext(currentEntry, chunk) {
+  if (chunk.reset) {
+    return { lineNumber: 0 };
+  }
   return {
     nativeSessionId: currentEntry.nativeSessionId,
     sessionId: currentEntry.sessionId,
     conversationId: currentEntry.conversationId,
     cwd: currentEntry.cwd,
+    turnId: currentEntry.turnId,
     cursorProjectName: currentEntry.cursorProjectName,
-    lineNumber: chunk.reset ? 0 : currentEntry.lineNumber || 0,
+    lineNumber: currentEntry.lineNumber || 0,
   };
 }
 
@@ -769,6 +774,9 @@ function partialLineWarning(chunk) {
 }
 
 async function ingestParsedRoutedForAdapter(app, adapter, unit, parsed, options, repos) {
+  if (adapter.id === 'codex') {
+    return ingestParsedRoutedCodexAdapter(app, adapter, unit, parsed, options, repos);
+  }
   const matchedRepo = adapter.matchRepo
     ? await adapter.matchRepo(unit, parsed, repos, options)
     : await matchRepoForCwdOrGitRemote(parsed.cwd, repos, options);
@@ -820,6 +828,36 @@ async function ingestParsedRoutedForAdapter(app, adapter, unit, parsed, options,
   };
 }
 
+async function ingestParsedRoutedCodexAdapter(app, adapter, unit, parsed, options, repos) {
+  const routed = await splitCodexEventsByRepo(parsed, repos, options);
+  const scopeResults = [];
+  for (const group of routed.groups) {
+    const result = await ingestParsedSession(
+      app,
+      group.parsed,
+      { ...options, scope: 'repo', scopeKey: group.matchedRepo.scopeKey, repoPath: undefined, cwd: undefined },
+      { missingSessionMessage: adapter.missingSessionMessage },
+    );
+    scopeResults.push({ ...result, matchedRepo: group.matchedRepo });
+  }
+  const totals = aggregateCodexScopeResults(scopeResults, routed.unroutedEvents);
+  const single = scopeResults.length === 1 ? scopeResults[0] : {};
+  return {
+    source: adapter.source,
+    file: unit.file,
+    dbPath: unit.dbPath,
+    sessionId: parsed.sessionId,
+    conversationId: parsed.conversationId,
+    warnings: parsed.warnings,
+    ...single,
+    ...totals,
+    skipped: scopeResults.length === 0,
+    skippedReason: scopeResults.length === 0 ? (parsed.cwd ? 'unmatched_repo_cwd' : 'missing_cwd') : null,
+    matchedRepo: single.matchedRepo || null,
+    scopeResults,
+  };
+}
+
 async function processIncrementalRoutedAdapterUnit(app, adapter, unit, options, repos, state) {
   const stateKey = unit.file;
   const currentEntry = state.entries[stateKey] || {};
@@ -866,7 +904,7 @@ async function processIncrementalRoutedAdapterUnit(app, adapter, unit, options, 
   const parsed = adapter.parseLines(
     unit,
     chunk.lines,
-    { ...options, recoverMalformedJsonl: true },
+    { ...options, recoverMalformedJsonl: true, deferPendingUsers: adapter.id === 'codex' },
     incrementalInitialContext(currentEntry, chunk),
   );
   parsed.warnings = [...(parsed.warnings || []), ...partialLineWarning(chunk)];
@@ -874,14 +912,16 @@ async function processIncrementalRoutedAdapterUnit(app, adapter, unit, options, 
     throw new Error(adapter.missingSessionMessage);
   }
   const result = await ingestParsedRoutedForAdapter(app, adapter, unit, parsed, options, repos);
+  const rewind = adapter.id === 'codex' ? rewindForPendingCodexUser(chunk, currentEntry, parsed) : null;
 
   state.entries[stateKey] = {
-    offset: chunk.nextOffset,
-    lineNumber: chunk.nextLineNumber,
+    offset: rewind?.offset ?? chunk.nextOffset,
+    lineNumber: rewind?.lineNumber ?? chunk.nextLineNumber,
     sessionId: parsed.sessionId,
     conversationId: parsed.conversationId,
     nativeSessionId: parsed.nativeSessionId,
     cwd: parsed.cwd,
+    turnId: parsed.turnId,
     cursorProjectName: parsed.cursorProjectName || unit.cursorProjectName || currentEntry.cursorProjectName || null,
     size: chunk.stat.size,
     mtimeMs: chunk.stat.mtimeMs,
@@ -956,8 +996,8 @@ async function ingestIncrementalRoutedAdapter(app, adapter, options = {}) {
     parsedEvents: results.reduce((total, result) => total + result.parsedEvents, 0),
     appendedEvents: results.reduce((total, result) => total + result.appendedEvents, 0),
     skippedEvents: results.reduce((total, result) => total + result.skippedEvents, 0),
-    checkpointsCreated: results.filter((result) => result.checkpoint).length,
-    routedFiles: results.filter((result) => result.matchedRepo).length,
+    checkpointsCreated: results.reduce((total, result) => total + (result.checkpointsCreated || Number(Boolean(result.checkpoint))), 0),
+    routedFiles: results.filter((result) => result.scopeResults?.length || result.matchedRepo).length,
     skippedFiles: results.filter((result) => result.skipped).length,
     stateFile: descriptor.stateFile,
     stateLoaded,

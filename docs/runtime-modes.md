@@ -13,9 +13,9 @@ explicitly migrating between them.
 ## MCP Surface Selection
 
 The stdio and HTTP MCP transports use the same profile resolver. The default
-`agent-core` profile exposes 24 normal agent tools and hides queue workers,
-retention, embedding maintenance, usage inspection, and workspace mutations.
-Use `review` for candidate review, `operator` for server maintenance,
+`agent-core` profile exposes 10 tools for retrieval, checkpoints, and deliberate
+memory updates. Use `review` for manual evidence streams and candidate review,
+`operator` for queue workers, retention, embeddings, and server maintenance,
 `workspace-admin` for workspace topology, or `all` for compatibility with the
 former full surface plus newly added tools.
 

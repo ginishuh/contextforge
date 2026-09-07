@@ -1,4 +1,5 @@
 import { normalizeScopeOptions } from '../scopes/index.js';
+import { fitCompactRetrieval } from '../application/compact_retrieval.js';
 import {
   OPTIONALLY_SCOPED_REMOTE_OPERATION_NAMES,
   REMOTE_OPERATION_NAMES,
@@ -160,7 +161,7 @@ export function createRemoteContextForge(config, options = {}) {
           scopeType: scope.scopeType,
           scopeKey: scope.scopeKey,
         });
-        return {
+        return fitCompactRetrieval({
           ...result,
           connection: remoteClientConnection(result.connection || result.storage?.connection || null),
           storage: {
@@ -172,7 +173,7 @@ export function createRemoteContextForge(config, options = {}) {
             note:
               'This bootstrap call used a remote ContextForge client. serverMode describes the server-owned store, not this checkout.',
           },
-        };
+        });
       };
       continue;
     }

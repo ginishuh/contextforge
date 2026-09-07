@@ -74,7 +74,7 @@ test('the surface selection env vars cannot skew a measurement', async () => {
   process.env.CONTEXTFORGE_MCP_TOOLS = 'db_info,search';
   try {
     const measurements = await measureSurfaces();
-    assert.equal(measurements['agent-core'].toolCount, 24);
+    assert.equal(measurements['agent-core'].toolCount, 10);
     assert.notEqual(measurements['all'].toolCount, measurements['agent-core'].toolCount);
     assert.deepEqual(surfaceBudgetViolations(readSurfaceBudgets(), measurements), []);
   } finally {
@@ -91,7 +91,7 @@ test('the storage env cannot stop a measurement', async () => {
   process.env.CONTEXTFORGE_STORAGE_MODE = 'remote';
   try {
     const measurements = await measureSurfaces();
-    assert.equal(measurements['agent-core'].toolCount, 24);
+    assert.equal(measurements['agent-core'].toolCount, 10);
   } finally {
     if (previous === undefined) delete process.env.CONTEXTFORGE_STORAGE_MODE;
     else process.env.CONTEXTFORGE_STORAGE_MODE = previous;

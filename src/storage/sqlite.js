@@ -3008,9 +3008,10 @@ export class ContextForgeStore {
     return hydrateCheckpoint(row);
   }
 
-  listCheckpoints({ scopeType, scopeKey, sessionId = null, level = null, limit = null, after = null }) {
+  listCheckpoints({ scopeType, scopeKey, checkpointId = null, sessionId = null, level = null, limit = null, after = null }) {
     const filters = ['scope_type = ?', 'scope_key = ?'];
     const values = [scopeType, scopeKey];
+    if (checkpointId) { filters.push('id = ?'); values.push(checkpointId); }
     if (sessionId) {
       filters.push('session_id = ?');
       values.push(sessionId);
@@ -3043,23 +3044,7 @@ export class ContextForgeStore {
     if (!Number.isInteger(parsedLimit) || parsedLimit <= 0) {
       return [];
     }
-    const filters = ['scope_type = ?', 'scope_key = ?'];
-    const values = [scopeType, scopeKey];
-    if (level != null) {
-      filters.push('level = ?');
-      values.push(Number(level));
-    }
-    values.push(parsedLimit);
-    const rows = this.db
-      .prepare(`
-        SELECT rowid AS checkpoint_sequence, * FROM checkpoints
-        WHERE ${filters.join(' AND ')}
-        ORDER BY created_at DESC, rowid DESC
-        LIMIT ?
-      `)
-      .all(...values);
-
-    return rows.map(hydrateCheckpoint);
+    return this.listCheckpoints({ scopeType, scopeKey, level, limit: parsedLimit });
   }
 
   listCheckpointsForConsolidation({
