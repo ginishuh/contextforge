@@ -41,8 +41,8 @@ SQLite나 raw runtime data의 live backend로 Git을 쓰지 않는다.
   routing·correction·retrieval coverage 지표.
 - bounded pre-migration backup, production dependency advisory 해소,
   profile별 MCP surface ratchet.
-- scope backlog review와 durable audit routing을 명시한 progressive-disclosure
-  구조의 packaged `contextforge-memory` skill.
+- scope retrieval, session identity, trust boundary를 짧게 설명하고 상세 주제는
+  일반 문서에서 찾을 수 있는 agent guidance.
 - Node 22 floor와 better-sqlite3 13.x. N-API prebuild로 transitive package
   85개가 빠졌다.
 - CI 전용 ESLint gate, 7,169 → 4,839줄로 분해된 core facade, 주제별로 재편한
@@ -128,13 +128,15 @@ CONTEXTFORGE_LIVE_TESTS=true npm run test:live
 ```
 
 Agent adapter는 Codex, Claude Code, OpenCode, Grok, Cursor CLI session을 source
-provenance와 함께 ingest할 수 있다. Packaged memory skill에는 bootstrap,
-scoped search, session ID, closeout, promotion 규칙이 정리돼 있다.
+provenance와 함께 ingest할 수 있다. bootstrap, scoped search, session ID, trust
+rule은 agent guide에서 시작한다.
 
-- [contextforge-memory skill 설치](docs/skills/contextforge-memory/INSTALL.md)
-- [Skill workflow](docs/skills/contextforge-memory/SKILL.md)
-- [Agent instruction snippet](docs/agent-instructions.md)
+- [Agent guide](docs/agent-guide.md)
+- [복사 가능한 agent instruction](docs/agent-instructions.md)
 - [전체 CLI·provider·operator 참조](docs/reference.ko.md)
+
+기존 host에 `contextforge-memory` skill이 남아 있다면 선택 사항이며, 필요하면 그
+host의 일반 skill 관리 도구로 제거할 수 있다.
 
 ## Retrieval·품질
 

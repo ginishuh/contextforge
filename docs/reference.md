@@ -23,11 +23,11 @@ LLM-backed distillation.
 
 Current 0.6.0 builds add a supervised candidate lifecycle worker, operation
 worker freshness on `/readyz` with operational candidate and retrieval metrics,
-bounded pre-migration backups, and a progressive-disclosure packaged
-`contextforge-memory` skill. They also raise the supported Node floor to 22.
+bounded pre-migration backups, and concise agent guidance with focused ordinary
+documentation. They also raise the supported Node floor to 22.
 The 0.5.1 builds before them added periodic checkpoint consolidation for richer
 bootstrap context, `handoff.latestConsolidation`, `memoryLifecycle` visibility,
-and refreshed packaged `contextforge-memory` skill guidance. They also include
+and earlier agent-workflow guidance. They also include
 the 0.5.0 structured checkpoint handoff payloads and session-bound handoff
 state, preserved memory-candidate review
 fields, a server-hosted operator UI, DB-backed runtime settings,
@@ -53,9 +53,8 @@ can recover independently from memory or checkpoint writes.
   `CONTEXTFORGE_MIGRATION_BACKUP_KEEP` (default `3`) after a migration
   succeeds, never below one, and `dbInfo` reports the remaining count and
   bytes.
-- The packaged `contextforge-memory` skill moved to a router-and-references
-  structure with explicit scope-backlog review, durable audit routing, and
-  snooze/wake/stale handling.
+- Agent workflow guidance covered scope-backlog review, durable audit routing,
+  and snooze/wake/stale handling; these details now live in focused guides.
 - Production dependency advisories are cleared, and the MCP surface is
   ratcheted per profile in `scripts/mcp-surface-budgets.json`.
 - The supported Node floor is 22 and better-sqlite3 is 13.x, whose N-API
@@ -75,8 +74,8 @@ can recover independently from memory or checkpoint writes.
 - CLI, remote client, and MCP surfaces now include `listDueConsolidations` /
   `processConsolidations` and `list_due_consolidations` /
   `process_consolidations`.
-- The packaged `contextforge-memory` skill documents checkpoint consolidation,
-  memory lifecycle checks, candidate audit flow, and scope migration guidance.
+- Earlier agent guidance documented checkpoint consolidation, memory lifecycle
+  checks, candidate audit flow, and scope migration.
 
 ## What's New In 0.5.0
 
@@ -442,8 +441,8 @@ and ratcheted: the surface may never grow past what is recorded, and a change
 that needs more room updates the manifest in the same commit. Verify with
 `npm run lint:mcp-surface`. Use `--profile all` temporarily when
 migrating an existing client that depended on the old full surface. Detailed
-workflow guidance lives in the packaged `contextforge-memory` skill; profile
-selection does not depend on that skill being installed.
+workflow guidance lives in the [agent guide](agent-guide.md) and its focused
+documents; profile selection does not depend on a separate agent skill.
 See [MCP Surface Budget](mcp-surface-budget.md) for the reproducible
 transport measurements, selection contract, and host-token caveat.
 
@@ -2164,24 +2163,20 @@ lifecycle. `session_status`, raw evidence capture, jobs, audit, and promotion
 remain available through the review or operator profiles when their detail is
 needed.
 
-For agent runtime workflow guidance, use the installed `contextforge-memory`
-skill. It is written as an agent-neutral reusable guide for ContextForge MCP
-startup, storage authority, scopes, resume/handoff, session IDs, evidence
-capture, distillation, checkpoint candidates, closeout promotion, correction,
-and embedding maintenance. The ContextForge repo source package is
-[docs/skills/contextforge-memory/SKILL.md](skills/contextforge-memory/SKILL.md);
-agent-specific systems should install or update that skill through their normal
-runtime skill installer. See
-[Installing The contextforge-memory Skill](skills/contextforge-memory/INSTALL.md).
+For agent runtime workflow guidance, start with the
+[Agent Guide](agent-guide.md). It links to focused documentation for ContextForge
+MCP startup, storage authority, scopes, resume/handoff, session IDs, evidence
+capture, distillation, correction, and maintenance. A host does not need a
+separate ContextForge skill to use the runtime.
 
 For copyable prompt or `AGENTS.md` snippets, see
 [ContextForge Agent Instruction Snippets](agent-instructions.md). For
 rules about what belongs in a repository `AGENTS.md`, see the
 [AGENTS.md Authoring Guide](agents-md-guide.md). Keep repository
 `AGENTS.md` files short: include only the local operating contract, a small
-ContextForge bootstrap snippet, the critical session invariant, and a direction
-to use the installed `contextforge-memory` skill instead of copying every MCP
-rule into each project.
+ContextForge bootstrap snippet, and the critical session invariant. Link to the
+[Agent Guide](agent-guide.md) instead of copying every MCP rule into each
+project.
 If a checkout is also a live server or remote client, include a short
 secret-free runtime mode section that tells agents to inspect env/config and
 live process state instead of assuming the clone is the server. Link to

@@ -42,8 +42,8 @@ Do not use Git as the live backend for SQLite or raw runtime data.
   routing, correction, and retrieval-coverage metrics.
 - Bounded pre-migration backups, cleared production dependency advisories, and
   a per-profile MCP surface ratchet.
-- A progressive-disclosure packaged `contextforge-memory` skill with explicit
-  scope-backlog review and durable audit routing.
+- Concise agent guidance for scoped retrieval, session identity, and trust
+  boundaries, with detailed topics available as ordinary documentation.
 - Node 22 floor and better-sqlite3 13.x, whose N-API prebuilds drop 85
   transitive packages.
 - A CI-only ESLint gate, a core facade decomposed from 7,169 to 4,839 lines,
@@ -132,13 +132,15 @@ CONTEXTFORGE_LIVE_TESTS=true npm run test:live
 ```
 
 Agent adapters can ingest Codex, Claude Code, OpenCode, Grok, and Cursor CLI
-sessions while preserving source provenance. The packaged memory skill explains
-bootstrap, scoped search, session IDs, closeout, and promotion rules:
+sessions while preserving source provenance. Start with the agent guide for
+bootstrap, scoped search, session IDs, and trust rules:
 
-- [Install the contextforge-memory skill](docs/skills/contextforge-memory/INSTALL.md)
-- [Skill workflow](docs/skills/contextforge-memory/SKILL.md)
-- [Agent instruction snippets](docs/agent-instructions.md)
+- [Agent guide](docs/agent-guide.md)
+- [Copyable agent instructions](docs/agent-instructions.md)
 - [Full CLI/provider/operator reference](docs/reference.md)
+
+If an older installation still provides a `contextforge-memory` skill, it is
+optional and can be removed with that host's normal skill-management tooling.
 
 ## Retrieval And Quality
 

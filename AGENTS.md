@@ -105,5 +105,5 @@ review material. Verify mutable Git, CI, runtime, and deployment state live.
 Use the adapter-bound session for save/resume. If no binding exists, pass the
 known session ID explicitly; never guess the latest session or create a new
 manual session for an existing adapter stream. Save a checkpoint when useful;
-durable memory writes remain deliberate. For manual capture, candidate review,
-or maintenance, consult the packaged `contextforge-memory` skill.
+durable memory writes remain deliberate. For concise agent guidance and links
+to detailed topics, see `docs/agent-guide.md`.

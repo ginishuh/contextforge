@@ -11,7 +11,7 @@ while IFS= read -r file; do
       ;;
     README*.md|CHANGELOG.md|LICENSE)
       ;;
-    docs/skills/*|docs/examples/*)
+    docs/guides/* | docs/agent-guide.md|docs/examples/*)
       run_tests=true
       ;;
     docs/*.md|docs/issues/*.md|docs/assets/*)
