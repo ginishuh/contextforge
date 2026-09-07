@@ -95,6 +95,7 @@ import {
   warningForPromotionAssessment,
 } from './memory/candidate_promotion.js';
 import { candidateBacklogAuditPlanMethods } from './memory/candidate_backlog_audit_plan.js';
+import { processApprovedMemoryCandidates } from './memory/approved_candidate_promotion.js';
 import { candidateDispositionMethods } from './memory/candidate_dispositions.js';
 import { consolidationMethods } from './memory/consolidation.js';
 import { memoryCandidateRevisionHash } from './memory/candidate_revision.js';
@@ -2838,6 +2839,13 @@ export function createContextForge(options = {}) {
       const scope = normalizeScopeOptions(options, config);
       return useStore((store) => buildMemoryCandidateBacklog({ store, scope, options }));
     },
+    processApprovedMemoryCandidates(options = {}) {
+      requireOption(options.scopeKey, 'scopeKey');
+      const scope = normalizeScopeOptions(options, config);
+      return useStore((store) => processApprovedMemoryCandidates({
+        store, scope, options, enabled: config.autoPromote.enabled, enqueueEmbeddings: enqueueEmbeddingSources,
+      }));
+    },
     routeAuditedMemoryCandidates(options = {}) {
       const scope = normalizeScopeOptions(options, config);
       return useStore((store) => routeAuditedMemoryCandidates({
@@ -3494,34 +3502,6 @@ export function createContextForge(options = {}) {
           model: auditor?.metadata?.model || null,
           reasoningEffort: auditor?.metadata?.reasoningEffort || null,
         };
-        if (options.sessionId && sourceMode === 'latest_checkpoint' && !checkpointId) {
-          return {
-            kind: 'memory_candidate_audit_suggestions',
-            trigger,
-            source: {
-              sessionId: options.sessionId,
-              checkpointId: null,
-              mode: sourceMode,
-            },
-            policy: {
-              minConfidence,
-              minStability,
-              allowedCategories: Array.from(allowedCategories),
-              scopeFallback: false,
-              mutatesDurableMemory: false,
-              persistsAuditMetadata: false,
-              audit: auditPolicy,
-            },
-            proposals: [],
-            skipped: [],
-            requestWarnings,
-            nextActions: [
-              'No latest checkpoint was found for this session; distill a checkpoint before auditing candidates.',
-              'No memory candidates were promoted.',
-            ],
-          };
-        }
-
         const allCandidates = store.listMemoryCandidates({
           ...scope,
           sessionId: options.sessionId || null,
@@ -4056,11 +4036,12 @@ export function createContextForge(options = {}) {
             }
           }
         }
-        const auditApproved = dryRun ? [] : audited.filter((item) => item.audit?.approved === true);
+        const approvedNew = (item) => item.audit?.approved === true && (!item.audit.promotion || item.audit.promotion.action === 'new');
+        const auditApproved = dryRun ? [] : audited.filter(approvedNew);
         const auditSkipped = dryRun
           ? []
           : audited
-              .filter((item) => item.audit?.approved !== true)
+              .filter((item) => !approvedNew(item))
               .map((item) => ({
                 candidateId: item.candidate.id,
                 reason: auditSkipReason(item.audit),

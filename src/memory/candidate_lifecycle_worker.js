@@ -111,6 +111,7 @@ export async function processCandidateLifecycle(app, options = {}) {
   const wakeLimit = positiveInteger(options.wakeLimit, 'wakeLimit', 25);
   const staleLimit = positiveInteger(options.staleLimit, 'staleLimit', 25);
   const jobLimit = positiveInteger(options.jobLimit, 'jobLimit', 5, 25);
+  const promotionLimit = positiveInteger(options.promotionLimit, 'promotionLimit', 10, 100);
   const leaseMs = positiveInteger(options.leaseMs, 'leaseMs', 600000, 3600000);
   if (leaseMs < 1000) throw new Error('leaseMs must be at least 1000ms.');
   const workerId = options.workerId || `candidate-lifecycle-worker:${process.pid}`;
@@ -153,14 +154,6 @@ export async function processCandidateLifecycle(app, options = {}) {
         result.scopes.push({ ...scope, status: 'stopped', ...stages });
         break;
       }
-      stages.stale = compactStale(
-        await app.processDueCandidateStaleTransitions({ ...scope, dryRun, limit: staleLimit }),
-      );
-      if (shouldStop()) {
-        result.stopped = true;
-        result.scopes.push({ ...scope, status: 'stopped', ...stages });
-        break;
-      }
       const jobs = dryRun
         ? { claimed: 0, succeeded: 0, failed: 0, requeued: 0 }
         : compactJobs(await app.processJobs({
@@ -174,6 +167,33 @@ export async function processCandidateLifecycle(app, options = {}) {
       result.jobs.succeeded += jobs.succeeded;
       result.jobs.failed += jobs.failed;
       result.jobs.requeued += jobs.requeued;
+      if (shouldStop()) {
+        result.stopped = true;
+        result.scopes.push({ ...scope, status: 'stopped', ...stages, jobs });
+        break;
+      }
+      const promotion = await app.processApprovedMemoryCandidates({
+        ...scope, dryRun, limit: promotionLimit, workerId,
+      });
+      stages.promotion = {
+        enabled: promotion.enabled, processed: promotion.processed,
+        promoted: promotion.promoted, updated: promotion.updated, linked: promotion.linked,
+        held: promotion.held, failed: promotion.failed,
+        ...(promotion.reason ? { reason: promotion.reason } : {}),
+      };
+      if (shouldStop()) {
+        result.stopped = true;
+        result.scopes.push({ ...scope, status: 'stopped', ...stages, jobs });
+        break;
+      }
+      stages.stale = compactStale(
+        await app.processDueCandidateStaleTransitions({ ...scope, dryRun, limit: staleLimit }),
+      );
+      if (shouldStop()) {
+        result.stopped = true;
+        result.scopes.push({ ...scope, status: 'stopped', ...stages });
+        break;
+      }
       result.scopes.push({
         scopeType: scope.scopeType,
         scopeKey: scope.scopeKey,

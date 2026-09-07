@@ -5,7 +5,8 @@ import {
   assertProviderTimeoutFitsClient,
   runWithProviderConcurrency,
 } from '../runtime/provider_execution.js';
-import { durableMemoryRevisionHash } from './candidate_revision.js';
+import { durableMemoryRevisionHash, memoryCandidateRevisionHash } from './candidate_revision.js';
+import { candidateAuditEvidence } from './candidate_audit_evidence.js';
 import { candidateQualityText, normalizeContentForRisk, tokenOverlapScore } from './candidate_text.js';
 
 // Promotion assessment, update-candidate drafting, and the auto/audit policy
@@ -297,6 +298,8 @@ export const AUDIT_CANDIDATE_CATEGORIES = new Set([
   'api-contract',
   'api_contract',
   'architecture',
+  'architecture_decision',
+  'architecture-decision',
   'decision',
   'failure-mode',
   'failure_mode',
@@ -662,7 +665,7 @@ export function auditCandidateWarnings(store, scope, indexedCandidate, policy) {
 }
 
 export const AUDIT_CANDIDATE_SKIP_WARNING_CODES = new Set([
-  ...[...AUTO_SKIP_WARNING_CODES].filter((code) => !['existing_key_conflict', 'candidate_refinement_requires_update', 'candidate_supersedes_requires_update', 'candidate_conflict_requires_update'].includes(code)),
+  ...[...AUTO_SKIP_WARNING_CODES].filter((code) => !['duplicate_key', 'duplicate_content', 'duplicate_durable_memory', 'existing_key_conflict', 'candidate_refinement_requires_update', 'candidate_supersedes_requires_update', 'candidate_conflict_requires_update'].includes(code)),
   'audit_disallowed_category',
   'audit_low_confidence',
   'audit_low_stability',
@@ -785,6 +788,17 @@ export function autoPromoteIndexedCandidate(store, scope, indexedCandidate, warn
     warnings,
     eventMetadata: { autoPromoted: true, autoPromotionAudit: audit },
     reviewMetadata: { autoPromoted: true, autoPromotionAudit: audit },
+    beforeWrite: () => {
+      const fresh = store.getMemoryCandidate({ ...scope, candidateId: indexedCandidate.id });
+      const expectedHash = audit?.candidateRevisionHash || indexedCandidate.auditContentHash || memoryCandidateRevisionHash(candidate);
+      if (!fresh || fresh.status !== 'pending' || memoryCandidateRevisionHash(fresh.candidate) !== expectedHash) {
+        throw new Error('Candidate changed after automatic promotion audit.');
+      }
+      if (audit?.promotion && audit.promotion.action !== 'new') throw new Error('Audit did not approve a new durable memory.');
+      const currentWarnings = candidatePromotionWarnings(store, scope, { ...candidate, candidate });
+      if (currentWarnings.length) throw new Error('Durable memory changed after automatic promotion audit; reassess the candidate.');
+      return {};
+    },
   }, enqueueEmbeddings);
 }
 
@@ -796,18 +810,23 @@ export async function auditAutoPromotionCandidate({
   providerConcurrencyLimit,
   clientTimeoutMs = null,
 }) {
+  const candidateRevisionHash = memoryCandidateRevisionHash(item.candidate.candidate);
   if (!auditor) {
     return {
       approved: false,
       decision: 'needs_review',
       reason: 'Auto-promotion audit provider is disabled; GPT audit approval is required.',
       riskCodes: ['audit_disabled'],
+      candidateRevisionHash,
       metadata: { provider: 'none' },
     };
   }
   const checkpoint = item.candidate.checkpointId
     ? store.getCheckpointById({ ...scope, checkpointId: item.candidate.checkpointId })
     : null;
+  const auditEvidence = candidateAuditEvidence(
+    store, scope, item.candidate, checkpoint, promotionAssessmentForIndexedCandidate(store, scope, item.candidate),
+  );
   const provider = auditor.metadata?.provider || 'custom_auditor';
   assertProviderTimeoutFitsClient({
     operation: 'candidate audit',
@@ -815,13 +834,39 @@ export async function auditAutoPromotionCandidate({
     providerTimeoutMs: auditor.metadata?.timeoutMs,
     clientTimeoutMs,
   });
-  return runWithProviderConcurrency({ provider, limit: providerConcurrencyLimit }, () =>
+  const audit = await runWithProviderConcurrency({ provider, limit: providerConcurrencyLimit }, () =>
     auditor({
       candidate: item.candidate,
       warnings: item.warnings,
       checkpoint,
+      auditEvidence,
     }),
   );
+  // v1 auditors remain valid for human/manual review.  A malformed v2 result
+  // becomes an explicit hold, so an automatic finalizer cannot guess intent.
+  if (!Object.hasOwn(audit || {}, 'promotion')) return { ...audit, candidateRevisionHash };
+  const promotion = audit?.promotion || {};
+  const actionIsValid = ['new', 'duplicate', 'update', 'hold'].includes(promotion.action);
+  const action = actionIsValid ? promotion.action : 'hold';
+  const target = auditEvidence.relatedMemories.find((memory) => memory.id === promotion.targetMemoryId) || null;
+  const validNew = !auditEvidence.candidateContentTruncated && action === 'new' && promotion.candidateRevisionHash === candidateRevisionHash
+    && promotion.targetMemoryId == null && promotion.targetRevisionHash == null
+    && promotion.content === item.candidate.candidate?.content;
+  const validDuplicate = action === 'duplicate' && promotion.candidateRevisionHash === candidateRevisionHash
+    && promotion.content == null && target && promotion.targetRevisionHash === target.revisionHash;
+  const validUpdate = action === 'update' && promotion.candidateRevisionHash === candidateRevisionHash
+    && typeof promotion.content === 'string' && promotion.content.trim() && target
+    && promotion.targetRevisionHash === target.revisionHash;
+  const validHold = actionIsValid && action === 'hold';
+  if (!validNew && !validDuplicate && !validUpdate && !validHold) {
+    return {
+      ...audit,
+      promotion: { action: 'hold', candidateRevisionHash, targetMemoryId: null, targetRevisionHash: null, content: null },
+      candidateRevisionHash,
+      riskCodes: [...new Set([...(audit?.riskCodes || []), 'invalid_promotion_action'])],
+    };
+  }
+  return { ...audit, candidateRevisionHash, promotion: { ...promotion, action, candidateRevisionHash } };
 }
 
 export function recordCandidateAuditUsageEvent(

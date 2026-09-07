@@ -170,6 +170,11 @@ export function markMemoryCandidateAudited(store, {
   const auditState = auditFailed ? (audit?.retryable === true ? 'failed_retryable' : 'failed_terminal') : 'audited';
   const auditDecision = ['approve', 'needs_review', 'reject'].includes(audit?.decision) ? audit.decision : null;
   const contentHash = memoryCandidateRevisionHash(existing.candidate);
+  if (audit?.candidateRevisionHash && audit.candidateRevisionHash !== contentHash) {
+    const error = new Error('Candidate content changed while its audit was running. Re-audit the current revision.');
+    error.code = 'CONTEXTFORGE_CANDIDATE_AUDIT_REVISION_MISMATCH';
+    throw error;
+  }
   const sourceModeRaw = metadata.sourceMode || null;
   const sourceMode = sourceModeRaw === 'backlog_batch'
     ? 'backlog_batch'
@@ -205,7 +210,7 @@ export function markMemoryCandidateAudited(store, {
       auditMetadata.outputSchemaVersion || auditMetadata.schemaVersion || null, auditState, auditDecision,
       reason || audit?.reason || existing.reviewReason || null, json(riskCodes, []), json(auditMetadata.usage, {}),
       auditFailed ? json({ retryable: audit?.retryable === true, errorName: auditMetadata.errorName || null }, {}) : null,
-      json({ ...metadata, auditAttemptId: undefined }, {}), metadata.startedAt || reviewedAt, reviewedAt, reviewedAt,
+      json({ ...metadata, auditAttemptId: undefined, promotion: audit?.promotion || null }, {}), metadata.startedAt || reviewedAt, reviewedAt, reviewedAt,
     );
     const result = store.db.prepare(`
       UPDATE memory_candidate_index

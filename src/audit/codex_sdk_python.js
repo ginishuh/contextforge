@@ -11,7 +11,7 @@ import {
 } from './codex_exec.js';
 import { assertExternalProviderAllowed } from '../testing/external_provider.js';
 
-export const AUTO_PROMOTE_AUDIT_PYTHON_SDK_PROMPT_VERSION = 'auto_promote_audit.codex_sdk_python.v2';
+export const AUTO_PROMOTE_AUDIT_PYTHON_SDK_PROMPT_VERSION = 'auto_promote_audit.codex_sdk_python.v3';
 
 const RUNNER_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'codex_sdk_python_runner.py');
 const REASONING_EFFORTS = new Set(['minimal', 'low', 'medium', 'high']);
@@ -217,6 +217,7 @@ export function createCodexSdkPythonAutoPromoteAuditor(options = {}) {
       decision: output.decision || (approved ? 'approve' : 'needs_review'),
       reason: output.reason || '',
       riskCodes: Array.isArray(output.riskCodes) ? output.riskCodes : [],
+      promotion: output.promotion,
       metadata: {
         ...metadata,
         elapsedMs: Date.now() - startedAt,

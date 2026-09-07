@@ -636,7 +636,8 @@ export function distillMethods({
                 });
               });
               auditedCount += 1;
-              if (config.autoPromote.enabled && auditor && audit.approved === true) {
+              if (config.autoPromote.enabled && auditor && audit.approved === true &&
+                  (!audit.promotion || audit.promotion.action === 'new')) {
                 const autoPolicy = {
                   minConfidence: 0.85,
                   minStability: 0.85,

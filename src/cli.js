@@ -230,6 +230,7 @@ function toCoreOptions(options) {
     sinceMinutes: options.sinceMinutes == null ? undefined : Number(options.sinceMinutes),
     scanLimit: options.scanLimit == null ? undefined : Number(options.scanLimit),
     batchLimit: options.batchLimit == null ? undefined : Number(options.batchLimit),
+    promotionLimit: options.promotionLimit == null ? undefined : Number(options.promotionLimit),
     auditLimit: options.auditLimit == null ? undefined : Number(options.auditLimit),
     auditBatchLimit: options.auditBatchLimit == null ? undefined : Number(options.auditBatchLimit),
     wakeLimit: options.wakeLimit == null ? undefined : Number(options.wakeLimit),
@@ -394,6 +395,8 @@ async function main() {
       app.listDueCandidateStaleTransitions(preserveCoreLimitDefault(coreOptions, rawOptions)),
     processDueCandidateStaleTransitions: (app, coreOptions, rawOptions) =>
       app.processDueCandidateStaleTransitions(preserveCoreLimitDefault(coreOptions, rawOptions)),
+    processApprovedMemoryCandidates: (app, coreOptions, rawOptions) =>
+      app.processApprovedMemoryCandidates(preserveCoreLimitDefault(coreOptions, rawOptions)),
     candidateLifecycleWorker: (app, coreOptions) =>
       coreOptions.watch
         ? watchCandidateLifecycle(app, {

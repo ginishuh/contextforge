@@ -35,8 +35,8 @@ live source > durable memory > checkpoint handoff > memory_candidate
 
 - supervised candidate lifecycle worker가 명시적 repo registry를 돌면서 만료된
   snooze를 깨우고, idle small-session audit를 큐잉하고, bounded stale SLA
-  전이를 적용하고, canonical scope별로 audit job을 처리한다. CLI 기본값은
-  dry-run이고 systemd installer만 mutation을 명시적으로 켠다.
+  전이를 적용하고, canonical scope별로 audit job 처리 뒤 승인 후보를 최종화한다.
+  CLI 기본값은 dry-run이고 systemd installer만 mutation을 명시적으로 켠다.
 - `/readyz`가 bounded startup grace period와 `operation_worker_stale` 사유로
   operation-worker freshness를 보고한다. 운영 지표에 candidate throughput·
   latency, audit decision·routing 분포, correction/deactivation 비율, quality
@@ -231,8 +231,9 @@ node src/cli.js agentCloseout \
   --dryRun true
 ```
 
-`agentCloseout`은 broad scope backlog를 기본으로 훑지 않는다. durable promotion은
-기존 explicit promote 도구나 의도적으로 켠 auto-promotion policy를 따른다.
+`agentCloseout`은 broad scope backlog를 기본으로 훑지 않는다. audit 자체는
+read-only이며 durable promotion은 기존 explicit promote 도구나 별도로 켠
+lifecycle worker 최종화 policy를 따른다.
 
 여러 에이전트 session store를 한 번에 repo registry로 라우팅할 수 있다.
 
@@ -322,6 +323,35 @@ file은 token env 뒤에 로드되어 remote storage mode와 URL을 강제하고
 URL은 process command line에 노출하지 않는다. 세부 운영 contract와
 timeout 조정 기준은 [Memory candidate lifecycle](memory-candidate-lifecycle.md)과
 [Operations](operations.md)를 따른다.
+
+worker는 audit job 뒤에 HTTP/CLI operator API
+`processApprovedMemoryCandidates`를 실행한다. 이 API는 everyday MCP tool이
+아니다. scope당 기본 limit은 `10`이고 `--promotionLimit` 최대값은 `100`이다.
+stage 기본값은 dry-run이며 `new`, `duplicate`, `update`, `hold` count를
+보고한다. durable write는 server의
+`CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true`가 있어야 한다.
+
+```bash
+node src/cli.js processApprovedMemoryCandidates \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --dryRun true \
+  --limit 10
+
+CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true \
+node src/cli.js candidateLifecycleWorker \
+  --repoRegistry /srv/contextforge/repos.json \
+  --dryRun false \
+  --promotionLimit 10
+```
+
+v2 audit은 action을 정확한 candidate revision에 묶고, target이 있으면 target
+memory ID와 revision hash에도 묶는다. `update`에는 승인된 완전 replacement
+content가 있어야 한다. finalizer는 transaction 안에서 이를 다시 확인하며,
+candidate content나 target이 바뀌면 hold한다. Legacy approval은 fresh safety
+check를 통과한 `new` memory만 만들 수 있고, legacy duplicate/update는
+`needs_action_audit`으로 hold된다. Hold metadata는 audit attempt에 묶여 있어
+batch를 독점하지 않는다. 변경 후에는 현재 candidate를 다시 audit해서 재시도한다.
 
 ## 빠른 시작
 

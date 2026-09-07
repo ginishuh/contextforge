@@ -3,6 +3,80 @@ import test from 'node:test';
 import { makeTempDir } from './helpers/temp.js';
 import { createCodexSdkPythonAutoPromoteAuditor } from '../src/audit/codex_sdk_python.js';
 import { createContextForge } from '../src/core.js';
+import { auditAutoPromotionCandidate } from '../src/memory/candidate_promotion.js';
+import { ContextForgeStore } from '../src/storage/sqlite.js';
+
+test('candidate audit supplies only cited raw evidence and binds a v2 update target', async () => {
+  const dataDir = await makeTempDir();
+  let received = null;
+  const app = createContextForge({
+    env: { CONTEXTFORGE_DATA_DIR: dataDir, CONTEXTFORGE_DISTILL_PROVIDER: 'audit-evidence-provider' },
+    cwd: process.cwd(),
+    autoPromoteAuditor: async ({ auditEvidence }) => {
+      received = auditEvidence;
+      const target = auditEvidence.relatedMemories.find((memory) => memory.key === 'audit-evidence-target');
+      return {
+        approved: true, decision: 'approve', reason: 'Complete replacement was reviewed.', riskCodes: [],
+        promotion: {
+          action: 'update', candidateRevisionHash: auditEvidence.candidateRevisionHash, targetMemoryId: target.id,
+          targetRevisionHash: target.revisionHash, content: 'Use the reviewed replacement workflow.',
+        },
+        metadata: { provider: 'synthetic-auditor', model: 'synthetic-model' },
+      };
+    },
+    distillProviders: {
+      'audit-evidence-provider': async ({ rawEvents }) => ({
+        summaryShort: 'Audit evidence checkpoint.', summaryText: 'One cited event and one unrelated event exist.',
+        decisions: [], todos: [], openQuestions: [],
+        memoryCandidates: [{
+          key: 'audit-evidence-target', content: 'Use the reviewed replacement workflow.', category: 'runbook',
+          candidateType: 'runbook', confidence: 0.96, stability: 0.96, sensitivity: 'low',
+          promotionRecommendation: 'promote', sourceEventIds: [rawEvents[0].id],
+        }],
+      }),
+    },
+  });
+  const source = { scope: 'repo', scopeKey: 'audit-evidence-repo', sessionId: 'audit-evidence-session' };
+  app.remember({ ...source, key: 'audit-evidence-target', content: 'Use the first workflow.', category: 'runbook' });
+  app.appendRaw({ ...source, role: 'assistant', content: 'Cited evidence: replace the first workflow.' });
+  app.appendRaw({ ...source, role: 'assistant', content: 'Unrelated later session detail.' });
+  const checkpoint = await app.distillCheckpoint(source);
+  const result = await app.auditMemoryCandidates({ ...source, checkpointId: checkpoint.id, trigger: 'manual_closeout' });
+  assert.equal(received.rawEvidenceMode, 'candidate_source_event_ids');
+  assert.deepEqual(received.rawEvents.map((event) => event.content), ['Cited evidence: replace the first workflow.']);
+  assert.equal(received.relatedMemories.find((memory) => memory.key === 'audit-evidence-target').content, 'Use the first workflow.');
+  assert.equal(result.proposals[0].audit.promotion.action, 'update');
+});
+
+test('candidate audit holds malformed action, foreign target, and stale target revision', async () => {
+  const dataDir = await makeTempDir();
+  const store = new ContextForgeStore({ dataDir });
+  const scope = { scopeType: 'repo', scopeKey: 'audit-promotion-validation-repo' };
+  const target = store.rememberMemory({ ...scope, key: 'target', content: 'Keep valid target context.', category: 'runbook' });
+  const checkpoint = store.insertCheckpoint({
+    ...scope, sessionId: 'audit-promotion-validation-session', summaryShort: 'Validation.', summaryText: 'Validation.',
+    provider: 'synthetic', metadata: { memoryCandidates: [{ key: 'target', content: 'Candidate evidence.', category: 'runbook' }] },
+  });
+  const [indexed] = store.listMemoryCandidates({ ...scope, checkpointId: checkpoint.id, status: 'pending' });
+  const run = async (promotion) => auditAutoPromotionCandidate({
+    store, scope, item: { candidate: indexed, warnings: [] }, providerConcurrencyLimit: 1,
+    auditor: Object.assign(async ({ auditEvidence }) => ({
+      approved: true, decision: 'approve', reason: 'Synthetic.', riskCodes: [],
+      promotion: promotion(auditEvidence), metadata: { provider: 'synthetic', model: 'synthetic' },
+    }), { metadata: { provider: 'synthetic' } }),
+  });
+  for (const promotion of [
+    (evidence) => ({ action: 'bad', candidateRevisionHash: evidence.candidateRevisionHash, targetMemoryId: null, targetRevisionHash: null, content: null }),
+    (evidence) => ({ action: 'duplicate', candidateRevisionHash: evidence.candidateRevisionHash, targetMemoryId: 'foreign', targetRevisionHash: 'foreign', content: null }),
+    (evidence) => ({ action: 'update', candidateRevisionHash: evidence.candidateRevisionHash, targetMemoryId: target.id, targetRevisionHash: 'stale', content: 'Replacement.' }),
+  ]) {
+    const audit = await run(promotion);
+    assert.equal(audit.promotion.action, 'hold');
+    assert.equal(audit.candidateRevisionHash, indexed.candidate && audit.promotion.candidateRevisionHash);
+    assert.ok(audit.riskCodes.includes('invalid_promotion_action'));
+  }
+  store.close();
+});
 
 test('distillCheckpoint automatically audits session candidate batches', async () => {
   const dataDir = await makeTempDir();
@@ -935,6 +1009,7 @@ test('autoPromoteMemoryCandidates can audit through the Codex Python SDK provide
     cwd: process.cwd(),
     autoPromoteAuditRunner: async (invocation) => {
       auditInvocations.push(invocation);
+      const payload = JSON.parse(invocation.prompt.slice(invocation.prompt.indexOf('{')));
       return {
         stdout: JSON.stringify({
           final_response: JSON.stringify({
@@ -942,6 +1017,8 @@ test('autoPromoteMemoryCandidates can audit through the Codex Python SDK provide
             decision: 'approve',
             reason: 'The candidate is stable and supported by checkpoint evidence.',
             riskCodes: [],
+            promotion: { action: 'new', candidateRevisionHash: payload.auditEvidence.candidateRevisionHash,
+              targetMemoryId: null, targetRevisionHash: null, content: payload.candidate.content },
           }),
           elapsed_ms: 12,
         }),

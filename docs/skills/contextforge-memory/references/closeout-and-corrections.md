@@ -10,7 +10,8 @@ At closeout triggers, audit the current session or checkpoint candidate batch:
 1. Pass `auditTrigger` to `distill_checkpoint` when distilling closeout evidence.
 2. Keep automatic audit scoped to the current `sessionId` or explicit
    `checkpointId`; never scan the whole scope backlog implicitly.
-3. Treat stored audit results as recommendations, not durable writes.
+3. `audit_memory_candidates` stores recommendations and append-only audit
+   provenance; it does not write durable memory.
 4. Use `audit_memory_candidates` to inspect stored recommendations or audit the
    same closeout batch. It stores append-only audit provenance and usage, but
    must not promote or mutate durable memory.
@@ -39,6 +40,17 @@ Use `auto_promote_memory_candidates` only when write-side automatic promotion is
 explicitly intended. Include `sessionId` or `checkpointId`; real writes require
 server-side enablement and `dryRun: false`. Candidate audit is not the promotion
 toggle.
+
+The supervised lifecycle worker has a separate post-audit operator stage,
+`processApprovedMemoryCandidates`, rather than an everyday MCP tool. Its default
+is `dryRun=true`; real writes require
+`CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true`. It uses at most 10 candidates per
+scope by default (100 maximum). A v2 audit must bind `new`, `duplicate`, or
+`update` to the exact candidate hash and, for an existing target, its exact
+memory ID and revision hash. An update needs complete approved replacement
+content. `hold` makes no durable write. Legacy approval can still create a new
+memory after fresh safety checks, but a legacy duplicate or update is held with
+`needs_action_audit` until re-audited.
 
 ## Promotion Quality
 

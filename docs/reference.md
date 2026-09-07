@@ -41,8 +41,9 @@ can recover independently from memory or checkpoint writes.
 
 - A supervised candidate lifecycle worker walks an explicit repo registry,
   wakes expired snoozes, queues idle small-session audits, applies bounded
-  stale SLA transitions, and processes audit jobs per canonical scope. The CLI
-  defaults to dry-run; the systemd installer opts into mutation explicitly.
+  stale SLA transitions, processes audit jobs, then finalizes eligible approved
+  candidates per canonical scope. The CLI defaults to dry-run; the systemd
+  installer opts into mutation explicitly.
 - `/readyz` reports operation-worker freshness with a bounded startup grace
   period and an explicit `operation_worker_stale` reason. Operational metrics
   add candidate throughput and latency, audit decision and routing
@@ -1231,8 +1232,8 @@ node src/cli.js agentCloseout \
 ```
 
 `agentCloseout` requires `sessionId` or `checkpointId`; it never scans the scope
-backlog by default. Durable promotion still requires the existing explicit
-promotion tools or intentional auto-promotion policy.
+backlog by default. Its audit remains read-only. Durable promotion uses explicit
+promotion tools or the separately enabled lifecycle-worker finalization policy.
 
 For a bounded multi-agent routed scan, use `ingestAgentRoutedSessions`. Each
 adapter keeps its own source provenance and session id prefix while writing
@@ -1752,6 +1753,34 @@ The one-shot command defaults to dry-run. The watch loop handles each canonical
 scope independently and fences audit-job claims to that scope. Use
 `scripts/install-candidate-lifecycle-worker-service.sh` to install the equivalent
 remote-backed systemd user unit.
+
+After audit jobs, the worker runs the HTTP/CLI operator API
+`processApprovedMemoryCandidates`; it is not an everyday MCP tool. Its default
+limit is 10 per scope and `--promotionLimit` is capped at 100. The stage is
+dry-run by default and reports `new`, `duplicate`, `update`, and `hold` counts.
+Writing requires `CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true` on the server.
+
+```bash
+node src/cli.js processApprovedMemoryCandidates \
+  --scope repo \
+  --scopeKey github.com/example/contextforge \
+  --dryRun true \
+  --limit 10
+
+CONTEXTFORGE_AUTO_PROMOTE_ENABLED=true \
+node src/cli.js candidateLifecycleWorker \
+  --repoRegistry /srv/contextforge/repos.json \
+  --dryRun false \
+  --promotionLimit 10
+```
+
+A v2 audit binds the action to the exact candidate revision and, for a target,
+the target memory ID and revision hash. `update` carries complete approved
+replacement content. The finalizer rechecks those values in its transaction;
+changed content or targets are held. Legacy approvals may still create a `new`
+memory through fresh safety checks, while legacy duplicate/update decisions are
+held as `needs_action_audit`. A hold is recorded against its audit attempt, so
+it does not monopolize a batch; re-audit the current candidate after a change.
 
 Snooze a pending candidate only with a finite review deadline:
 
