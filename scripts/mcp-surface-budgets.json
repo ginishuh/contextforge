@@ -5,26 +5,26 @@
     "agent-core": {
       "toolCount": 24,
       "instructionsBytes": 1423,
-      "toolSchemaBytes": 25358,
-      "estimatedInitialTokens": 6696
+      "toolSchemaBytes": 24824,
+      "estimatedInitialTokens": 6562
     },
     "all": {
       "toolCount": 73,
       "instructionsBytes": 1423,
-      "toolSchemaBytes": 71040,
-      "estimatedInitialTokens": 18116
+      "toolSchemaBytes": 70506,
+      "estimatedInitialTokens": 17983
     },
     "operator": {
       "toolCount": 67,
       "instructionsBytes": 1423,
-      "toolSchemaBytes": 65942,
-      "estimatedInitialTokens": 16842
+      "toolSchemaBytes": 65408,
+      "estimatedInitialTokens": 16708
     },
     "review": {
       "toolCount": 45,
       "instructionsBytes": 1423,
-      "toolSchemaBytes": 45379,
-      "estimatedInitialTokens": 11701
+      "toolSchemaBytes": 44845,
+      "estimatedInitialTokens": 11567
     },
     "workspace-admin": {
       "toolCount": 11,

@@ -12,6 +12,7 @@ import { createContextForgeMcpServer } from './mcp.js';
 import { REMOTE_METHODS } from './remote/client.js';
 import { runtimeChildSnapshot, terminateRuntimeChildren } from './runtime/child_processes.js';
 import { runWithRequestContext } from './runtime/request_context.js';
+import { fitCompactRetrieval } from './application/compact_retrieval.js';
 
 const METHOD_SET = new Set(REMOTE_METHODS);
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
@@ -484,7 +485,7 @@ function wrapRemoteAccessResult(result, transport) {
       },
     };
   }
-  return wrapped;
+  return fitCompactRetrieval(wrapped);
 }
 
 function createRemoteAccessApp(app, transport, onOperation = null, context = {}) {

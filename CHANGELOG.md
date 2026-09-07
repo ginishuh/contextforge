@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- MCP bootstrap and search now default to compact, bounded results with exact
+  scoped detail pointers. Bootstrap reuses structured checkpoint fields for
+  session-matched resumes and omits duplicate handoffs, memory maps, and
+  lifecycle statistics. `responseMode: "full"` preserves the previous MCP
+  response; core and CLI defaults remain unchanged. `maxChars` bounds compact
+  result JSON, including remote connection metadata. Checkpoint and candidate
+  lists accept exact IDs for detail retrieval without scanning a scope backlog.
+
 ## 0.6.0 - 2026-08-24
 
 - Closed the lint gap the hand-rolled source gate could not cover. Undefined

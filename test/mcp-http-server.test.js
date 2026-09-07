@@ -323,8 +323,9 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.ok(bootstrapTool.inputSchema.properties.memoryMapLimit);
     assert.ok(bootstrapTool.inputSchema.properties.memoryMapClusterSize);
     assert.ok(bootstrapTool.description.includes('Does not create a session'));
-    assert.ok(bootstrapTool.description.includes('latest checkpoint handoff'));
-    assert.ok(bootstrapTool.description.includes('memoryMap'));
+    assert.deepEqual(bootstrapTool.inputSchema.properties.responseMode.enum, ['compact', 'full']);
+    assert.equal(bootstrapTool.inputSchema.properties.maxChars.minimum, 2000);
+    assert.equal(bootstrapTool.inputSchema.properties.maxChars.maximum, 20000);
     const searchTool = toolList.tools.find((tool) => tool.name === 'search');
     assert.ok(searchTool.inputSchema.properties.workspaceKey);
     assert.ok(searchTool.inputSchema.properties.limit);
@@ -335,7 +336,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
     assert.ok(searchTool.inputSchema.properties.workspaceResultLimit);
     assert.ok(searchTool.inputSchema.properties.workspacePerScopeLimit);
     assert.ok(searchTool.inputSchema.properties.includePrimaryInWorkspaceResults);
-    assert.ok(searchTool.description.includes('workspace federation'));
+    assert.deepEqual(searchTool.inputSchema.properties.responseMode.enum, ['compact', 'full']);
     const expandClusterTool = toolList.tools.find((tool) => tool.name === 'expand_memory_cluster');
     assert.ok(expandClusterTool.inputSchema.properties.clusterId);
     assert.ok(expandClusterTool.inputSchema.properties.includeProvenance);
@@ -417,7 +418,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
         query: 'retrieval demand',
       },
     });
-    assert.equal(searchResult.structuredContent.result[0].memory.key, 'mcp-rule');
+    assert.equal(searchResult.structuredContent.result.results[0].key, 'mcp-rule');
 
     const bootstrapResult = await client.callTool({
       name: 'bootstrap_context',
@@ -425,6 +426,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
         scope: 'repo',
         scopeKey: 'mcp-repo',
         query: 'retrieval demand previous work',
+        responseMode: 'full',
       },
     });
     assert.equal(bootstrapResult.structuredContent.result.scope.scopeKey, 'mcp-repo');
@@ -495,6 +497,7 @@ test('MCP stdio server exposes core tools for synthetic integration', async () =
         sessionId: 'mcp-session',
         query: 'session status before distilling',
         rawTailLimit: 0,
+        responseMode: 'full',
       },
     });
     assert.equal(zeroRawTailBootstrap.structuredContent.result.rawTailLimit, 0);
@@ -627,7 +630,7 @@ test('MCP streamable HTTP endpoint exposes core tools with bearer auth', async (
         query: 'canonical remote',
       },
     });
-    assert.equal(searched.structuredContent.result[0].memory.key, 'http-mcp-rule');
+    assert.equal(searched.structuredContent.result.results[0].key, 'http-mcp-rule');
 
     const bootstrap = await client.callTool({
       name: 'bootstrap_context',
@@ -635,6 +638,7 @@ test('MCP streamable HTTP endpoint exposes core tools with bearer auth', async (
         scope: 'repo',
         scopeKey: 'http-mcp-repo',
         query: 'canonical remote',
+        responseMode: 'full',
       },
     });
     assert.equal(bootstrap.structuredContent.result.storage.connection.mode, 'remote-client');

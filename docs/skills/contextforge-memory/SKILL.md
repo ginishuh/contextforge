@@ -54,7 +54,7 @@ safety rules.
 1. Inspect storage authority and choose scope.
 2. Call `bootstrap_context` with a task-derived query and `consultReason` of
    `startup`, `resume`, `compaction_recovery`, or `agent_switch`.
-3. Read the latest handoff first, then recent checkpoints and durable memory.
+3. Read relevant results; for resume, pass the matching session ID and read its handoff.
 4. Verify live-state fields and warnings before editing or reporting status.
 5. Use targeted `search` only when more detail is needed.
 

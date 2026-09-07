@@ -30,7 +30,8 @@ At task start, after context compaction, or when resuming prior work, call
 canonical scope key `github.com/example/repo`, and an explicit
 `consultReason` such as `startup`, `resume`, `compaction_recovery`, or
 `agent_switch`. Include shared memory only when cross-repo or user-wide policy
-may matter.
+may matter. MCP returns compact results by default; use each result's detail
+pointer for more context.
 
 If the repository belongs to a configured multi-repo workspace, use
 `resolve_workspace` first to inspect the scope plan, or pass `workspaceKey` to
@@ -50,10 +51,9 @@ enabled, read top-level `results` as the primary-scope view and
 `workspace.results` as bounded supplemental member-scope context. Top-level
 `includeShared=true` does not by itself enable workspace shared retrieval;
 workspace shared results require a workspace routing rule with `includeShared`.
-During active work, targeted `search` calls may also pass `workspaceKey` when a
-file/API/error/domain lookup needs cross-repo memory. Without `workspaceKey`,
-`search` keeps its ordinary scoped array response; with `workspaceKey`, inspect
-the separate `workspace` block for supplemental member-scope results.
+During active work, use targeted `search` for file/API/error/domain lookup and
+follow its detail pointers. Pass `workspaceKey` only when cross-repo context is
+needed. Use `responseMode: "full"` only for diagnostics or legacy callers.
 
 Do not call `bootstrap_context` just to re-confirm current intent inside the
 same uninterrupted active session. For active-session file/API/error/domain
@@ -69,11 +69,6 @@ user says otherwise.
 Interpret search result types by trust role: `memory` is reviewed durable
 state, `checkpoint` is credible recent handoff state that still needs live
 verification, and `memory_candidate` is review material.
-
-Use `bootstrap_context.memoryMap` for durable-memory orientation before reading
-raw retrieval hits. Expand a cluster with `expand_memory_cluster` only when
-atomic memories or provenance are needed. The map covers the requested primary
-scope; include shared memory through search results when needed.
 
 Critical session invariant: `bootstrap_context` does not create a session. In
 Codex/Claude auto-ingest flows, use the adapter session id such as
@@ -128,17 +123,11 @@ the selected adapter id and optional `workspaceKey`. `agentCloseout` requires
 review broad scope backlog unless an explicit lower-level closeout command is
 used for that purpose.
 
-Read `handoff.latestCheckpoints` before durable memory for recent work status,
-recent decisions, open todos, branch/PR/CI flow, and next actions. Treat
-`handoff.latestConsolidation` as optional thread/repo period context when
-bootstrap would otherwise show only a thin latest checkpoint. Inspect
-`memoryLifecycle` for candidate/promotion freshness, pending candidate counts,
-and recent candidate/promotion flow. Treat
-`memory` as reviewed durable state for stable contracts, policies, and
-runbooks; treat `checkpoint` as credible recent handoff state that still needs
-live verification; and treat `memory_candidate` as review material.
-Use `memoryMap` as the compact durable-memory overview and call
-`expand_memory_cluster` only for the cluster whose details are needed.
+MCP returns compact bootstrap and search results by default. Follow a result's
+detail pointer only when its summary is relevant; use `responseMode: "full"`
+only for diagnostics or legacy callers. Treat `memory` as reviewed durable
+state, `checkpoint` as recent continuity that still needs live verification,
+and `memory_candidate` as review material.
 
 For loose continuation prompts such as "yesterday", "continue", "previous
 work", issue/PR follow-up, or cross-agent handoff, call `bootstrap_context`

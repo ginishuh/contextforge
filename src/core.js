@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { pagedList } from './application/paged_list.js';
+import { compactBootstrap, compactRetrievalRequested, compactRetrievalResponse } from './application/compact_retrieval.js';
 import {
   bootstrapConsultPolicy,
   bootstrapRawTailEvent,
@@ -1661,6 +1662,7 @@ export function createContextForge(options = {}) {
     },
 
     async bootstrapContext(options = {}) {
+      const compact = compactRetrievalRequested(options);
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.query, 'query');
       const limit = positiveNumber(options.limit == null ? 8 : Number(options.limit), 'limit');
@@ -1733,8 +1735,12 @@ export function createContextForge(options = {}) {
           workspaceBlock = buildWorkspaceFederationBlock(store, scope, options, {
             queryEmbedding,
             consultReason,
-            resultMapper: workspaceBootstrapResult,
+            resultMapper: compact ? workspaceSearchResult : workspaceBootstrapResult,
           });
+        }
+        if (compact) {
+          return compactBootstrap({ store, scope, options, storage, workspace: workspaceBlock, sharedSkippedReason,
+            results: [...repoResults, ...sharedResults, ...(workspaceBlock?.results || [])] });
         }
         const memoryMapSeeds = repoResults
           .filter((result) => result.type === 'memory' && result.memory)
@@ -2805,6 +2811,7 @@ export function createContextForge(options = {}) {
       }
       const filters = {
         ...scope,
+        ...(options.candidateId ? { candidateIds: [options.candidateId] } : {}),
         sessionId: options.sessionId || null,
         checkpointId: options.checkpointId || null,
         status: options.status || null,
@@ -4571,29 +4578,17 @@ export function createContextForge(options = {}) {
     },
 
     search(options) {
+      const compact = compactRetrievalRequested(options);
       const scope = normalizeScopeOptions(options, config);
       requireOption(options.query, 'query');
       const workspaceRequested = workspaceKeyRequested(options.workspaceKey);
+      const format = (value) => compact ? compactRetrievalResponse({ scope, options,
+        results: [...(Array.isArray(value) ? value : value.results), ...(value.workspace?.results || [])],
+        workspace: value.workspace }) : value;
       if (workspaceRequested) {
-        if (!embeddingProvider) {
-          return useStore((store) => {
-            const results = searchStoreWithScope(store, scope, options);
-            return {
-              kind: 'workspace_search',
-              scope,
-              query: options.query,
-              results,
-              ...(options.includeDiagnostics ? { diagnostics: results.diagnostics } : {}),
-              workspace: buildWorkspaceFederationBlock(store, scope, options, {
-                resultMapper: workspaceSearchResult,
-              }),
-            };
-          });
-        }
-        return useStore(async (store) => {
-          const [queryEmbedding] = await embeddingProvider.embed([options.query]);
+        const retrieve = (store, queryEmbedding = null) => {
           const results = searchStoreWithScope(store, scope, options, queryEmbedding);
-          return {
+          return format({
             kind: 'workspace_search',
             scope,
             query: options.query,
@@ -4603,10 +4598,14 @@ export function createContextForge(options = {}) {
               queryEmbedding,
               resultMapper: workspaceSearchResult,
             }),
-          };
-        });
+          });
+        };
+        return embeddingProvider
+          ? useStore(async (store) => retrieve(store, (await embeddingProvider.embed([options.query]))[0]))
+          : useStore((store) => retrieve(store));
       }
-      return searchWithScope(scope, options);
+      const result = searchWithScope(scope, options);
+      return result?.then ? result.then(format) : format(result);
     },
 
     appendRaw(options) {
@@ -4677,6 +4676,7 @@ export function createContextForge(options = {}) {
       const scope = normalizeScopeOptions(options, config);
       const filters = {
         ...scope,
+        checkpointId: options.checkpointId || null,
         sessionId: options.sessionId || null,
         level: options.level == null ? null : Number(options.level),
         sort: 'created_at_storage_sequence_desc',

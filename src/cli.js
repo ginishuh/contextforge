@@ -116,6 +116,8 @@ function toCoreOptions(options) {
     tags: Array.isArray(tags) ? tags : typeof tags === 'string' ? tags.split(',').filter(Boolean) : [],
     importance: options.importance == null ? 0 : Number(options.importance),
     query: options.query,
+    responseMode: options.responseMode,
+    maxChars: options.maxChars == null ? undefined : Number(options.maxChars),
     candidateLimit: options.candidateLimit == null ? undefined : Number(options.candidateLimit),
     legacyFullScan: cliBooleanOption(options.legacyFullScan, 'legacyFullScan'),
     includeDiagnostics: cliBooleanOption(options.includeDiagnostics, 'includeDiagnostics'),
