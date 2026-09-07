@@ -33,9 +33,9 @@ startup rather than silently exposing a different surface.
 Use `node src/mcp.js --describe-surface` to inspect exact enabled/disabled tool
 names and context-size measurements before changing a client registration. If
 an existing client loses a tool after upgrade, first select the narrow profile
-that owns it; use `all` only as a temporary compatibility bridge. The packaged
-`contextforge-memory` skill carries detailed workflows, but server startup and
-profile selection do not require the skill to exist on the host.
+that owns it; use `all` only as a temporary compatibility bridge. Server
+startup and profile selection do not depend on a separate agent skill; see the
+[agent guide](agent-guide.md) for the concise agent contract.
 
 ## Quick Decision
 
@@ -281,7 +281,8 @@ This repo uses ContextForge as an external remote memory service.
 - Storage authority: remote canonical ContextForge.
 - Agents may be sandboxed and may not be able to inspect the ContextForge
   server env files, service manager, or local database.
-- Use the installed `contextforge-memory` skill.
+- Follow the concise contract in `docs/agent-guide.md` when ContextForge is
+  available.
 - At task start, call `bootstrap_context` with this repo's canonical scope key:
   `github.com/owner/repo`.
 - Use `connection.summary` or `connection.accessMode` from `db_info` or

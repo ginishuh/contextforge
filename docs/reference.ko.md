@@ -44,9 +44,8 @@ live source > durable memory > checkpoint handoff > memory_candidate
 - pre-migration backup은 migration 성공 후 최신
   `CONTEXTFORGE_MIGRATION_BACKUP_KEEP`(기본 `3`)개까지만 남기고 정리된다.
   최소 1개는 보존하며 `dbInfo`가 남은 개수와 bytes를 보고한다.
-- packaged `contextforge-memory` skill이 router-and-references 구조로 바뀌고
-  scope backlog review, durable audit routing, snooze/wake/stale 처리를
-  명시한다.
+- agent workflow guidance가 scope backlog review, durable audit routing,
+  snooze/wake/stale 처리를 다루며, 상세 내용은 focused guide에서 찾을 수 있다.
 - production dependency advisory를 해소했고 MCP surface를
   `scripts/mcp-surface-budgets.json`에서 profile별로 ratchet한다.
 - 지원 Node floor가 22, better-sqlite3가 13.x다. N-API prebuild로 transitive
@@ -515,8 +514,8 @@ token 추정치를 보여준다. 프로필별 예산은 `scripts/mcp-surface-bud
 변경은 같은 커밋에서 매니페스트를 다시 기록해 증가가 diff에 남게 한다.
 `npm run lint:mcp-surface`로 확인한다. 기존 client가 전체 surface에 의존했다면 migration 동안만
 `all`을 사용하고, 일반 coding agent는 기본 `agent-core`를 유지하는 편이 좋다.
-상세 workflow는 package에 포함된 `contextforge-memory` skill에 있으며, skill 설치
-여부와 관계없이 profile 선택과 서버 startup은 동작한다.
+상세 workflow는 [Agent Guide](agent-guide.md)와 focused guide에 있으며, 별도
+skill 설치 여부와 관계없이 profile 선택과 서버 startup은 동작한다.
 재현 가능한 transport 측정값과 host token 한계는
 [MCP Surface Budget](mcp-surface-budget.md)에 정리돼 있다.
 

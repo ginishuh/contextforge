@@ -27,7 +27,7 @@
     "examples",
     "docs/*.md",
     "docs/examples",
-    "docs/skills",
+    "docs/guides",
     "README.md",
     "README.ko.md",
     "CHANGELOG.md",

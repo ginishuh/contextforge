@@ -55,11 +55,11 @@ function jsonResult(result, { compact = false } = {}) {
 
 const MCP_INSTRUCTIONS = [
   'Use ContextForge for scoped memory retrieval on demand.',
-  'Use bootstrap_context to start or resume a task, search for targeted lookup, and follow returned detail pointers. Supply the intended repo scope; shared and workspace retrieval stay explicit.',
+  'Use bootstrap_context to start or resume, search for lookup, and follow detail pointers. For a repo identity use scope="repo" and scopeKey="github.com/owner/repo". repoPath and cwd are filesystem paths. Shared/workspace retrieval is opt-in.',
   'The client adapter can supply session identity. Omit sessionId for the bound session; provide it explicitly when no binding exists or when inspecting another session. Never guess the latest session.',
   'Checkpoints are recent handoff state; memories are reviewed durable knowledge; candidates are unreviewed. Verify mutable facts at their live source.',
-  'Use distill_checkpoint to save work at meaningful boundaries, remember for intentional durable knowledge, and correct_memory or deactivate_memory for corrections. Distillation and durable promotion have separate policies.',
-  'Manual evidence capture and candidate review use the review profile; maintenance uses operator. Use the packaged contextforge-memory skill only for those detailed workflows.',
+  'Use distill_checkpoint at meaningful boundaries, remember for reviewed facts, and correct_memory or deactivate_memory for corrections. Configured workers handle evidence, audit, and automatic promotion; no skill or per-task review ritual is required.',
+  'Manual evidence and candidate review use the review profile; maintenance uses operator.',
 ].join(' ');
 
 function mcpSurfaceInfo(toolRegistrations, selection) {

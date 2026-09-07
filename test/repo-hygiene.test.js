@@ -27,7 +27,7 @@ test('CI path filter runs tests for source, workflow, test, and eval fixture cha
   assert.equal(ciDetectRunTests(['package-lock.json']), 'true');
   assert.equal(ciDetectRunTests(['scripts/install-agent-router-service.sh']), 'true');
   assert.equal(ciDetectRunTests(['docs/examples/workspace-eval/wastelite.synthetic.json']), 'true');
-  assert.equal(ciDetectRunTests(['docs/skills/contextforge-memory/SKILL.md']), 'true');
+  assert.equal(ciDetectRunTests(['docs/guides/candidate-lifecycle.md']), 'true');
   assert.equal(ciDetectRunTests(['README.md', 'src/cli.js']), 'true');
 });
 

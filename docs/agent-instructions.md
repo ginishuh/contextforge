@@ -1,137 +1,47 @@
-# ContextForge Agent Instruction Snippets
+# ContextForge Agent Instructions
 
-This document is a compact compatibility entrypoint for agents that need
-copyable instructions. It is not the full ContextForge MCP manual.
-
-For full workflow rules, use the installed `contextforge-memory` skill. The
-ContextForge repo packages that skill from:
-
-- `docs/skills/contextforge-memory/SKILL.md`
-
-For rules about what belongs in a repository `AGENTS.md`, use:
-
-- `docs/agents-md-guide.md`
-
-For local all-in-one, HTTP server, and external remote client distinctions,
-use:
-
-- `docs/runtime-modes.md`
-
-## Minimal AGENTS.md Snippet
-
-Use this when a repository only needs a short ContextForge operating contract.
-Replace `github.com/example/repo` when a canonical scope key is required.
+Copy the short contract below into a repository's `AGENTS.md` when it uses
+ContextForge. Replace the example scope key with the repository's canonical identity.
 
 ```text
 Use ContextForge MCP for scoped project memory when it is available.
 
-Use `bootstrap_context` for a task-relevant start or resume with explicit repo
-scope. Use `search` for targeted lookup and its detail pointers for detail.
-`memory` is reviewed durable state; `checkpoint` is handoff context that needs
-live verification; `memory_candidate` is review material.
+At task start or resume, call `bootstrap_context` with the task and explicit
+repo scope: `scope="repo", scopeKey="github.com/example/repo"`.
+`repoPath` and `cwd` are filesystem paths. Use `search` for targeted lookup and follow detail pointers only
+when relevant. Keep `workspaceKey` explicit; it is the opt-in for cross-repo
+retrieval and is never inferred from cwd or process state.
 
-Keep scope explicit. `workspaceKey` opts into cross-repo retrieval; ContextForge
-never infers it from membership, process state, or cwd. Check mutable git, CI,
-runtime, and deployment facts from their live source.
+Trust result types by role: `memory` is reviewed durable state, `checkpoint`
+is recent handoff context that needs live verification, and
+`memory_candidate` is review material. Verify mutable Git, CI, deployment,
+and runtime facts from their live source.
 
-`bootstrap_context` does not create a session. Preserve an adapter session ID
-for save/resume; without a binding, pass `sessionId` explicitly and never guess
-the latest session. For full session and advanced lifecycle guidance, use the
-installed `contextforge-memory` skill.
+`bootstrap_context` does not create a session. Preserve an adapter-bound
+session ID for save/resume. If there is no binding, pass the exact `sessionId`;
+never guess the latest session or create a manual session for an adapter stream.
 ```
 
-## Remote Canonical Variant
+For the complete guide and links to focused topics, see
+[Agent Guide](agent-guide.md). For guidance on keeping a repository's
+`AGENTS.md` short, see [AGENTS.md Authoring Guide](agents-md-guide.md).
 
-Use this when the repository intentionally shares ContextForge memory across
-machines, agents, or deployment hosts.
+## Remote Canonical Addition
+
+Add this only when another host owns the canonical store:
 
 ```text
-Use remote ContextForge as the canonical shared memory store for this repo.
-
 Connection mode: external remote client. Storage authority: remote canonical
-ContextForge. Agents may be sandboxed and may not be able to inspect the
-ContextForge server env files, service manager, or local database.
-
-At task start, after context compaction, or when resuming prior work, call
-`bootstrap_context` with `scope: "repo"`, the canonical scope key
-`github.com/example/repo`, and an explicit `consultReason` such as `startup`,
-`resume`, `compaction_recovery`, or `agent_switch`. Include shared scope only
-for user-wide policy, deployment, credential-location, or cross-repo
-conventions.
-
-For multi-repo products, a workspace profile may define a federation plan for
-related repo scopes. In remote mode, workspace profile reads/writes/resolve
-calls must go to the remote canonical server and must not fall back to local
-state. Use `resolve_workspace` to see included/excluded scopes and routing
-reasons before relying on cross-repo context, or pass `workspaceKey` to
-`bootstrap_context` to retrieve bounded supplemental member-scope results.
-Workspace membership is not auto-discovery: the caller must explicitly supply
-the intended `workspaceKey`, normally from repo-local agent instructions or an
-adapter/wrapper configuration. A persisted profile is not consulted unless the
-key is supplied, there is no process-global default workspace, and calls
-without `workspaceKey` remain single-repo.
-Workspace bootstrap result provenance should preserve `workspaceKey`,
-`memberName`, `role`, and `includedBecause`; checkpoint results from member
-repos require live-state verification before action.
-
-For CLI-driven agent lifecycle, use `agentStart` and `agentCloseout` as
-agent-neutral convenience wrappers. `agentStart` calls `bootstrapContext` with
-the selected adapter id and optional `workspaceKey`. `agentCloseout` requires
-`sessionId` or `checkpointId`, preserves adapter-prefixed session ids such as
-`codex:<id>` and `claude_code:<id>`, defaults to `dryRun=true`, and must not
-review broad scope backlog unless an explicit lower-level closeout command is
-used for that purpose.
-
-MCP returns compact bootstrap and search results by default. Follow a result's
-detail pointer only when its summary is relevant; use `responseMode: "full"`
-only for diagnostics or legacy callers. Treat `memory` as reviewed durable
-state, `checkpoint` as recent continuity that still needs live verification,
-and `memory_candidate` as review material.
-
-For a known continuation session, pass its exact `sessionId` to
-`bootstrap_context` or `sync_resume_context`. Without that identity, use a
-task-relevant scoped search and do not treat an unrelated latest handoff as the
-current task. Verify mutable git/GitHub/CI/runtime state from live sources.
-
-Inside the same uninterrupted active session, current conversation context is
-the source for current intent. Do not use latest handoff as routine
-self-confirmation. Use targeted `search` for stable memory lookup by
-file/API/error/domain names, and use live source checks for mutable state.
-
-Use the installed `contextforge-memory` skill for session IDs, distillation,
-checkpoint consolidation, candidate review, closeout promotion, correction, and
-embedding maintenance.
-
-Use `connection.summary` or `connection.accessMode` from `db_info` or
-`bootstrap_context` when present. `accessMode` is `direct-local`,
-`server-process`, or `remote-client`. Treat local `.contextforge/` state as
-relevant only for local/project-local modes.
+ContextForge. Inspect `connection.summary` or `connection.accessMode` from
+`db_info` or `bootstrap_context`; do not infer server state from local SQLite.
 ```
 
-## Local Or Project-Local Variant
+## Local Or Project-Local Addition
 
-Use this when the repository intentionally keeps ContextForge state on the
-current machine or checkout.
+Add this only when the current machine or checkout intentionally owns the
+store:
 
 ```text
-Use ContextForge as local/project-local scoped memory for this repo.
-
-Treat retrieval as machine-local context, not shared canonical memory, unless
-the user explicitly says this store is authoritative. At task start, call
-`bootstrap_context` when available, or `db_info` plus `search` when
-`bootstrap_context` is unavailable.
-
-Interpret `memory` as reviewed durable state for this local store,
-`checkpoint` as recent continuity from this machine/check-out, and
-`memory_candidate` as review material.
-
-Before making deployment or cross-machine claims, verify against current code,
-runtime, remote memory, or user confirmation.
+Treat this ContextForge store as machine-local context unless its authority is
+declared. Verify before making cross-machine or deployment claims.
 ```
-
-## Placement Rule
-
-Keep repository `AGENTS.md` files short. Put only the local operating contract
-and a ContextForge bootstrap pointer there. Tell agents to use the installed
-`contextforge-memory` skill for the full workflow. Use
-`docs/agents-md-guide.md` when deciding whether a rule belongs in `AGENTS.md`.
