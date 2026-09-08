@@ -378,6 +378,7 @@ export function resolveWorkspaceScopePlan({
 
   const included = new Map();
   const excluded = new Map();
+  const primaryIdentity = memberIdentity(primary);
   addIncluded(included, primary, 'primary_scope');
   for (const member of activeMembers) {
     if (member.includeByDefault) {
@@ -423,6 +424,11 @@ export function resolveWorkspaceScopePlan({
     }
     for (const member of activeMembers) {
       if (memberMatchesSpec(member, rule.include)) {
+        // A matching exclude is final for non-primary members, even when a
+        // lower-priority rule includes the same member later in this loop.
+        if (excluded.has(memberIdentity(member)) && memberIdentity(member) !== primaryIdentity) {
+          continue;
+        }
         addIncluded(included, member, `routing_rule:${rule.ruleKey}`);
       }
     }
