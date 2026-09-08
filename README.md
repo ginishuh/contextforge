@@ -139,6 +139,31 @@ bootstrap, scoped search, session IDs, and trust rules:
 - [Copyable agent instructions](docs/agent-instructions.md)
 - [Full CLI/provider/operator reference](docs/reference.md)
 
+### Instructions For Each Repository
+
+For a single repository, add these two lines to its `AGENTS.md`, replacing the
+example `scopeKey` with that repository's canonical identity:
+
+```text
+Use ContextForge for relevant prior context at task start or resume.
+Repository memory scope: scope="repo", scopeKey="github.com/owner/repo".
+```
+
+For several repositories in one configured workspace, keep each repository's
+own `scopeKey` and add the same `workspaceKey` for cross-repository context:
+
+```text
+Use ContextForge for relevant prior context at task start or resume.
+Repository memory scope: scope="repo", scopeKey="github.com/owner/product-api"; use workspaceKey="product" for cross-repository context.
+```
+
+Replace both example keys with your configured identities. A coordinator
+repository uses its own `scopeKey` too; member repositories do not inherit its
+memory scope. The workspace profile and members must already be configured;
+these instructions do not create them. Ordinary repo-only retrieval omits
+`workspaceKey`. Keep these instructions in each repository, not a global file
+with one repository's key. No tool or session procedure needs to be copied.
+
 If an older installation still provides a `contextforge-memory` skill, it is
 optional and can be removed with that host's normal skill-management tooling.
 

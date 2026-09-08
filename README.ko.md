@@ -135,6 +135,31 @@ rule은 agent guide에서 시작한다.
 - [복사 가능한 agent instruction](docs/agent-instructions.md)
 - [전체 CLI·provider·operator 참조](docs/reference.ko.md)
 
+### 리포별 지침
+
+단일 리포라면 해당 리포의 `AGENTS.md`에 다음 두 줄을 추가한다.
+예시 `scopeKey`는 해당 리포의 canonical identity로 바꾼다.
+
+```text
+Use ContextForge for relevant prior context at task start or resume.
+Repository memory scope: scope="repo", scopeKey="github.com/owner/repo".
+```
+
+여러 리포가 하나의 설정된 workspace를 사용한다면 각 리포의 `scopeKey`는
+유지하고, 리포 간 맥락을 조회할 때 쓸 공통 `workspaceKey`를 추가한다.
+
+```text
+Use ContextForge for relevant prior context at task start or resume.
+Repository memory scope: scope="repo", scopeKey="github.com/owner/product-api"; use workspaceKey="product" for cross-repository context.
+```
+
+두 예시 키는 실제 설정된 식별자로 바꾼다. 코디네이터 리포도 자신의
+`scopeKey`를 사용하며, 구성원 리포가 코디네이터의 memory scope를 상속하지
+않는다. Workspace profile과 구성원은 미리 설정되어 있어야 하며, 이 지침이
+설정을 생성하지는 않는다. 자기 리포만 조회할 때는 `workspaceKey`를 생략한다.
+특정 리포의 키를 전역 파일에 두지 말고 각 리포에 지침을 둔다.
+도구 사용법이나 세션 절차를 복사할 필요는 없다.
+
 기존 host에 `contextforge-memory` skill이 남아 있다면 선택 사항이며, 필요하면 그
 host의 일반 skill 관리 도구로 제거할 수 있다.
 
