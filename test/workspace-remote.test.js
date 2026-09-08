@@ -207,6 +207,92 @@ test('workspace resolver warns when canonical scope is not an active member', as
   assert.equal(plan.warnings[0].code, 'canonical_scope_not_member');
 });
 
+test('workspace routing excludes beat includes in either priority order and suppress federation retrieval', async () => {
+  const dataDir = await makeTempDir();
+  const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });
+
+  for (const [workspaceKey, includePriority, excludePriority] of [
+    ['exclude-first', 10, 100],
+    ['include-first', 100, 10],
+  ]) {
+    app.upsertWorkspaceProfile({
+      workspaceKey,
+      canonicalScope: 'repo',
+      canonicalScopeKey: `github.com/example/${workspaceKey}-suite`,
+    });
+    app.upsertWorkspaceMember({
+      workspaceKey,
+      name: 'suite',
+      scope: 'repo',
+      scopeKey: `github.com/example/${workspaceKey}-suite`,
+      role: 'contract',
+      priority: 100,
+      includeByDefault: true,
+    });
+    app.upsertWorkspaceMember({
+      workspaceKey,
+      name: 'backend',
+      scope: 'repo',
+      scopeKey: `github.com/example/${workspaceKey}-backend`,
+      role: 'backend',
+      priority: 90,
+    });
+    app.upsertWorkspaceMember({
+      workspaceKey,
+      name: 'web',
+      scope: 'repo',
+      scopeKey: `github.com/example/${workspaceKey}-web`,
+      role: 'web',
+      priority: 60,
+    });
+    app.upsertWorkspaceRoutingRule({
+      workspaceKey,
+      ruleKey: 'include-web',
+      priority: includePriority,
+      match: { termsAny: ['contract'] },
+      include: { members: ['web'] },
+    });
+    app.upsertWorkspaceRoutingRule({
+      workspaceKey,
+      ruleKey: 'exclude-web',
+      priority: excludePriority,
+      match: { termsAny: ['contract'] },
+      exclude: { members: ['web'] },
+    });
+
+    const plan = app.resolveWorkspace({
+      workspaceKey,
+      scope: 'repo',
+      scopeKey: `github.com/example/${workspaceKey}-backend`,
+      query: 'contract',
+    });
+    assert.deepEqual(plan.includedScopes.map((scope) => scope.memberName), ['suite', 'backend']);
+    assert.deepEqual(plan.excludedScopes.find((scope) => scope.memberName === 'web').excludedBecause, [
+      'excluded_by_rule:exclude-web',
+    ]);
+  }
+
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'github.com/example/exclude-first-suite',
+    key: 'suite-contract',
+    content: 'Suite contract memory.',
+  });
+  app.remember({
+    scope: 'repo',
+    scopeKey: 'github.com/example/exclude-first-web',
+    key: 'web-contract',
+    content: 'Web contract memory that must not be federated.',
+  });
+  const bootstrap = await app.bootstrapContext({
+    scope: 'repo',
+    scopeKey: 'github.com/example/exclude-first-backend',
+    query: 'contract',
+    workspaceKey: 'exclude-first',
+  });
+  assert.deepEqual(bootstrap.workspace.results.map((result) => result.key), ['suite-contract']);
+});
+
 test('workspace routing JSON validation rejects unsupported shapes', async () => {
   const dataDir = await makeTempDir();
   const app = createContextForge({ env: { CONTEXTFORGE_DATA_DIR: dataDir }, cwd: process.cwd() });

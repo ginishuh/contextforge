@@ -91,19 +91,7 @@ distinctions, follow `docs/runtime-modes.md`.
 - Prefer Node.js for continuity with the original implementation unless there is a strong reason to introduce another runtime.
 - Use ASCII unless an existing file already requires otherwise.
 
-## ContextForge MCP Bootstrap
+## ContextForge
 
-Use ContextForge for task-relevant project memory when available. Start or
-resume with `bootstrap_context`, use `search` for targeted lookup, and follow
-returned detail pointers. Prefer scope `repo` with the canonical scope key
-`github.com/ginishuh/contextforge`. Shared and workspace retrieval remain opt-in.
-
-Check `connection` metadata before treating a store as canonical. Memory is
-reviewed knowledge; checkpoints are recent handoff state and candidates are
-review material. Verify mutable Git, CI, runtime, and deployment state live.
-
-Use the adapter-bound session for save/resume. If no binding exists, pass the
-known session ID explicitly; never guess the latest session or create a new
-manual session for an existing adapter stream. Save a checkpoint when useful;
-durable memory writes remain deliberate. For concise agent guidance and links
-to detailed topics, see `docs/agent-guide.md`.
+Use ContextForge for relevant prior context at task start or resume.
+Repository memory scope: scope="repo", scopeKey="github.com/ginishuh/contextforge".
