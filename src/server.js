@@ -482,6 +482,10 @@ function wrapRemoteAccessResult(result, transport) {
       ...wrapped,
       storage: {
         ...wrapped.storage,
+        mode: 'remote',
+        authority: 'canonical',
+        serverMode: wrapped.storage.mode,
+        serverAuthority: wrapped.storage.authority,
         connection: remoteAccessConnection(wrapped.storage.connection, transport),
       },
     };

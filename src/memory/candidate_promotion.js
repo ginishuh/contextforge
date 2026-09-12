@@ -842,14 +842,24 @@ export async function auditAutoPromotionCandidate({
       auditEvidence,
     }),
   );
-  // v1 auditors remain valid for human/manual review.  A malformed v2 result
-  // becomes an explicit hold, so an automatic finalizer cannot guess intent.
+  // An approval cannot authorize automatic writes from incomplete evidence,
+  // including legacy approvals without an explicit promotion action.
+  if (audit?.approved === true && audit.decision === 'approve'
+    && (auditEvidence.candidateContentTruncated || auditEvidence.rawEvidenceIncomplete)) {
+    return {
+      ...audit, approved: false, decision: 'needs_review', candidateRevisionHash,
+      promotion: { action: 'hold', candidateRevisionHash, targetMemoryId: null, targetRevisionHash: null, content: null },
+      riskCodes: [...new Set([...(audit?.riskCodes || []), 'incomplete_audit_evidence'])],
+      reason: 'Automatic promotion requires complete candidate content and cited raw evidence.',
+    };
+  }
+  // A malformed v2 result becomes a hold; the finalizer must not guess intent.
   if (!Object.hasOwn(audit || {}, 'promotion')) return { ...audit, candidateRevisionHash };
   const promotion = audit?.promotion || {};
   const actionIsValid = ['new', 'duplicate', 'update', 'hold'].includes(promotion.action);
   const action = actionIsValid ? promotion.action : 'hold';
   const target = auditEvidence.relatedMemories.find((memory) => memory.id === promotion.targetMemoryId) || null;
-  const validNew = !auditEvidence.candidateContentTruncated && action === 'new' && promotion.candidateRevisionHash === candidateRevisionHash
+  const validNew = action === 'new' && promotion.candidateRevisionHash === candidateRevisionHash
     && promotion.targetMemoryId == null && promotion.targetRevisionHash == null
     && promotion.content === item.candidate.candidate?.content;
   const validDuplicate = action === 'duplicate' && promotion.candidateRevisionHash === candidateRevisionHash
