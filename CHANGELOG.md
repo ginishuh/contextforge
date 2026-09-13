@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Breaking: Node.js 24 or newer is now required. Node 22 and 23 users must
+  upgrade before installing this version. All CI jobs now use Node 24.
+
 - Raise the Hono override floor to 4.13.5 and lock 4.13.7 to address
   reported path traversal, body parsing, and query parsing advisories.
 
