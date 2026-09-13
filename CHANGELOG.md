@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Raise the Hono override floor to 4.13.5 and lock 4.13.7 to address
+  reported path traversal, body parsing, and query parsing advisories.
+
 - Automatic candidate approval now holds new, update, duplicate, and legacy
   decisions when candidate content is truncated or cited raw evidence is
   omitted or clipped. Audit evidence reports cited, returned, omitted, and
