@@ -168,8 +168,8 @@ export function createRemoteContextForge(config, options = {}) {
             ...result.storage,
             mode: 'remote',
             authority: 'canonical',
-            serverMode: result.storage?.mode || null,
-            serverAuthority: result.storage?.authority || null,
+            serverMode: result.storage?.serverMode ?? result.storage?.mode ?? null,
+            serverAuthority: result.storage?.serverAuthority ?? result.storage?.authority ?? null,
             note:
               'This bootstrap call used a remote ContextForge client. serverMode describes the server-owned store, not this checkout.',
           },
@@ -193,8 +193,8 @@ export function createRemoteContextForge(config, options = {}) {
           ...storage,
           mode: 'remote',
           authority: 'canonical',
-          serverMode: storage.mode || null,
-          serverAuthority: storage.authority || null,
+          serverMode: storage.serverMode ?? storage.mode ?? null,
+          serverAuthority: storage.serverAuthority ?? storage.authority ?? null,
           note:
             'This agentStart call used a remote ContextForge client. serverMode describes the server-owned store, not this checkout.',
         };
@@ -230,8 +230,8 @@ export function createRemoteContextForge(config, options = {}) {
             ...(result.storage || {}),
             mode: 'remote',
             authority: 'canonical',
-            serverMode: result.storage?.mode || null,
-            serverAuthority: result.storage?.authority || null,
+            serverMode: result.storage?.serverMode ?? result.storage?.mode ?? null,
+            serverAuthority: result.storage?.serverAuthority ?? result.storage?.authority ?? null,
             note:
               'This agentCloseout call used a remote ContextForge client. serverMode describes the server-owned store, not this checkout.',
           },

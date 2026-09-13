@@ -81,10 +81,29 @@ test('MCP HTTP compact retrieval defaults to bounded detail pointers and full re
     const bootstrap = resultOf(bootstrapTool);
     assert.equal(bootstrap.responseMode, 'compact');
     assert.equal(bootstrap.kind, 'bootstrap_context');
+    assert.equal(bootstrap.storage.mode, 'remote');
+    assert.equal(bootstrap.storage.authority, 'canonical');
+    assert.equal(bootstrap.storage.connection.storageAuthority, 'canonical');
+    assert.equal(bootstrap.storage.serverMode, 'project-local');
+    assert.equal(bootstrap.storage.serverAuthority, 'project-local');
     assert.ok(JSON.stringify(bootstrap).length <= bootstrap.budget.maxChars);
     assert.equal(bootstrapTool.content[0].text, JSON.stringify(bootstrap));
     assert.ok(bootstrap.results.every((item) => item.detail?.tool && item.detail?.arguments?.scopeKey === scope.scopeKey));
     assert.equal(bootstrap.handoffStatus, 'not_requested');
+    const remoteClient = createContextForge({ env: {
+      CONTEXTFORGE_STORAGE_MODE: 'remote', CONTEXTFORGE_REMOTE_URL: fixture.remote.url,
+      CONTEXTFORGE_REMOTE_TOKEN: 'compact-test-token',
+    } });
+    for (const responseMode of ['compact', 'full']) {
+      const result = await remoteClient.bootstrapContext({ ...scope, query: 'compact marker', responseMode });
+      assert.equal(result.storage.authority, 'canonical');
+      assert.equal(result.storage.serverMode, 'project-local');
+      assert.equal(result.storage.serverAuthority, 'project-local');
+      const direct = resultOf(await client.callTool({ name: 'bootstrap_context',
+        arguments: { ...scope, query: 'compact marker', responseMode } }));
+      assert.equal(direct.storage.authority, 'canonical');
+      assert.equal(direct.storage.serverMode, 'project-local');
+    }
 
     const compactSearchTool = await client.callTool({
       name: 'search',
@@ -144,7 +163,9 @@ test('MCP HTTP compact bootstrap retains canonical remote access metadata within
     const result = resultOf(toolResult);
     assert.equal(result.responseMode, 'compact');
     assert.ok(JSON.stringify(result).length <= result.budget.maxChars);
-    assert.equal(result.storage.mode, 'project-local');
+    assert.equal(result.storage.mode, 'remote');
+    assert.equal(result.storage.serverMode, 'project-local');
+    assert.equal(result.storage.authority, 'canonical');
     assert.equal(result.storage.connection.accessMode, 'remote-client');
     assert.equal(result.storage.connection.accessPath, 'http-mcp');
     assert.equal(result.storage.connection.storageAuthority, 'canonical');

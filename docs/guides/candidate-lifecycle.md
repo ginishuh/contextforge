@@ -23,6 +23,15 @@ the exact durable-memory ID and revision hash. An `update` must contain the
 complete approved replacement content. The finalizer reloads those values at
 write time; a changed candidate or target is held rather than inferred again.
 
+An approval becomes `needs_review` with `promotion.action=hold` and
+`incomplete_audit_evidence` if candidate content is truncated or cited raw
+events are missing, omitted by a budget, or clipped. This applies to new,
+update, duplicate, and legacy approvals. Audit evidence includes
+`citedEventCount`, `returnedEventCount`, `omittedEventCount`, and
+`truncatedEventCount`. Restore missing evidence or narrow the candidate and
+its citations without dropping necessary context, then re-audit. Existing
+stored approvals are not retroactively re-audited by this check.
+
 Historical approvals may still finalize a `new` memory through fresh safety
 checks. They never authorize a legacy duplicate or update: those remain held
 with `needs_action_audit`. Held metadata is tied to that audit attempt, so a

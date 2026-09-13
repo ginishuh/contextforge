@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Raise the Hono override floor to 4.13.5 and lock 4.13.7 to address
+  reported path traversal, body parsing, and query parsing advisories.
+
+- Automatic candidate approval now holds new, update, duplicate, and legacy
+  decisions when candidate content is truncated or cited raw evidence is
+  omitted or clipped. Audit evidence reports cited, returned, omitted, and
+  truncated event counts.
+- Remote HTTP and MCP retrieval consistently report canonical storage
+  authority while preserving the server-owned storage mode separately.
+
 - MCP bootstrap and search now default to compact, bounded results with exact
   scoped detail pointers. Bootstrap reuses structured checkpoint fields for
   session-matched resumes and omits duplicate handoffs, memory maps, and

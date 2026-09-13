@@ -25,10 +25,12 @@ export function candidateAuditEvidence(store, scope, indexedCandidate, checkpoin
       .map(String),
   );
   let remaining = MAX_RAW_CHARS;
+  let truncatedEventCount = 0;
   const rawEvents = [];
   for (const event of raw.filter((item) => citedIds.has(item.id)).slice(0, MAX_RAW_EVENTS)) {
     if (remaining <= 0) break;
     const content = clipped(event.content, Math.min(MAX_EVENT_CHARS, remaining));
+    if (content !== String(event.content || '')) truncatedEventCount += 1;
     if (!content) continue;
     remaining -= content.length;
     rawEvents.push({ id: event.id, role: event.role, content, createdAt: event.createdAt });
@@ -49,6 +51,11 @@ export function candidateAuditEvidence(store, scope, indexedCandidate, checkpoin
   return {
     candidateRevisionHash: memoryCandidateRevisionHash(candidate),
     candidateContentTruncated: String(candidate.content || '').length > 3000,
+    rawEvidenceIncomplete: rawEvents.length < citedIds.size || truncatedEventCount > 0,
+    citedEventCount: citedIds.size,
+    returnedEventCount: rawEvents.length,
+    omittedEventCount: citedIds.size - rawEvents.length,
+    truncatedEventCount,
     rawEvents,
     rawEvidenceMode: candidate.sourceEventIds?.length ? 'candidate_source_event_ids' : 'checkpoint_source_window',
     relatedMemories,
