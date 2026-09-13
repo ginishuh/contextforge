@@ -43,7 +43,7 @@ SQLite나 raw runtime data의 live backend로 Git을 쓰지 않는다.
   profile별 MCP surface ratchet.
 - scope retrieval, session identity, trust boundary를 짧게 설명하고 상세 주제는
   일반 문서에서 찾을 수 있는 agent guidance.
-- Node 22 floor와 better-sqlite3 13.x. N-API prebuild로 transitive package
+- Node 24 floor와 better-sqlite3 13.x. N-API prebuild로 transitive package
   85개가 빠졌다.
 - CI 전용 ESLint gate, 7,169 → 4,839줄로 분해된 core facade, 주제별로 재편한
   테스트 스위트.
@@ -53,7 +53,7 @@ Korean release summary가 package version과 맞는지는 CI가 검사한다.
 
 ## 빠른 시작
 
-요구사항: Node.js 22 이상.
+요구사항: Node.js 24 이상.
 
 ```bash
 npm install

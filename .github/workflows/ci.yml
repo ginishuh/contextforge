@@ -85,7 +85,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24
 
       # The line budget ratchet compares against the base branch so a budget
       # raised anywhere in the pull request is rejected. Without this fetch the
@@ -118,7 +118,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
 
       - run: npm ci
@@ -142,7 +142,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24
 
       - run: npm run verify:release
 
@@ -162,7 +162,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [22, 24]
+        node-version: [24]
     steps:
       - uses: actions/checkout@v7
 
@@ -196,7 +196,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24
 
       # npm audit reads package-lock.json directly; no install is needed for this
       # fast supply-chain gate.

@@ -44,7 +44,7 @@ Do not use Git as the live backend for SQLite or raw runtime data.
   a per-profile MCP surface ratchet.
 - Concise agent guidance for scoped retrieval, session identity, and trust
   boundaries, with detailed topics available as ordinary documentation.
-- Node 22 floor and better-sqlite3 13.x, whose N-API prebuilds drop 85
+- Node 24 floor and better-sqlite3 13.x, whose N-API prebuilds drop 85
   transitive packages.
 - A CI-only ESLint gate, a core facade decomposed from 7,169 to 4,839 lines,
   and a test suite reorganized by topic.
@@ -55,7 +55,7 @@ version in CI.
 
 ## Quick Start
 
-Requirements: Node.js 22 or newer.
+Requirements: Node.js 24 or newer.
 
 ```bash
 npm install

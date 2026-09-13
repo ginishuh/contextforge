@@ -24,7 +24,7 @@ LLM-backed distillation.
 Current 0.6.0 builds add a supervised candidate lifecycle worker, operation
 worker freshness on `/readyz` with operational candidate and retrieval metrics,
 bounded pre-migration backups, and concise agent guidance with focused ordinary
-documentation. They also raise the supported Node floor to 22.
+documentation. Current source builds require Node.js 24 or newer.
 The 0.5.1 builds before them added periodic checkpoint consolidation for richer
 bootstrap context, `handoff.latestConsolidation`, `memoryLifecycle` visibility,
 and earlier agent-workflow guidance. They also include
@@ -57,7 +57,7 @@ can recover independently from memory or checkpoint writes.
   and snooze/wake/stale handling; these details now live in focused guides.
 - Production dependency advisories are cleared, and the MCP surface is
   ratcheted per profile in `scripts/mcp-surface-budgets.json`.
-- The supported Node floor is 22 and better-sqlite3 is 13.x, whose N-API
+- The supported Node floor is 24 and better-sqlite3 is 13.x, whose N-API
   prebuilds drop 85 transitive packages.
 - `npm run lint:eslint` adds a CI-only gate for undefined identifiers, unused
   bindings, and shadowed variables. The core facade is down from 7,169 to
@@ -290,7 +290,7 @@ effort `low` before any automatic durable-memory promotion.
 
 Requirements:
 
-- Node.js 22 or newer
+- Node.js 24 or newer
 
 Install dependencies:
 
@@ -561,7 +561,7 @@ Use this path on the VPS or always-on machine that should own the canonical
 ContextForge database. Client machines should use the later "New Machine Setup"
 section instead.
 
-1. Install Node.js 22 or newer and git. Install a reverse proxy such as nginx
+1. Install Node.js 24 or newer and git. Install a reverse proxy such as nginx
 or Caddy if this server will be exposed on the public internet.
 
 2. Create a dedicated runtime user and directories:

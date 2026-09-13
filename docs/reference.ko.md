@@ -48,7 +48,7 @@ live source > durable memory > checkpoint handoff > memory_candidate
   snooze/wake/stale 처리를 다루며, 상세 내용은 focused guide에서 찾을 수 있다.
 - production dependency advisory를 해소했고 MCP surface를
   `scripts/mcp-surface-budgets.json`에서 profile별로 ratchet한다.
-- 지원 Node floor가 22, better-sqlite3가 13.x다. N-API prebuild로 transitive
+- 지원 Node floor가 24, better-sqlite3가 13.x다. N-API prebuild로 transitive
   package 85개가 빠졌다.
 - `npm run lint:eslint`가 undefined identifier·미사용 binding·shadowing을 보는
   CI 전용 gate로 추가됐다. core facade는 7,169 → 4,839줄로 줄었고 테스트
@@ -356,7 +356,7 @@ batch를 독점하지 않는다. 변경 후에는 현재 candidate를 다시 aud
 
 요구사항:
 
-- Node.js 22 이상
+- Node.js 24 이상
 
 설치:
 
